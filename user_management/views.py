@@ -5,6 +5,8 @@ from rest_framework import status
 from django.http import HttpResponse
 import io
 from rest_framework.parsers import MultiPartParser, FormParser
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
 class ExcelUploadView(APIView):
     parser_classes = (MultiPartParser, FormParser)
@@ -16,49 +18,127 @@ class ExcelUploadView(APIView):
             return Response({"error": "No file uploaded"}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            # Read the entire excel sheet
             df = pd.read_excel(file)
-            
-            # Clean headers (remove newlines and extra spaces)
             df.columns = df.columns.astype(str).str.replace('\n', ' ', regex=False).str.replace('\r', '', regex=False).str.strip()
             
-            # Filter rows where 'HR Remarks' contains 'Done' (handling trailing spaces, punctuation, or extra text)
+            # Filter rows where 'HR Remarks' contains 'Done'
             if 'HR Remarks' in df.columns:
                 remarks = df['HR Remarks'].astype(str).str.lower()
-                # Matches 'done' as a distinct word, but excludes 'not done' just in case
                 is_done = remarks.str.contains(r'\bdone\b', regex=True, na=False) & ~remarks.str.contains('not done', na=False)
                 df = df[is_done]
             
-            # Extract only the requested columns
-            expected_columns = [
-                "First Name",
-                "First Name (As per Bank Name)",
-                "(As per Bank Name)",
-                "Middle Name",
-                "Last Name",
-                "Designation",
-                "Email address",
-                "Mobile Number",
-                "Headquarter- District"
-            ]
-            
-            # Keep only columns that exist in the dataframe
-            existing_columns = [col for col in expected_columns if col in df.columns]
-            if existing_columns:
-                df = df[existing_columns]
-            
-            # Fill NaN values with empty string for JSON serialization
             df = df.fillna('')
             
-            data = df.to_dict(orient='records')
+            final_rows = []
+            sr_no = 1
+            
+            def get_val(row, *substrings):
+                for col in df.columns:
+                    col_lower = str(col).lower()
+                    if any(sub.lower() in col_lower for sub in substrings):
+                        val = row[col]
+                        if val != '':
+                            return val
+                return ''
+
+            for idx, row in df.iterrows():
+                # Extract Primary Employee Names
+                first_name = get_val(row, 'first name')
+                middle_name = get_val(row, 'middle name')
+                last_name = get_val(row, 'last name')
+                
+                names = [str(n).strip() for n in [first_name, middle_name, last_name] if str(n).strip()]
+                full_name = ' '.join(names) if names else get_val(row, 'name', 'employee name')
+                
+                emp_no = get_val(row, 'emp id', 'employee code', 'employee number', 'emp code')
+                
+                primary_row = {
+                    "Sr. No": sr_no,
+                    "Employee Number": emp_no,
+                    "Name Of Member": full_name,
+                    "Relation": "SELF",
+                    "Gender": get_val(row, 'gender', 'sex'),
+                    "Date Of Birth": get_val(row, 'dob', 'date of birth'),
+                    "Age": get_val(row, 'age'),
+                    "Sum Insured": get_val(row, 'sum insured') or "300000",
+                    "GPA": get_val(row, 'gpa') or "5X",
+                    "DOJ": get_val(row, 'doj', 'date of joining'),
+                    "Designation Name": get_val(row, 'designation'),
+                    "Location": get_val(row, 'location', 'headquarter', 'district'),
+                    "Contact number": get_val(row, 'mobile', 'contact', 'phone'),
+                    "Email details": get_val(row, 'email')
+                }
+                final_rows.append(primary_row)
+                
+                # Dynamically extract family members
+                # Common patterns in HR forms for family
+                family_patterns = [
+                    ('Spouse', 'WIFE'), ('Wife', 'WIFE'), ('Husband', 'HUSBAND'), 
+                    ('Child 1', 'CHILD'), ('Child 2', 'CHILD'), ('Child 3', 'CHILD'), 
+                    ('Son', 'SON'), ('Daughter', 'DAUGHTER'), 
+                    ('Father', 'FATHER'), ('Mother', 'MOTHER'),
+                    ('Dependant 1', 'DEPENDANT'), ('Dependant 2', 'DEPENDANT')
+                ]
+                
+                for pat, rel_name in family_patterns:
+                    pat_name_col = None
+                    pat_dob_col = None
+                    pat_gender_col = None
+                    pat_age_col = None
+                    
+                    for col in df.columns:
+                        col_lower = str(col).lower()
+                        pat_lower = pat.lower()
+                        
+                        if pat_lower in col_lower:
+                            if 'name' in col_lower:
+                                pat_name_col = col
+                            elif 'dob' in col_lower or 'birth' in col_lower:
+                                pat_dob_col = col
+                            elif 'gender' in col_lower or 'sex' in col_lower:
+                                pat_gender_col = col
+                            elif 'age' in col_lower:
+                                pat_age_col = col
+                            elif not pat_name_col:
+                                pat_name_col = col # Fallback if it just says "Spouse"
+                                
+                    if pat_name_col:
+                        member_name = row[pat_name_col]
+                        if member_name != '':
+                            family_row = {
+                                "Sr. No": "",
+                                "Employee Number": "",
+                                "Name Of Member": str(member_name).strip(),
+                                "Relation": rel_name,
+                                "Gender": row[pat_gender_col] if pat_gender_col else "",
+                                "Date Of Birth": row[pat_dob_col] if pat_dob_col else "",
+                                "Age": row[pat_age_col] if pat_age_col else "",
+                                "Sum Insured": "",
+                                "GPA": "",
+                                "DOJ": "",
+                                "Designation Name": "",
+                                "Location": "",
+                                "Contact number": "",
+                                "Email details": ""
+                            }
+                            final_rows.append(family_row)
+                
+                sr_no += 1
+            
+            if not final_rows:
+                return Response({"headers": [], "data": []})
+
+            headers = list(final_rows[0].keys())
             
             return Response({
                 "message": "File processed successfully",
-                "headers": df.columns.tolist(),
-                "data": data
+                "headers": headers,
+                "data": final_rows
             })
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class ExcelExportView(APIView):
@@ -74,7 +154,69 @@ class ExcelExportView(APIView):
             buffer = io.BytesIO()
             
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False)
+                df.to_excel(writer, index=False, sheet_name='Extracted Data')
+                
+                workbook = writer.book
+                worksheet = writer.sheets['Extracted Data']
+                
+                # Styles
+                header_fill = PatternFill(start_color='333F50', end_color='333F50', fill_type='solid') # Dark Blue
+                header_font = Font(color='FFFFFF', bold=True)
+                center_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+                
+                green_fill = PatternFill(start_color='70AD47', end_color='70AD47', fill_type='solid')
+                
+                thin_border = Border(
+                    left=Side(style='thin'), 
+                    right=Side(style='thin'), 
+                    top=Side(style='thin'), 
+                    bottom=Side(style='thin')
+                )
+                
+                # Format Headers
+                for cell in worksheet[1]:
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = center_alignment
+                    cell.border = thin_border
+                
+                # Find column indices dynamically
+                emp_col_idx = None
+                rel_col_idx = None
+                for idx, col in enumerate(df.columns, start=1):
+                    if str(col).strip().upper() == 'EMPLOYEE NUMBER':
+                        emp_col_idx = idx
+                    elif str(col).strip().upper() == 'RELATION':
+                        rel_col_idx = idx
+                
+                # Format Data Rows
+                for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, max_col=worksheet.max_column, max_row=worksheet.max_row), start=2):
+                    relation_val = ""
+                    if rel_col_idx:
+                        relation_val = str(worksheet.cell(row=row_idx, column=rel_col_idx).value).upper()
+                    
+                    for col_idx, cell in enumerate(row, start=1):
+                        cell.border = thin_border
+                        cell.alignment = center_alignment
+                        
+                        # If it's the "Employee Number" column and Relation is SELF, color it green
+                        if emp_col_idx and col_idx == emp_col_idx and relation_val == 'SELF':
+                            cell.fill = green_fill
+                            cell.font = Font(color='000000', bold=False)
+                            
+                # Adjust column widths
+                for col in worksheet.columns:
+                    max_length = 0
+                    column = col[0].column_letter
+                    for cell in col:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(cell.value)
+                        except:
+                            pass
+                    adjusted_width = (max_length + 2)
+                    # Set max width to avoid extremely wide columns
+                    worksheet.column_dimensions[column].width = min(adjusted_width, 40)
             
             buffer.seek(0)
             
