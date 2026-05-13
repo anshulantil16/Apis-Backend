@@ -32,13 +32,15 @@ class ExcelUploadView(APIView):
             final_rows = []
             sr_no = 1
             
+            import re
             def get_val(row, *substrings):
                 for col in df.columns:
                     col_lower = str(col).lower()
-                    if any(sub.lower() in col_lower for sub in substrings):
-                        val = row[col]
-                        if val != '':
-                            return val
+                    for sub in substrings:
+                        if re.search(r'\b' + re.escape(sub.lower()) + r'\b', col_lower):
+                            val = row[col]
+                            if val != '':
+                                return val
                 return ''
 
             def format_date(val):
@@ -112,7 +114,7 @@ class ExcelUploadView(APIView):
                         col_lower = str(col).lower()
                         pat_lower = pat.lower()
                         
-                        if pat_lower in col_lower:
+                        if re.search(r'\b' + re.escape(pat_lower) + r'\b', col_lower):
                             if 'email' in col_lower or 'mail' in col_lower:
                                 continue # Skip email columns so they aren't incorrectly mapped as names
                             if 'name' in col_lower:
