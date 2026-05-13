@@ -41,6 +41,28 @@ class ExcelUploadView(APIView):
                             return val
                 return ''
 
+            def format_date(val):
+                if pd.isna(val) or val == '':
+                    return ''
+                try:
+                    dt = pd.to_datetime(val)
+                    return dt.strftime('%d-%m-%Y')
+                except:
+                    s = str(val).strip()
+                    if ' 00:00:00' in s:
+                        return s.replace(' 00:00:00', '')
+                    return s
+
+            def infer_gender(relation, explicit_gender):
+                if explicit_gender and str(explicit_gender).strip() != '':
+                    return explicit_gender
+                rel = str(relation).strip().upper()
+                if rel in ['WIFE', 'DAUGHTER', 'MOTHER']:
+                    return 'FEMALE'
+                if rel in ['HUSBAND', 'SON', 'FATHER']:
+                    return 'MALE'
+                return ''
+
             for idx, row in df.iterrows():
                 # Extract Primary Employee Names
                 first_name = get_val(row, 'first name')
@@ -58,11 +80,11 @@ class ExcelUploadView(APIView):
                     "Name Of Member": full_name,
                     "Relation": "SELF",
                     "Gender": get_val(row, 'gender', 'sex'),
-                    "Date Of Birth": get_val(row, 'dob', 'date of birth'),
+                    "Date Of Birth": format_date(get_val(row, 'dob', 'date of birth')),
                     "Age": get_val(row, 'age'),
                     "Sum Insured": get_val(row, 'sum insured') or "300000",
                     "GPA": get_val(row, 'gpa') or "5X",
-                    "DOJ": get_val(row, 'doj', 'date of joining'),
+                    "DOJ": format_date(get_val(row, 'doj', 'date of joining')),
                     "Designation Name": get_val(row, 'designation'),
                     "Location": get_val(row, 'location', 'headquarter', 'district'),
                     "Contact number": get_val(row, 'mobile', 'contact', 'phone'),
@@ -110,8 +132,8 @@ class ExcelUploadView(APIView):
                                 "Employee Number": "",
                                 "Name Of Member": str(member_name).strip(),
                                 "Relation": rel_name,
-                                "Gender": row[pat_gender_col] if pat_gender_col else "",
-                                "Date Of Birth": row[pat_dob_col] if pat_dob_col else "",
+                                "Gender": infer_gender(rel_name, row[pat_gender_col] if pat_gender_col else ""),
+                                "Date Of Birth": format_date(row[pat_dob_col] if pat_dob_col else ""),
                                 "Age": row[pat_age_col] if pat_age_col else "",
                                 "Sum Insured": "",
                                 "GPA": "",
