@@ -76,14 +76,14 @@ class ExcelUploadView(APIView):
                 
                 primary_row = {
                     "Sr. No": sr_no,
-                    "Employee Number": emp_no,
+                    "Employee Number": "",
                     "Name Of Member": full_name,
                     "Relation": "SELF",
                     "Gender": get_val(row, 'gender', 'sex'),
                     "Date Of Birth": format_date(get_val(row, 'dob', 'date of birth')),
                     "Age": get_val(row, 'age'),
-                    "Sum Insured": get_val(row, 'sum insured') or "300000",
-                    "GPA": get_val(row, 'gpa') or "5X",
+                    "Sum Insured": "",
+                    "GPA": "",
                     "DOJ": format_date(get_val(row, 'doj', 'date of joining')),
                     "Designation Name": get_val(row, 'designation'),
                     "Location": get_val(row, 'location', 'headquarter', 'district'),
@@ -113,6 +113,8 @@ class ExcelUploadView(APIView):
                         pat_lower = pat.lower()
                         
                         if pat_lower in col_lower:
+                            if 'email' in col_lower or 'mail' in col_lower:
+                                continue # Skip email columns so they aren't incorrectly mapped as names
                             if 'name' in col_lower:
                                 pat_name_col = col
                             elif 'dob' in col_lower or 'birth' in col_lower:
@@ -126,7 +128,7 @@ class ExcelUploadView(APIView):
                                 
                     if pat_name_col:
                         member_name = row[pat_name_col]
-                        if member_name != '':
+                        if member_name != '' and pd.notna(member_name):
                             family_row = {
                                 "Sr. No": "",
                                 "Employee Number": "",
@@ -143,7 +145,13 @@ class ExcelUploadView(APIView):
                                 "Contact number": "",
                                 "Email details": ""
                             }
-                            final_rows.append(family_row)
+                            # Check if name is mistakenly an email address (e.g. they put email in the 'Son' column)
+                            if '@' not in str(member_name):
+                                final_rows.append(family_row)
+                
+                # Insert blank row to separate families
+                blank_row = {k: "" for k in primary_row.keys()}
+                final_rows.append(blank_row)
                 
                 sr_no += 1
             
