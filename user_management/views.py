@@ -131,12 +131,20 @@ class ExcelUploadView(APIView):
                     if pat_name_col:
                         member_name = row[pat_name_col]
                         if member_name != '' and pd.notna(member_name):
+                            computed_gender = infer_gender(rel_name, row[pat_gender_col] if pat_gender_col and pd.notna(row[pat_gender_col]) else "")
+                            computed_relation = rel_name
+                            if rel_name in ['CHILD', 'DEPENDANT']:
+                                if str(computed_gender).strip().upper() == 'MALE':
+                                    computed_relation = 'SON'
+                                elif str(computed_gender).strip().upper() == 'FEMALE':
+                                    computed_relation = 'DAUGHTER'
+                                    
                             family_row = {
                                 "Sr. No": "",
                                 "Employee Number": "",
                                 "Name Of Member": str(member_name).strip(),
-                                "Relation": rel_name,
-                                "Gender": infer_gender(rel_name, row[pat_gender_col] if pat_gender_col else ""),
+                                "Relation": computed_relation,
+                                "Gender": computed_gender,
                                 "Date Of Birth": format_date(row[pat_dob_col] if pat_dob_col else ""),
                                 "Age": row[pat_age_col] if pat_age_col else "",
                                 "Sum Insured": "",
