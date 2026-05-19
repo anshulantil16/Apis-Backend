@@ -344,3 +344,20 @@ class AllReviewsView(APIView):
             qs = qs.filter(status=rev_status)
 
         return Response(QuarterlyReviewSerializer(qs, many=True).data)
+
+
+class ResetDatabaseView(APIView):
+    """POST /api/performance/org/reset/ — HR resets the entire database (employees, goal cards, cycles, reviews, logs)."""
+
+    def post(self, request):
+        try:
+            ApprovalLog.objects.all().delete()
+            QuarterlyReview.objects.all().delete()
+            Goal.objects.all().delete()
+            GoalCard.objects.all().delete()
+            PerformanceCycle.objects.all().delete()
+            EmployeeProfile.objects.all().delete()
+            return Response({'message': 'All performance database tables successfully cleared!'})
+        except Exception as e:
+            return Response({'error': f'Failed to reset database: {str(e)}'}, status=500)
+

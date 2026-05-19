@@ -13,6 +13,7 @@ from .views.hr_views import (
     CycleListCreateView, CycleUpdateView,
     HRFinalizeReviewView, OrgOverviewView,
     LeaderboardView, AllGoalCardsView, AllReviewsView,
+    ResetDatabaseView,
 )
 
 urlpatterns = [
@@ -40,4 +41,5 @@ urlpatterns = [
     path('leaderboard/', LeaderboardView.as_view()),
     path('all-goal-cards/', AllGoalCardsView.as_view()),
     path('all-reviews/', AllReviewsView.as_view()),
+    path('org/reset/', ResetDatabaseView.as_view()),
 ]
