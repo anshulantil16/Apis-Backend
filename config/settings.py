@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'accounts',
     'user_management',
     'core',
+    'performance',
 ]
 
 MIDDLEWARE = [
@@ -137,6 +138,9 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 CORS_ALLOW_ALL_ORIGINS = True # Allow all origins initially for easy setup
 CORS_ALLOWED_ORIGINS = [

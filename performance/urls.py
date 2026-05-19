@@ -1,0 +1,43 @@
+from django.urls import path
+from .views.employee_views import (
+    EmployeeProfileView, ActiveCyclesView,
+    EmployeeGoalCardView, SubmitGoalCardView,
+    EmployeeAllGoalCardsView, SubmitQuarterlyReviewView,
+)
+from .views.manager_views import (
+    ManagerTeamView, ManagerReviewGoalCardView,
+    ManagerRateReviewView, ManagerPendingReviewsView,
+)
+from .views.hr_views import (
+    EmployeeImportView, EmployeeListView,
+    CycleListCreateView, CycleUpdateView,
+    HRFinalizeReviewView, OrgOverviewView,
+    LeaderboardView, AllGoalCardsView, AllReviewsView,
+)
+
+urlpatterns = [
+    # Employee routes
+    path('employee/<str:employee_id>/', EmployeeProfileView.as_view()),
+    path('employee/<str:employee_id>/goal-cards/', EmployeeAllGoalCardsView.as_view()),
+    path('cycles/active/', ActiveCyclesView.as_view()),
+    path('goal-cards/<str:employee_id>/<int:cycle_id>/', EmployeeGoalCardView.as_view()),
+    path('goal-cards/<int:gc_id>/submit/', SubmitGoalCardView.as_view()),
+    path('reviews/<int:gc_id>/', SubmitQuarterlyReviewView.as_view()),
+
+    # Manager routes
+    path('manager/<str:manager_id>/team/', ManagerTeamView.as_view()),
+    path('manager/<str:manager_id>/pending-reviews/', ManagerPendingReviewsView.as_view()),
+    path('goal-cards/<int:gc_id>/manager-review/', ManagerReviewGoalCardView.as_view()),
+    path('reviews/<int:review_id>/manager-rate/', ManagerRateReviewView.as_view()),
+
+    # HR routes
+    path('employees/import/', EmployeeImportView.as_view()),
+    path('employees/', EmployeeListView.as_view()),
+    path('cycles/', CycleListCreateView.as_view()),
+    path('cycles/<int:cycle_id>/', CycleUpdateView.as_view()),
+    path('reviews/<int:review_id>/hr-finalize/', HRFinalizeReviewView.as_view()),
+    path('org/overview/', OrgOverviewView.as_view()),
+    path('leaderboard/', LeaderboardView.as_view()),
+    path('all-goal-cards/', AllGoalCardsView.as_view()),
+    path('all-reviews/', AllReviewsView.as_view()),
+]
