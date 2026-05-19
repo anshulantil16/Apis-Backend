@@ -14,12 +14,33 @@ class ExcelUploadView(APIView):
     def post(self, request, *args, **kwargs):
         file = request.FILES.get('file')
         
+        tool = request.data.get('tool', 'joining')
+        
         if not file:
             return Response({"error": "No file uploaded"}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            df = pd.read_excel(file)
+            file_name = file.name.lower()
+            if file_name.endswith('.csv'):
+                try:
+                    df = pd.read_csv(file)
+                except UnicodeDecodeError:
+                    file.seek(0)
+                    df = pd.read_csv(file, encoding='latin1')
+            else:
+                df = pd.read_excel(file)
+            
             df.columns = df.columns.astype(str).str.replace('\n', ' ', regex=False).str.replace('\r', '', regex=False).str.strip()
+            
+            if tool != 'joining':
+                df = df.fillna('')
+                headers = list(df.columns)
+                data = df.to_dict(orient='records')
+                return Response({
+                    "message": "File processed successfully",
+                    "headers": headers,
+                    "data": data
+                })
             
             # Filter rows where 'HR Remarks' contains 'Done'
             if 'HR Remarks' in df.columns:
