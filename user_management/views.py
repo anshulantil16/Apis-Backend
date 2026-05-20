@@ -44,12 +44,24 @@ def _read_raw(file, file_name):
 
 def _parse_pocket_hrms(file, file_name):
     """
-    Pocket HRMS exports embed company metadata rows before the actual column
-    headers.  This function finds the real header row (the one containing
-    'Code', 'Name', and 'Type') and returns a clean DataFrame.
+    Pocket HRMS exports have two structural quirks this function handles:
+
+    1. Metadata rows at the top (company name, address, 'AttendanceSummary',
+       'Run Date') before the real column-header row.
+
+    2. Hierarchical / merged-cell layout for multi-date exports:
+         Row N   : Code | Name | Category | Department | Designation | Date | ...
+         Row N+1 :  ←blank for A-E→                                  | Date | ...
+       Each employee occupies one row per date; identity columns (Code, Name,
+       Category, Department, Designation) are only filled in the first row and
+       left blank for subsequent dates.  We forward-fill those columns so every
+       row becomes a self-contained record.
+
+    Returns (DataFrame, error_message_or_None).
     """
     df_raw = _read_raw(file, file_name)
 
+    # ── Step 1: find the real header row ────────────────────────────────────
     required = {'code', 'name', 'type'}
     header_idx = None
     for idx, row in df_raw.iterrows():
@@ -61,6 +73,7 @@ def _parse_pocket_hrms(file, file_name):
     if header_idx is None:
         return None, "Could not locate column headers (Code / Name / Type) in the uploaded file."
 
+    # ── Step 2: re-read using the correct header row ─────────────────────────
     file.seek(0)
     if file_name.endswith('.csv'):
         try:
@@ -73,17 +86,33 @@ def _parse_pocket_hrms(file, file_name):
 
     df.columns = df.columns.astype(str).str.replace('\n', ' ', regex=False).str.strip()
 
-    # Drop leftover metadata rows (any row whose 'Code' cell is empty or
-    # still contains the literal word "Code" from a repeated header band)
-    code_col = next((c for c in df.columns if c.strip().lower() == 'code'), None)
-    if code_col:
-        mask = df[code_col].apply(lambda x: str(x).strip().lower() not in ('', 'nan', 'code'))
-        df = df[mask]
+    # ── Step 3: forward-fill identity columns ────────────────────────────────
+    # In multi-date exports only the first row per employee has Code/Name/etc.;
+    # the remaining date rows leave those cells blank.
+    identity_col_names = {'code', 'name', 'category', 'department', 'designation'}
+    identity_cols = [c for c in df.columns if c.strip().lower() in identity_col_names]
+    for col in identity_cols:
+        # treat empty strings and 'nan' as missing so ffill can propagate
+        df[col] = df[col].replace('', pd.NA).replace('nan', pd.NA)
+        df[col] = df[col].ffill()
 
-    # Stringify everything (handles datetime.time cells from Excel)
+    # ── Step 4: drop separator / empty rows (no Date value) ──────────────────
+    date_col = next((c for c in df.columns if c.strip().lower() == 'date'), None)
+    if date_col:
+        df = df[df[date_col].apply(
+            lambda x: str(x).strip().lower() not in ('', 'nan', 'nat', 'date', 'none')
+        )]
+
+    # ── Step 5: stringify all cells (handles datetime.time punch-time objects)
     for col in df.columns:
         df[col] = df[col].apply(_format_cell)
 
+    # ── Step 6: final guard — drop any rows still without a Code ─────────────
+    code_col = next((c for c in df.columns if c.strip().lower() == 'code'), None)
+    if code_col:
+        df = df[df[code_col].apply(lambda x: str(x).strip().lower() not in ('', 'nan'))]
+
+    df = df.reset_index(drop=True)
     return df, None
 
 
