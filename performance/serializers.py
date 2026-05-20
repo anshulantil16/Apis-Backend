@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
     EmployeeProfile, PerformanceCycle, GoalCard,
-    Goal, QuarterlyReview, ApprovalLog
+    Goal, QuarterlyReview, ApprovalLog, GoalProgressUpdate
 )
 
 
@@ -48,10 +48,28 @@ class GoalCardSerializer(serializers.ModelSerializer):
     total_weightage = serializers.IntegerField(read_only=True)
     final_weighted_score = serializers.FloatField(read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
+    # Inline review summary so frontend can check review status and ID without a separate fetch
+    review_data = serializers.SerializerMethodField()
 
     class Meta:
         model = GoalCard
         fields = '__all__'
+
+    def get_review_data(self, obj):
+        try:
+            r = obj.review
+            return {
+                'id': r.id,
+                'status': r.status,
+                'status_display': r.get_status_display(),
+                'final_weighted_score': float(r.final_weighted_score) if r.final_weighted_score else None,
+                'performance_band': r.performance_band,
+                'manager_overall_rating': r.manager_overall_rating,
+                'hr_final_rating': r.hr_final_rating,
+                'submitted_at': r.submitted_at,
+            }
+        except Exception:
+            return None
 
 
 class QuarterlyReviewSerializer(serializers.ModelSerializer):
@@ -60,9 +78,42 @@ class QuarterlyReviewSerializer(serializers.ModelSerializer):
     cycle_name = serializers.CharField(source='goal_card.cycle.name', read_only=True)
     performance_band_display = serializers.CharField(source='get_performance_band_display', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
+    # Goals nested so HR/manager can set per-goal ratings without a separate fetch
+    goal_card_goals = serializers.SerializerMethodField()
 
     class Meta:
         model = QuarterlyReview
+        fields = '__all__'
+
+    def get_goal_card_goals(self, obj):
+        return [
+            {
+                'id': g.id,
+                'title': g.title,
+                'category': g.category,
+                'category_display': g.get_category_display(),
+                'weightage': g.weightage,
+                'kpi_metric': g.kpi_metric,
+                'target_value': g.target_value,
+                'self_completion_pct': g.self_completion_pct,
+                'self_rating': g.self_rating,
+                'self_comments': g.self_comments,
+                'manager_rating': g.manager_rating,
+                'manager_comments': g.manager_comments,
+                'hr_rating': g.hr_rating,
+                'hr_comments': g.hr_comments,
+                'final_score': float(g.final_score) if g.final_score else None,
+            }
+            for g in obj.goal_card.goals.all()
+        ]
+
+
+class GoalProgressUpdateSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    goal_title = serializers.CharField(source='goal.title', read_only=True)
+
+    class Meta:
+        model = GoalProgressUpdate
         fields = '__all__'
 
 

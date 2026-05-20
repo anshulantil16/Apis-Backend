@@ -227,6 +227,32 @@ class QuarterlyReview(models.Model):
         return 'poor'
 
 
+class GoalProgressUpdate(models.Model):
+    """Mid-quarter progress log entry. Employees add these during the quarter."""
+    STATUS_CHOICES = [
+        ('on_track', 'On Track'),
+        ('ahead', 'Ahead of Schedule'),
+        ('at_risk', 'At Risk'),
+        ('blocked', 'Blocked'),
+        ('completed', 'Completed'),
+    ]
+
+    goal = models.ForeignKey(Goal, on_delete=models.CASCADE, related_name='progress_updates')
+    completion_pct = models.IntegerField(default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='on_track')
+    notes = models.TextField(blank=True)
+    highlights = models.TextField(blank=True)
+    blockers = models.TextField(blank=True)
+    update_date = models.DateField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-update_date', '-created_at']
+
+    def __str__(self):
+        return f"{self.goal.title} — {self.completion_pct}% on {self.update_date}"
+
+
 class ApprovalLog(models.Model):
     """Immutable log of every action taken on a GoalCard."""
     goal_card = models.ForeignKey(GoalCard, on_delete=models.CASCADE, related_name='approval_logs')

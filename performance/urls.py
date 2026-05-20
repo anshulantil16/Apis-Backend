@@ -15,19 +15,28 @@ from .views.hr_views import (
     LeaderboardView, AllGoalCardsView, AllReviewsView,
     ResetDatabaseView,
 )
+from .views.progress_views import (
+    GoalProgressView, EmployeeProgressReportView,
+    TeamProgressReportView, OrgAnalyticsView,
+)
 
 urlpatterns = [
     # Employee routes
     path('employee/<str:employee_id>/', EmployeeProfileView.as_view()),
     path('employee/<str:employee_id>/goal-cards/', EmployeeAllGoalCardsView.as_view()),
+    path('employee/<str:employee_id>/progress-report/', EmployeeProgressReportView.as_view()),
     path('cycles/active/', ActiveCyclesView.as_view()),
     path('goal-cards/<str:employee_id>/<int:cycle_id>/', EmployeeGoalCardView.as_view()),
     path('goal-cards/<int:gc_id>/submit/', SubmitGoalCardView.as_view()),
     path('reviews/<int:gc_id>/', SubmitQuarterlyReviewView.as_view()),
 
+    # Goal progress updates
+    path('goals/<int:goal_id>/progress/', GoalProgressView.as_view()),
+
     # Manager routes
     path('manager/<str:manager_id>/team/', ManagerTeamView.as_view()),
     path('manager/<str:manager_id>/pending-reviews/', ManagerPendingReviewsView.as_view()),
+    path('manager/<str:manager_id>/team-progress/', TeamProgressReportView.as_view()),
     path('goal-cards/<int:gc_id>/manager-review/', ManagerReviewGoalCardView.as_view()),
     path('reviews/<int:review_id>/manager-rate/', ManagerRateReviewView.as_view()),
 
@@ -38,6 +47,7 @@ urlpatterns = [
     path('cycles/<int:cycle_id>/', CycleUpdateView.as_view()),
     path('reviews/<int:review_id>/hr-finalize/', HRFinalizeReviewView.as_view()),
     path('org/overview/', OrgOverviewView.as_view()),
+    path('org/analytics/', OrgAnalyticsView.as_view()),
     path('leaderboard/', LeaderboardView.as_view()),
     path('all-goal-cards/', AllGoalCardsView.as_view()),
     path('all-reviews/', AllReviewsView.as_view()),
