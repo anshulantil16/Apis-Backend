@@ -1,4 +1,5 @@
 import pandas as pd
+import datetime
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -8,19 +9,108 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
+
+def _format_cell(val):
+    """Convert any pandas/Excel cell value to a clean string."""
+    if val is None:
+        return ''
+    try:
+        if pd.isna(val):
+            return ''
+    except (TypeError, ValueError):
+        pass
+    if isinstance(val, datetime.time):
+        return val.strftime('%H:%M')
+    if isinstance(val, datetime.datetime):
+        return val.strftime('%d/%m/%Y')
+    if isinstance(val, datetime.date):
+        return val.strftime('%d/%m/%Y')
+    s = str(val).strip()
+    return '' if s in ('nan', 'NaT', 'None', 'NaN') else s
+
+
+def _read_raw(file, file_name):
+    """Read file into a headerless DataFrame, resetting the file cursor first."""
+    file.seek(0)
+    if file_name.endswith('.csv'):
+        try:
+            return pd.read_csv(file, header=None, dtype=str)
+        except UnicodeDecodeError:
+            file.seek(0)
+            return pd.read_csv(file, header=None, dtype=str, encoding='latin1')
+    else:
+        return pd.read_excel(file, header=None)
+
+
+def _parse_pocket_hrms(file, file_name):
+    """
+    Pocket HRMS exports embed company metadata rows before the actual column
+    headers.  This function finds the real header row (the one containing
+    'Code', 'Name', and 'Type') and returns a clean DataFrame.
+    """
+    df_raw = _read_raw(file, file_name)
+
+    required = {'code', 'name', 'type'}
+    header_idx = None
+    for idx, row in df_raw.iterrows():
+        vals = {str(v).strip().lower() for v in row.values if str(v).strip().lower() not in ('', 'nan')}
+        if required.issubset(vals):
+            header_idx = idx
+            break
+
+    if header_idx is None:
+        return None, "Could not locate column headers (Code / Name / Type) in the uploaded file."
+
+    file.seek(0)
+    if file_name.endswith('.csv'):
+        try:
+            df = pd.read_csv(file, header=header_idx)
+        except UnicodeDecodeError:
+            file.seek(0)
+            df = pd.read_csv(file, header=header_idx, encoding='latin1')
+    else:
+        df = pd.read_excel(file, header=header_idx)
+
+    df.columns = df.columns.astype(str).str.replace('\n', ' ', regex=False).str.strip()
+
+    # Drop leftover metadata rows (any row whose 'Code' cell is empty or
+    # still contains the literal word "Code" from a repeated header band)
+    code_col = next((c for c in df.columns if c.strip().lower() == 'code'), None)
+    if code_col:
+        mask = df[code_col].apply(lambda x: str(x).strip().lower() not in ('', 'nan', 'code'))
+        df = df[mask]
+
+    # Stringify everything (handles datetime.time cells from Excel)
+    for col in df.columns:
+        df[col] = df[col].apply(_format_cell)
+
+    return df, None
+
+
 class ExcelUploadView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, *args, **kwargs):
         file = request.FILES.get('file')
-        
+
         tool = request.data.get('tool', 'joining')
-        
+
         if not file:
             return Response({"error": "No file uploaded"}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         try:
             file_name = file.name.lower()
+
+            # ── Delhi / Pocket HRMS attendance ──────────────────────────────
+            if tool == 'delhi':
+                df, err = _parse_pocket_hrms(file, file_name)
+                if err:
+                    return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
+                headers = list(df.columns)
+                data = df.to_dict(orient='records')
+                return Response({"message": "File processed successfully", "headers": headers, "data": data})
+
+            # ── Generic read for all other non-joining tools ─────────────────
             if file_name.endswith('.csv'):
                 try:
                     df = pd.read_csv(file)
@@ -29,9 +119,9 @@ class ExcelUploadView(APIView):
                     df = pd.read_csv(file, encoding='latin1')
             else:
                 df = pd.read_excel(file)
-            
+
             df.columns = df.columns.astype(str).str.replace('\n', ' ', regex=False).str.replace('\r', '', regex=False).str.strip()
-            
+
             if tool != 'joining':
                 df = df.fillna('')
                 headers = list(df.columns)
