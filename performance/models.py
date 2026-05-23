@@ -253,6 +253,21 @@ class GoalProgressUpdate(models.Model):
         return f"{self.goal.title} — {self.completion_pct}% on {self.update_date}"
 
 
+class OTPToken(models.Model):
+    """Short-lived one-time password for login verification."""
+    employee = models.ForeignKey(EmployeeProfile, on_delete=models.CASCADE, related_name='otp_tokens')
+    otp_code = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    is_used = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def is_valid(self):
+        return not self.is_used and self.expires_at > timezone.now()
+
+
 class ApprovalLog(models.Model):
     """Immutable log of every action taken on a GoalCard."""
     goal_card = models.ForeignKey(GoalCard, on_delete=models.CASCADE, related_name='approval_logs')
