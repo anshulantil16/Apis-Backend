@@ -139,16 +139,8 @@ class CompetencyRating(models.Model):
 
 class Goal(models.Model):
     """Individual goal within a GoalCard."""
-    CATEGORY_CHOICES = [
-        ('sales', '💰 Sales & Revenue'),
-        ('customer', '🤝 Customer Relations'),
-        ('learning', '📚 Learning & Growth'),
-        ('process', '⚙️ Process Excellence'),
-        ('innovation', '🚀 Innovation & Initiatives'),
-    ]
-
     goal_card = models.ForeignKey(GoalCard, on_delete=models.CASCADE, related_name='goals')
-    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
+    category = models.CharField(max_length=100, blank=True)
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     kpi_metric = models.CharField(max_length=200, blank=True)   # e.g. "₹50L revenue"

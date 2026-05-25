@@ -24,8 +24,6 @@ class PerformanceCycleSerializer(serializers.ModelSerializer):
 
 
 class GoalSerializer(serializers.ModelSerializer):
-    category_display = serializers.CharField(source='get_category_display', read_only=True)
-
     class Meta:
         model = Goal
         fields = '__all__'
@@ -99,7 +97,6 @@ class QuarterlyReviewSerializer(serializers.ModelSerializer):
                 'id': g.id,
                 'title': g.title,
                 'category': g.category,
-                'category_display': g.get_category_display(),
                 'weightage': g.weightage,
                 'kpi_metric': g.kpi_metric,
                 'target_value': g.target_value,
