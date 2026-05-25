@@ -63,6 +63,24 @@ class EmployeeGoalCardView(APIView):
         except PerformanceCycle.DoesNotExist:
             return Response({'error': 'Cycle not found'}, status=404)
 
+        # Enforce cycle phase: goals can only be set/edited during goal_setting
+        if cycle.status != 'goal_setting':
+            phase_messages = {
+                'draft':        'This cycle has not been opened for goal setting yet. Contact HR.',
+                'goals_locked': 'Goal setting is now locked for this cycle. Contact HR if you need to make changes.',
+                'review_open':  'Goals are locked. The review phase is now open — submit your quarterly review instead.',
+                'closed':       'This performance cycle is closed.',
+            }
+            msg = phase_messages.get(cycle.status, f'Goal setting is not allowed in the current phase: {cycle.get_status_display()}')
+            return Response({'error': msg, 'cycle_status': cycle.status}, status=status.HTTP_403_FORBIDDEN)
+
+        # Also enforce the goal-setting deadline if it has passed
+        if cycle.goal_setting_deadline and timezone.now().date() > cycle.goal_setting_deadline:
+            return Response({
+                'error': f'The goal setting deadline ({cycle.goal_setting_deadline}) has passed.',
+                'cycle_status': cycle.status,
+            }, status=status.HTTP_403_FORBIDDEN)
+
         # Get or create the goal card
         gc, created = GoalCard.objects.get_or_create(employee=emp, cycle=cycle)
 
@@ -93,6 +111,24 @@ class SubmitGoalCardView(APIView):
             gc = GoalCard.objects.get(id=gc_id)
         except GoalCard.DoesNotExist:
             return Response({'error': 'Goal card not found'}, status=404)
+
+        # Enforce cycle phase: goals can only be submitted during goal_setting
+        if gc.cycle.status != 'goal_setting':
+            phase_messages = {
+                'draft':        'This cycle is not open for goal setting yet.',
+                'goals_locked': 'Goal setting is locked. You cannot submit goals at this time.',
+                'review_open':  'Goals are locked. Submit your quarterly review instead.',
+                'closed':       'This performance cycle is closed.',
+            }
+            msg = phase_messages.get(gc.cycle.status, f'Goal submission is not allowed: {gc.cycle.get_status_display()}')
+            return Response({'error': msg, 'cycle_status': gc.cycle.status}, status=status.HTTP_403_FORBIDDEN)
+
+        # Enforce goal-setting deadline
+        if gc.cycle.goal_setting_deadline and timezone.now().date() > gc.cycle.goal_setting_deadline:
+            return Response({
+                'error': f'The goal setting deadline ({gc.cycle.goal_setting_deadline}) has passed.',
+                'cycle_status': gc.cycle.status,
+            }, status=status.HTTP_403_FORBIDDEN)
 
         if gc.status not in ['draft', 'manager_rejected']:
             return Response({'error': f'Cannot submit from status: {gc.status}'}, status=400)
@@ -132,6 +168,24 @@ class SubmitQuarterlyReviewView(APIView):
             gc = GoalCard.objects.get(id=gc_id)
         except GoalCard.DoesNotExist:
             return Response({'error': 'Goal card not found'}, status=404)
+
+        # Enforce cycle phase: reviews can only be submitted during review_open
+        if gc.cycle.status != 'review_open':
+            phase_messages = {
+                'draft':        'The review phase has not started yet.',
+                'goal_setting': 'Goal setting is still in progress. Reviews open after goals are locked.',
+                'goals_locked': 'Goals are locked but the review window is not open yet. Wait for HR to open reviews.',
+                'closed':       'This performance cycle is closed.',
+            }
+            msg = phase_messages.get(gc.cycle.status, f'Quarterly review submission is not allowed: {gc.cycle.get_status_display()}')
+            return Response({'error': msg, 'cycle_status': gc.cycle.status}, status=status.HTTP_403_FORBIDDEN)
+
+        # Enforce review deadline
+        if gc.cycle.review_deadline and timezone.now().date() > gc.cycle.review_deadline:
+            return Response({
+                'error': f'The review submission deadline ({gc.cycle.review_deadline}) has passed.',
+                'cycle_status': gc.cycle.status,
+            }, status=status.HTTP_403_FORBIDDEN)
 
         review, created = QuarterlyReview.objects.get_or_create(goal_card=gc)
 
