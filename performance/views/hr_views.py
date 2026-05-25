@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from ..models import (
     EmployeeProfile, PerformanceCycle, GoalCard,
-    Goal, QuarterlyReview, ApprovalLog
+    Goal, QuarterlyReview, ApprovalLog, CompetencyRating
 )
 from ..serializers import (
     EmployeeProfileSerializer, PerformanceCycleSerializer,
@@ -189,6 +189,10 @@ class HRFinalizeReviewView(APIView):
 
         review.hr_final_rating = request.data.get('hr_final_rating')
         review.hr_comments = request.data.get('hr_comments', '')
+        review.functional_head_remarks = request.data.get('functional_head_remarks', '')
+        review.functional_head_rating = request.data.get('functional_head_rating') or None
+        review.management_approval_remarks = request.data.get('management_approval_remarks', '')
+        review.management_approval_rating = request.data.get('management_approval_rating') or None
 
         # Per-goal HR ratings
         goal_ratings = request.data.get('goal_ratings', [])
@@ -353,6 +357,7 @@ class ResetDatabaseView(APIView):
         try:
             ApprovalLog.objects.all().delete()
             QuarterlyReview.objects.all().delete()
+            CompetencyRating.objects.all().delete()
             Goal.objects.all().delete()
             GoalCard.objects.all().delete()
             PerformanceCycle.objects.all().delete()

@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 
-from ..models import EmployeeProfile, GoalCard, Goal, QuarterlyReview, ApprovalLog
+from ..models import EmployeeProfile, GoalCard, Goal, QuarterlyReview, ApprovalLog, CompetencyRating
 from ..serializers import GoalCardSerializer, QuarterlyReviewSerializer
 
 
@@ -103,9 +103,22 @@ class ManagerRateReviewView(APIView):
 
         review.manager_overall_rating = request.data.get('manager_overall_rating')
         review.manager_review_comments = request.data.get('manager_review_comments', '')
+        review.employee_strengths = request.data.get('employee_strengths', '')
+        review.areas_of_improvement = request.data.get('areas_of_improvement', '')
+        review.development_plan = request.data.get('development_plan', '')
+        review.promotion_recommendation = request.data.get('promotion_recommendation', '')
+        review.increment_recommendation = request.data.get('increment_recommendation', '')
         review.status = 'manager_reviewed'
         review.manager_reviewed_at = timezone.now()
         review.save()
+
+        # Save competency ratings (Section C)
+        for cr in request.data.get('competency_ratings', []):
+            CompetencyRating.objects.update_or_create(
+                goal_card=review.goal_card,
+                competency=cr['competency'],
+                defaults={'marks': cr.get('marks'), 'manager_remarks': cr.get('manager_remarks', '')},
+            )
 
         # Per-goal manager ratings
         goal_ratings = request.data.get('goal_ratings', [])

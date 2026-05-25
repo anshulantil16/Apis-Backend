@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
     EmployeeProfile, PerformanceCycle, GoalCard,
-    Goal, QuarterlyReview, ApprovalLog, GoalProgressUpdate
+    Goal, QuarterlyReview, ApprovalLog, GoalProgressUpdate, CompetencyRating
 )
 
 
@@ -37,8 +37,17 @@ class ApprovalLogSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class CompetencyRatingSerializer(serializers.ModelSerializer):
+    competency_display = serializers.CharField(source='get_competency_display', read_only=True)
+
+    class Meta:
+        model = CompetencyRating
+        fields = '__all__'
+
+
 class GoalCardSerializer(serializers.ModelSerializer):
     goals = GoalSerializer(many=True, read_only=True)
+    competency_ratings = CompetencyRatingSerializer(many=True, read_only=True)
     approval_logs = ApprovalLogSerializer(many=True, read_only=True)
     employee_name = serializers.CharField(source='employee.name', read_only=True)
     employee_id_str = serializers.CharField(source='employee.employee_id', read_only=True)
@@ -48,7 +57,6 @@ class GoalCardSerializer(serializers.ModelSerializer):
     total_weightage = serializers.IntegerField(read_only=True)
     final_weighted_score = serializers.FloatField(read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
-    # Inline review summary so frontend can check review status and ID without a separate fetch
     review_data = serializers.SerializerMethodField()
 
     class Meta:

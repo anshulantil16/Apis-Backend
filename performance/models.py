@@ -113,6 +113,30 @@ class GoalCard(models.Model):
         return round(total / total_weight, 2) if total_weight > 0 else 0
 
 
+class CompetencyRating(models.Model):
+    """Section C – manager-rated competency scores per employee per cycle."""
+    COMPETENCIES = [
+        ('ownership',      'Ownership & Accountability'),
+        ('communication',  'Communication'),
+        ('teamwork',       'Teamwork'),
+        ('leadership',     'Leadership'),
+        ('compliance',     'Compliance & Discipline'),
+        ('problem_solving','Problem Solving'),
+        ('innovation',     'Innovation'),
+    ]
+
+    goal_card = models.ForeignKey(GoalCard, on_delete=models.CASCADE, related_name='competency_ratings')
+    competency = models.CharField(max_length=30, choices=COMPETENCIES)
+    marks = models.IntegerField(null=True, blank=True)
+    manager_remarks = models.TextField(blank=True)
+
+    class Meta:
+        unique_together = ['goal_card', 'competency']
+
+    def __str__(self):
+        return f"{self.goal_card} — {self.competency}: {self.marks}"
+
+
 class Goal(models.Model):
     """Individual goal within a GoalCard."""
     CATEGORY_CHOICES = [
@@ -187,18 +211,34 @@ class QuarterlyReview(models.Model):
 
     goal_card = models.OneToOneField(GoalCard, on_delete=models.CASCADE, related_name='review')
     evidence_file = models.FileField(upload_to='performance/evidence/', null=True, blank=True)
+
+    # Section D – Employee Self Remarks
     employee_summary = models.TextField(blank=True)
     key_achievements = models.TextField(blank=True)
     challenges_faced = models.TextField(blank=True)
+    support_required = models.TextField(blank=True)
+    training_needs = models.TextField(blank=True)
+    career_aspirations = models.TextField(blank=True)
     learning_outcomes = models.TextField(blank=True)
     next_quarter_plans = models.TextField(blank=True)
     overall_self_rating = models.IntegerField(null=True, blank=True)
 
+    # Section E – Manager Assessment
     manager_overall_rating = models.IntegerField(null=True, blank=True)
     manager_review_comments = models.TextField(blank=True)
+    employee_strengths = models.TextField(blank=True)
+    areas_of_improvement = models.TextField(blank=True)
+    development_plan = models.TextField(blank=True)
+    promotion_recommendation = models.CharField(max_length=100, blank=True)
+    increment_recommendation = models.CharField(max_length=100, blank=True)
 
+    # Section F – HR / Management Review
     hr_final_rating = models.IntegerField(null=True, blank=True)
     hr_comments = models.TextField(blank=True)
+    functional_head_remarks = models.TextField(blank=True)
+    functional_head_rating = models.IntegerField(null=True, blank=True)
+    management_approval_remarks = models.TextField(blank=True)
+    management_approval_rating = models.IntegerField(null=True, blank=True)
 
     final_weighted_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     performance_band = models.CharField(max_length=20, choices=BAND_CHOICES, blank=True)
