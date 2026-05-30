@@ -12,7 +12,6 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 import os
-import dj_database_url
 load_dotenv()
 from pathlib import Path
 
@@ -86,6 +85,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 DATABASE_URL = os.getenv('DATABASE_URL')
 if DATABASE_URL:
+    import dj_database_url
     DATABASES = {'default': dj_database_url.config(default=DATABASE_URL, conn_max_age=600)}
 elif os.getenv('DB_NAME'):
     DATABASES = {
