@@ -2,12 +2,13 @@
 Employee-facing API views.
 Employees access their own data by providing their employee_id.
 """
+import json
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 
-from ..models import EmployeeProfile, PerformanceCycle, GoalCard, Goal, QuarterlyReview, ApprovalLog
+from ..models import EmployeeProfile, PerformanceCycle, GoalCard, Goal, KPI, QuarterlyReview, ApprovalLog
 from ..serializers import (
     EmployeeProfileSerializer, PerformanceCycleSerializer,
     GoalCardSerializer, GoalSerializer, QuarterlyReviewSerializer
@@ -84,21 +85,26 @@ class EmployeeGoalCardView(APIView):
         # Get or create the goal card
         gc, created = GoalCard.objects.get_or_create(employee=emp, cycle=cycle)
 
-        # Save/overwrite goals
+        # Save/overwrite KRAs and KPIs
         goals_data = request.data.get('goals', [])
         if goals_data:
             gc.goals.all().delete()
             for i, g in enumerate(goals_data):
-                Goal.objects.create(
+                kra = Goal.objects.create(
                     goal_card=gc,
-                    category=g.get('category', 'sales'),
+                    category=g.get('category', ''),
                     title=g.get('title', ''),
                     description=g.get('description', ''),
-                    kpi_metric=g.get('kpi_metric', ''),
-                    target_value=g.get('target_value', ''),
-                    weightage=g.get('weightage', 20),
                     order=i
                 )
+                for j, kpi in enumerate(g.get('kpis', [])):
+                    KPI.objects.create(
+                        kra=kra,
+                        metric=kpi.get('metric', ''),
+                        target_value=kpi.get('target_value', ''),
+                        weightage=kpi.get('weightage', 0),
+                        order=j
+                    )
 
         return Response(GoalCardSerializer(gc).data, status=201 if created else 200)
 
@@ -207,17 +213,18 @@ class SubmitQuarterlyReviewView(APIView):
 
         review.save()
 
-        # Update self-ratings per goal
-        goal_ratings = request.data.get('goal_ratings', [])
-        for gr in goal_ratings:
+        # Update self-ratings per KPI
+        kpi_ratings_raw = request.data.get('kpi_ratings', [])
+        kpi_ratings = json.loads(kpi_ratings_raw) if isinstance(kpi_ratings_raw, str) else kpi_ratings_raw
+        for kr in kpi_ratings:
             try:
-                goal = Goal.objects.get(id=gr['goal_id'], goal_card=gc)
-                goal.self_rating = gr.get('self_rating')
-                goal.self_completion_pct = gr.get('self_completion_pct')
-                goal.self_comments = gr.get('self_comments', '')
-                goal.achievement_description = gr.get('achievement_description', '')
-                goal.save()
-            except Goal.DoesNotExist:
+                kpi = KPI.objects.get(id=kr['kpi_id'], kra__goal_card=gc)
+                kpi.self_rating = kr.get('self_rating')
+                kpi.self_completion_pct = kr.get('self_completion_pct')
+                kpi.self_comments = kr.get('self_comments', '')
+                kpi.achievement_description = kr.get('achievement_description', '')
+                kpi.save()
+            except KPI.DoesNotExist:
                 pass
 
         ApprovalLog.objects.create(

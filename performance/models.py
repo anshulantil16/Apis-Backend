@@ -98,18 +98,19 @@ class GoalCard(models.Model):
 
     @property
     def total_weightage(self):
-        return sum(g.weightage for g in self.goals.all())
+        return sum(
+            kpi.weightage
+            for kra in self.goals.all()
+            for kpi in kra.kpis.all()
+        )
 
     @property
     def final_weighted_score(self):
-        goals = self.goals.all()
-        if not goals:
+        kpis = [kpi for kra in self.goals.all() for kpi in kra.kpis.all()]
+        if not kpis:
             return 0
-        total = sum(
-            (g.final_score or 0) * g.weightage
-            for g in goals
-        )
-        total_weight = sum(g.weightage for g in goals)
+        total = sum((kpi.final_score or 0) * kpi.weightage for kpi in kpis)
+        total_weight = sum(kpi.weightage for kpi in kpis)
         return round(total / total_weight, 2) if total_weight > 0 else 0
 
 
@@ -138,18 +139,30 @@ class CompetencyRating(models.Model):
 
 
 class Goal(models.Model):
-    """Individual goal within a GoalCard."""
+    """KRA (Key Result Area) within a GoalCard, grouped by category."""
     goal_card = models.ForeignKey(GoalCard, on_delete=models.CASCADE, related_name='goals')
     category = models.CharField(max_length=100, blank=True)
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True)
-    kpi_metric = models.CharField(max_length=200, blank=True)   # e.g. "₹50L revenue"
-    target_value = models.CharField(max_length=200, blank=True)  # what success looks like
-    weightage = models.IntegerField(default=20)                  # % of total score
+    order = models.IntegerField(default=0)
 
-    # Employee self-assessment (filled at quarter-end)
-    self_completion_pct = models.IntegerField(null=True, blank=True)   # 0-100
-    self_rating = models.IntegerField(null=True, blank=True)           # 1-5
+    class Meta:
+        ordering = ['order', 'id']
+
+    def __str__(self):
+        return f"{self.goal_card} — {self.title}"
+
+
+class KPI(models.Model):
+    """KPI (Key Performance Indicator) within a KRA (Goal)."""
+    kra = models.ForeignKey(Goal, on_delete=models.CASCADE, related_name='kpis')
+    metric = models.CharField(max_length=200, blank=True)
+    target_value = models.CharField(max_length=200, blank=True)
+    weightage = models.FloatField(default=0)
+
+    # Employee self-assessment
+    self_completion_pct = models.IntegerField(null=True, blank=True)
+    self_rating = models.IntegerField(null=True, blank=True)
     self_comments = models.TextField(blank=True)
     achievement_description = models.TextField(blank=True)
 
@@ -161,19 +174,16 @@ class Goal(models.Model):
     hr_rating = models.IntegerField(null=True, blank=True)
     hr_comments = models.TextField(blank=True)
 
-    # Computed
     final_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
-
     order = models.IntegerField(default=0)
 
     class Meta:
         ordering = ['order', 'id']
 
     def __str__(self):
-        return f"{self.goal_card} — {self.title}"
+        return f"{self.kra.title} — {self.metric}"
 
     def compute_final_score(self):
-        """Weighted average of manager rating (60%) and hr rating (40%)."""
         if self.hr_rating:
             score = (self.manager_rating or self.hr_rating) * 0.6 + self.hr_rating * 0.4
         elif self.manager_rating:
@@ -269,7 +279,7 @@ class GoalProgressUpdate(models.Model):
         ('completed', 'Completed'),
     ]
 
-    goal = models.ForeignKey(Goal, on_delete=models.CASCADE, related_name='progress_updates')
+    kpi = models.ForeignKey(KPI, on_delete=models.CASCADE, related_name='progress_updates', null=True, blank=True)
     completion_pct = models.IntegerField(default=0)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='on_track')
     notes = models.TextField(blank=True)

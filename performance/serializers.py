@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
     EmployeeProfile, PerformanceCycle, GoalCard,
-    Goal, QuarterlyReview, ApprovalLog, GoalProgressUpdate, CompetencyRating
+    Goal, KPI, QuarterlyReview, ApprovalLog, GoalProgressUpdate, CompetencyRating
 )
 
 
@@ -23,7 +23,15 @@ class PerformanceCycleSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class KPISerializer(serializers.ModelSerializer):
+    class Meta:
+        model = KPI
+        fields = '__all__'
+
+
 class GoalSerializer(serializers.ModelSerializer):
+    kpis = KPISerializer(many=True, read_only=True)
+
     class Meta:
         model = Goal
         fields = '__all__'
@@ -52,7 +60,7 @@ class GoalCardSerializer(serializers.ModelSerializer):
     employee_designation = serializers.CharField(source='employee.designation', read_only=True)
     employee_zone = serializers.CharField(source='employee.zone', read_only=True)
     cycle_name = serializers.CharField(source='cycle.name', read_only=True)
-    total_weightage = serializers.IntegerField(read_only=True)
+    total_weightage = serializers.FloatField(read_only=True)
     final_weighted_score = serializers.FloatField(read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     review_data = serializers.SerializerMethodField()
@@ -84,7 +92,6 @@ class QuarterlyReviewSerializer(serializers.ModelSerializer):
     cycle_name = serializers.CharField(source='goal_card.cycle.name', read_only=True)
     performance_band_display = serializers.CharField(source='get_performance_band_display', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
-    # Goals nested so HR/manager can set per-goal ratings without a separate fetch
     goal_card_goals = serializers.SerializerMethodField()
 
     class Meta:
@@ -92,30 +99,38 @@ class QuarterlyReviewSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
     def get_goal_card_goals(self, obj):
-        return [
-            {
-                'id': g.id,
-                'title': g.title,
-                'category': g.category,
-                'weightage': g.weightage,
-                'kpi_metric': g.kpi_metric,
-                'target_value': g.target_value,
-                'self_completion_pct': g.self_completion_pct,
-                'self_rating': g.self_rating,
-                'self_comments': g.self_comments,
-                'manager_rating': g.manager_rating,
-                'manager_comments': g.manager_comments,
-                'hr_rating': g.hr_rating,
-                'hr_comments': g.hr_comments,
-                'final_score': float(g.final_score) if g.final_score else None,
+        result = []
+        for kra in obj.goal_card.goals.all():
+            kra_data = {
+                'id': kra.id,
+                'category': kra.category,
+                'title': kra.title,
+                'description': kra.description,
+                'kpis': [
+                    {
+                        'id': kpi.id,
+                        'metric': kpi.metric,
+                        'target_value': kpi.target_value,
+                        'weightage': kpi.weightage,
+                        'self_completion_pct': kpi.self_completion_pct,
+                        'self_rating': kpi.self_rating,
+                        'self_comments': kpi.self_comments,
+                        'manager_rating': kpi.manager_rating,
+                        'manager_comments': kpi.manager_comments,
+                        'hr_rating': kpi.hr_rating,
+                        'hr_comments': kpi.hr_comments,
+                        'final_score': float(kpi.final_score) if kpi.final_score else None,
+                    }
+                    for kpi in kra.kpis.all()
+                ]
             }
-            for g in obj.goal_card.goals.all()
-        ]
+            result.append(kra_data)
+        return result
 
 
 class GoalProgressUpdateSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
-    goal_title = serializers.CharField(source='goal.title', read_only=True)
+    kpi_metric = serializers.CharField(source='kpi.metric', read_only=True)
 
     class Meta:
         model = GoalProgressUpdate
@@ -123,7 +138,6 @@ class GoalProgressUpdateSerializer(serializers.ModelSerializer):
 
 
 class LeaderboardEntrySerializer(serializers.ModelSerializer):
-    """Lightweight serializer for the leaderboard view."""
     review_score = serializers.SerializerMethodField()
     performance_band = serializers.SerializerMethodField()
     rank = serializers.SerializerMethodField()
