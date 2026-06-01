@@ -97,14 +97,28 @@ class EmployeeGoalCardView(APIView):
                     description=g.get('description', ''),
                     order=i
                 )
-                for j, kpi in enumerate(g.get('kpis', [])):
+                for j, kpi_data in enumerate(g.get('kpis', [])):
                     KPI.objects.create(
                         kra=kra,
-                        metric=kpi.get('metric', ''),
-                        target_value=kpi.get('target_value', ''),
-                        weightage=kpi.get('weightage', 0),
+                        metric=kpi_data.get('metric', ''),
+                        target_value=kpi_data.get('target_value', ''),
+                        weightage=kpi_data.get('weightage') or 0,
+                        frequency=kpi_data.get('frequency', ''),
+                        unit_of_measurement=kpi_data.get('unit_of_measurement', ''),
+                        parameter_type=kpi_data.get('parameter_type', ''),
+                        data_source=kpi_data.get('data_source', ''),
+                        actual_achievement=kpi_data.get('actual_achievement', ''),
+                        manager_score=kpi_data.get('manager_score') or None,
                         order=j
                     )
+
+        # Save appraisal form steps 2-4 data
+        gc.self_review_answers = request.data.get('self_review_answers', gc.self_review_answers)
+        gc.key_skills = request.data.get('key_skills', gc.key_skills)
+        gc.training_programs = request.data.get('training_programs', gc.training_programs)
+        gc.feedback_manager = request.data.get('feedback_manager', gc.feedback_manager)
+        gc.feedback_organization = request.data.get('feedback_organization', gc.feedback_organization)
+        gc.save()
 
         return Response(GoalCardSerializer(gc).data, status=201 if created else 200)
 

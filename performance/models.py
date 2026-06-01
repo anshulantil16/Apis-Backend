@@ -89,6 +89,20 @@ class GoalCard(models.Model):
     manager_reviewed_at = models.DateTimeField(null=True, blank=True)
     hr_approved_at = models.DateTimeField(null=True, blank=True)
 
+    # Appraisal form — Steps 2-4 (employee fills)
+    self_review_answers = models.JSONField(default=list, blank=True)
+    key_skills = models.JSONField(default=list, blank=True)
+    training_programs = models.TextField(blank=True)
+    feedback_manager = models.TextField(blank=True)
+    feedback_organization = models.TextField(blank=True)
+
+    # Manager remarks (manager fills before submitting rating)
+    manager_special_achievements = models.TextField(blank=True)
+    manager_promoted = models.CharField(max_length=10, blank=True)          # 'Yes' or 'No'
+    manager_promoted_justification = models.TextField(blank=True)
+    manager_salary_correction = models.TextField(blank=True)
+    manager_salary_justification = models.TextField(blank=True)
+
     class Meta:
         unique_together = ['employee', 'cycle']
         ordering = ['-created_at']
@@ -159,6 +173,14 @@ class KPI(models.Model):
     metric = models.CharField(max_length=200, blank=True)
     target_value = models.CharField(max_length=200, blank=True)
     weightage = models.FloatField(default=0)
+
+    # Appraisal form fields (employee fills during goal setting)
+    frequency = models.CharField(max_length=50, blank=True)
+    unit_of_measurement = models.CharField(max_length=100, blank=True)
+    parameter_type = models.CharField(max_length=100, blank=True)
+    data_source = models.CharField(max_length=200, blank=True)
+    actual_achievement = models.CharField(max_length=200, blank=True)
+    manager_score = models.FloatField(null=True, blank=True)
 
     # Employee self-assessment
     self_completion_pct = models.IntegerField(null=True, blank=True)
