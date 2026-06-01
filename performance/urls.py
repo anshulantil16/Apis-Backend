@@ -1,5 +1,5 @@
 from django.urls import path
-from .views.auth_views import SendOTPView, VerifyOTPView
+from .views.auth_views import SendOTPView, VerifyOTPView, AdminBootstrapOTPView, AdminBootstrapVerifyView
 from .views.employee_views import (
     EmployeeProfileView, ActiveCyclesView,
     EmployeeGoalCardView, SubmitGoalCardView,
@@ -25,6 +25,8 @@ urlpatterns = [
     # Auth (OTP login)
     path('auth/send-otp/', SendOTPView.as_view()),
     path('auth/verify-otp/', VerifyOTPView.as_view()),
+    path('auth/admin-otp/', AdminBootstrapOTPView.as_view()),
+    path('auth/admin-verify/', AdminBootstrapVerifyView.as_view()),
 
     # Employee routes
     path('employee/<str:employee_id>/', EmployeeProfileView.as_view()),
