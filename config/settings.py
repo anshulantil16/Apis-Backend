@@ -28,7 +28,7 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-gfwvx)x*fapr(ql+s8-*^apd&7
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
 
 
 # Application definition
@@ -147,10 +147,11 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL', 'True') == 'True'
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "https://apis-frontend-mu.vercel.app",
+    *[o.strip() for o in os.getenv('CORS_EXTRA_ORIGINS', '').split(',') if o.strip()],
 ]
 
 REST_FRAMEWORK = {
