@@ -56,6 +56,7 @@ class EmployeeImportView(APIView):
             'zone': ['zone'],
             'subzone': ['subzone', 'sub_zone'],
             'reporting_manager_id': ['reporting_manager_id', 'reporting_to', 'manager_id'],
+            'hod_id': ['hod_id', 'hod', 'head_of_department_id'],
             'user_type': ['user_type', 'type'],
             'joined_date': ['joined_date', 'joining_date', 'doj'],
         }
@@ -86,6 +87,8 @@ class EmployeeImportView(APIView):
             user_type_raw = val('user_type').lower()
             if 'hr' in user_type_raw:
                 user_type = 'hr'
+            elif 'hod' in user_type_raw or 'head' in user_type_raw:
+                user_type = 'hod'
             elif 'manager' in user_type_raw or 'mgr' in user_type_raw:
                 user_type = 'manager'
             else:
@@ -111,6 +114,7 @@ class EmployeeImportView(APIView):
                     'zone': val('zone'),
                     'subzone': val('subzone'),
                     'reporting_manager_id': val('reporting_manager_id'),
+                    'hod_id': val('hod_id'),
                     'user_type': user_type,
                     'joined_date': joined_date,
                     'is_active': True,
@@ -186,6 +190,12 @@ class HRFinalizeReviewView(APIView):
             review = QuarterlyReview.objects.get(id=review_id)
         except QuarterlyReview.DoesNotExist:
             return Response({'error': 'Review not found'}, status=404)
+
+        if review.goal_card.status != 'hod_approved':
+            return Response(
+                {'error': f'Goal card must be HOD-approved before HR can finalize. Current status: {review.goal_card.status}'},
+                status=400,
+            )
 
         review.hr_final_rating = request.data.get('hr_final_rating')
         review.hr_comments = request.data.get('hr_comments', '')

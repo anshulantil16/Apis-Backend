@@ -60,13 +60,17 @@ class HODReviewGoalCardView(APIView):
                 status=400,
             )
 
+        action = request.data.get('action', 'approved')
+        if action not in ['approved', 'rejected']:
+            return Response({'error': 'action must be approved or rejected'}, status=400)
+
         gc.hod_remarks = request.data.get('remarks', '')
         gc.hod_special_achievements = request.data.get('hod_special_achievements', gc.hod_special_achievements)
         gc.hod_promoted = request.data.get('hod_promoted', gc.hod_promoted)
         gc.hod_promoted_justification = request.data.get('hod_promoted_justification', gc.hod_promoted_justification)
         gc.hod_salary_correction = request.data.get('hod_salary_correction', gc.hod_salary_correction)
         gc.hod_salary_justification = request.data.get('hod_salary_justification', gc.hod_salary_justification)
-        gc.status = 'hod_approved'
+        gc.status = 'hod_approved' if action == 'approved' else 'hod_rejected'
         gc.hod_reviewed_at = timezone.now()
         gc.save()
 
@@ -74,7 +78,7 @@ class HODReviewGoalCardView(APIView):
             goal_card=gc,
             actor_role='hod',
             actor_name=request.data.get('hod_name', 'HOD'),
-            action='hod_approved',
+            action=gc.status,
             comment=gc.hod_remarks,
         )
 

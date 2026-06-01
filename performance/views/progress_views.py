@@ -229,7 +229,7 @@ class TeamProgressReportView(APIView):
         submitted = sum(
             1 for m in team_data
             if m['goal_card'] and m['goal_card']['status'] in (
-                'submitted', 'manager_approved', 'hr_approved', 'finalized'
+                'submitted', 'manager_approved', 'hod_approved', 'hod_rejected', 'hr_approved', 'finalized'
             )
         )
         not_started = sum(1 for m in team_data if not m['goal_card'])
@@ -276,7 +276,7 @@ class OrgAnalyticsView(APIView):
         # --- Summary ---
         total_gc = goal_cards.count()
         submitted_gc = goal_cards.filter(
-            status__in=('submitted', 'manager_approved', 'hr_approved', 'finalized')
+            status__in=('submitted', 'manager_approved', 'hod_approved', 'hod_rejected', 'hr_approved', 'finalized')
         ).count()
         finalized_gc = goal_cards.filter(status='finalized').count()
         published_rev = reviews.filter(status='published').count()
