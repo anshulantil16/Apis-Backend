@@ -28,12 +28,39 @@ class EmployeeProfileView(APIView):
 
 
 class ActiveCyclesView(APIView):
-    """GET /api/performance/cycles/active/ — get all open cycles."""
+    """GET /api/performance/cycles/active/ — get all open cycles.
+    Auto-creates the annual cycle for the current Indian FY if none exists.
+    """
 
     def get(self, request):
         cycles = PerformanceCycle.objects.filter(
             status__in=['goal_setting', 'goals_locked', 'review_open']
         )
+
+        if not cycles.exists() and not PerformanceCycle.objects.exists():
+            from datetime import date
+            today = date.today()
+            # Indian fiscal year: April–March
+            if today.month >= 4:
+                fy_start, fy_end = today.year, today.year + 1
+            else:
+                fy_start, fy_end = today.year - 1, today.year
+
+            fiscal_year = f"{fy_start}-{str(fy_end)[2:]}"
+            cycle, _ = PerformanceCycle.objects.get_or_create(
+                quarter=4,
+                fiscal_year=fiscal_year,
+                defaults={
+                    'name': f"Annual Appraisal FY {fiscal_year}",
+                    'goal_setting_deadline': date(fy_end, 3, 31),
+                    'review_start_date': date(fy_end, 3, 1),
+                    'review_deadline': date(fy_end, 3, 31),
+                    'status': 'goal_setting',
+                    'created_by': 'System',
+                }
+            )
+            cycles = PerformanceCycle.objects.filter(id=cycle.id)
+
         return Response(PerformanceCycleSerializer(cycles, many=True).data)
 
 
