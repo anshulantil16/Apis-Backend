@@ -7,6 +7,7 @@ class EmployeeProfile(models.Model):
     USER_TYPE_CHOICES = [
         ('field_force', 'Field Force'),
         ('manager', 'Manager'),
+        ('hod', 'HOD'),
         ('hr', 'HR Admin'),
     ]
 
@@ -19,6 +20,7 @@ class EmployeeProfile(models.Model):
     zone = models.CharField(max_length=100, blank=True)
     subzone = models.CharField(max_length=100, blank=True)
     reporting_manager_id = models.CharField(max_length=50, blank=True)
+    hod_id = models.CharField(max_length=50, blank=True)
     user_type = models.CharField(max_length=20, choices=USER_TYPE_CHOICES, default='field_force')
     is_active = models.BooleanField(default=True)
     joined_date = models.DateField(null=True, blank=True)
@@ -75,6 +77,8 @@ class GoalCard(models.Model):
         ('submitted', 'Submitted'),
         ('manager_approved', 'Manager Approved'),
         ('manager_rejected', 'Manager Rejected'),
+        ('hod_approved', 'HOD Approved'),
+        ('hod_rejected', 'HOD Rejected'),
         ('hr_approved', 'HR Approved'),
         ('finalized', 'Finalized'),
     ]
@@ -102,6 +106,15 @@ class GoalCard(models.Model):
     manager_promoted_justification = models.TextField(blank=True)
     manager_salary_correction = models.TextField(blank=True)
     manager_salary_justification = models.TextField(blank=True)
+
+    # HOD remarks (HOD fills after manager approval)
+    hod_remarks = models.TextField(blank=True)
+    hod_special_achievements = models.TextField(blank=True)
+    hod_promoted = models.CharField(max_length=10, blank=True)              # 'Yes' or 'No'
+    hod_promoted_justification = models.TextField(blank=True)
+    hod_salary_correction = models.TextField(blank=True)
+    hod_salary_justification = models.TextField(blank=True)
+    hod_reviewed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ['employee', 'cycle']

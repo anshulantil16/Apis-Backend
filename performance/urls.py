@@ -9,6 +9,7 @@ from .views.manager_views import (
     ManagerTeamView, ManagerReviewGoalCardView,
     ManagerRateReviewView, ManagerPendingReviewsView,
 )
+from .views.hod_views import HODTeamView, HODReviewGoalCardView
 from .views.hr_views import (
     EmployeeImportView, EmployeeListView,
     CycleListCreateView, CycleUpdateView,
@@ -46,6 +47,10 @@ urlpatterns = [
     path('manager/<str:manager_id>/team-progress/', TeamProgressReportView.as_view()),
     path('goal-cards/<int:gc_id>/manager-review/', ManagerReviewGoalCardView.as_view()),
     path('reviews/<int:review_id>/manager-rate/', ManagerRateReviewView.as_view()),
+
+    # HOD routes
+    path('hod/<str:hod_id>/team/', HODTeamView.as_view()),
+    path('goal-cards/<int:gc_id>/hod-review/', HODReviewGoalCardView.as_view()),
 
     # HR routes
     path('employees/import/', EmployeeImportView.as_view()),
