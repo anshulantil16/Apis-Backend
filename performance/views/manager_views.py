@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 
-from ..models import EmployeeProfile, GoalCard, Goal, QuarterlyReview, ApprovalLog, CompetencyRating
+from ..models import EmployeeProfile, GoalCard, Goal, KPI, QuarterlyReview, ApprovalLog, CompetencyRating
 from ..serializers import GoalCardSerializer, QuarterlyReviewSerializer
 
 
@@ -146,6 +146,30 @@ class ManagerRateReviewView(APIView):
         )
 
         return Response(QuarterlyReviewSerializer(review).data)
+
+
+class ManagerKPIScoresView(APIView):
+    """PATCH /api/performance/goal-cards/<gc_id>/manager-kpi-scores/ — save per-KPI manager scores and comments."""
+
+    def patch(self, request, gc_id):
+        try:
+            gc = GoalCard.objects.get(id=gc_id)
+        except GoalCard.DoesNotExist:
+            return Response({'error': 'Goal card not found'}, status=404)
+
+        kpi_scores = request.data.get('kpi_scores', [])
+        for ks in kpi_scores:
+            try:
+                kpi = KPI.objects.get(id=ks['kpi_id'], kra__goal_card=gc)
+                if 'manager_score' in ks:
+                    kpi.manager_score = ks['manager_score'] if ks['manager_score'] != '' else None
+                if 'manager_comments' in ks:
+                    kpi.manager_comments = ks['manager_comments']
+                kpi.save()
+            except KPI.DoesNotExist:
+                pass
+
+        return Response(GoalCardSerializer(gc).data)
 
 
 class ManagerPendingReviewsView(APIView):

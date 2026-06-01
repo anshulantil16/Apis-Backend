@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.utils import timezone
 
-from ..models import EmployeeProfile, GoalCard, ApprovalLog
+from ..models import EmployeeProfile, GoalCard, KPI, ApprovalLog
 from ..serializers import GoalCardSerializer
 
 
@@ -43,6 +43,28 @@ class HODTeamView(APIView):
             result.append(entry)
 
         return Response(result)
+
+
+class HODKPIScoresView(APIView):
+    """PATCH /api/performance/goal-cards/<gc_id>/hod-kpi-scores/ — save per-KPI HOD scores."""
+
+    def patch(self, request, gc_id):
+        try:
+            gc = GoalCard.objects.get(id=gc_id)
+        except GoalCard.DoesNotExist:
+            return Response({'error': 'Goal card not found'}, status=404)
+
+        kpi_scores = request.data.get('kpi_scores', [])
+        for ks in kpi_scores:
+            try:
+                kpi = KPI.objects.get(id=ks['kpi_id'], kra__goal_card=gc)
+                if 'hod_score' in ks:
+                    kpi.hod_score = ks['hod_score'] if ks['hod_score'] != '' else None
+                kpi.save()
+            except KPI.DoesNotExist:
+                pass
+
+        return Response(GoalCardSerializer(gc).data)
 
 
 class HODReviewGoalCardView(APIView):

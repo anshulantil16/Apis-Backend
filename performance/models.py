@@ -205,6 +205,9 @@ class KPI(models.Model):
     manager_rating = models.IntegerField(null=True, blank=True)
     manager_comments = models.TextField(blank=True)
 
+    # HOD rating (per-KPI score set by HOD during their review)
+    hod_score = models.FloatField(null=True, blank=True)
+
     # HR calibration
     hr_rating = models.IntegerField(null=True, blank=True)
     hr_comments = models.TextField(blank=True)
