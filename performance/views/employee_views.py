@@ -39,22 +39,14 @@ class ActiveCyclesView(APIView):
 
         if not cycles.exists() and not PerformanceCycle.objects.exists():
             from datetime import date
-            today = date.today()
-            # Indian fiscal year: April–March
-            if today.month >= 4:
-                fy_start, fy_end = today.year, today.year + 1
-            else:
-                fy_start, fy_end = today.year - 1, today.year
-
-            fiscal_year = f"{fy_start}-{str(fy_end)[2:]}"
             cycle, _ = PerformanceCycle.objects.get_or_create(
                 quarter=4,
-                fiscal_year=fiscal_year,
+                fiscal_year='2025-26',
                 defaults={
-                    'name': f"Annual Appraisal FY {fiscal_year}",
-                    'goal_setting_deadline': date(fy_end, 3, 31),
-                    'review_start_date': date(fy_end, 3, 1),
-                    'review_deadline': date(fy_end, 3, 31),
+                    'name': 'Annual Appraisal FY 2025-26',
+                    'goal_setting_deadline': date(2026, 3, 31),
+                    'review_start_date': date(2026, 3, 1),
+                    'review_deadline': date(2026, 3, 31),
                     'status': 'goal_setting',
                     'created_by': 'System',
                 }
