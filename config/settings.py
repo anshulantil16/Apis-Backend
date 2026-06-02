@@ -151,7 +151,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL', 'True') == 'True'
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
-    "https://apis-frontend-mu.vercel.app",
+    "http://103.205.66.45",
     *[o.strip() for o in os.getenv('CORS_EXTRA_ORIGINS', '').split(',') if o.strip()],
 ]
 
