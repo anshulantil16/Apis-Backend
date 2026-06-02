@@ -44,9 +44,9 @@ class ActiveCyclesView(APIView):
                 fiscal_year='2025-26',
                 defaults={
                     'name': 'Annual Appraisal FY 2025-26',
-                    'goal_setting_deadline': date(2026, 3, 31),
-                    'review_start_date': date(2026, 3, 1),
-                    'review_deadline': date(2026, 3, 31),
+                    'goal_setting_deadline': date(2027, 12, 31),
+                    'review_start_date': date(2027, 4, 1),
+                    'review_deadline': date(2027, 12, 31),
                     'status': 'goal_setting',
                     'created_by': 'System',
                 }
@@ -93,13 +93,6 @@ class EmployeeGoalCardView(APIView):
             }
             msg = phase_messages.get(cycle.status, f'Goal setting is not allowed in the current phase: {cycle.get_status_display()}')
             return Response({'error': msg, 'cycle_status': cycle.status}, status=status.HTTP_403_FORBIDDEN)
-
-        # Also enforce the goal-setting deadline if it has passed
-        if cycle.goal_setting_deadline and timezone.now().date() > cycle.goal_setting_deadline:
-            return Response({
-                'error': f'The goal setting deadline ({cycle.goal_setting_deadline}) has passed.',
-                'cycle_status': cycle.status,
-            }, status=status.HTTP_403_FORBIDDEN)
 
         # Get or create the goal card
         gc, created = GoalCard.objects.get_or_create(employee=emp, cycle=cycle)
@@ -161,13 +154,6 @@ class SubmitGoalCardView(APIView):
             }
             msg = phase_messages.get(gc.cycle.status, f'Goal submission is not allowed: {gc.cycle.get_status_display()}')
             return Response({'error': msg, 'cycle_status': gc.cycle.status}, status=status.HTTP_403_FORBIDDEN)
-
-        # Enforce goal-setting deadline
-        if gc.cycle.goal_setting_deadline and timezone.now().date() > gc.cycle.goal_setting_deadline:
-            return Response({
-                'error': f'The goal setting deadline ({gc.cycle.goal_setting_deadline}) has passed.',
-                'cycle_status': gc.cycle.status,
-            }, status=status.HTTP_403_FORBIDDEN)
 
         if gc.status not in ['draft', 'manager_rejected']:
             return Response({'error': f'Cannot submit from status: {gc.status}'}, status=400)
