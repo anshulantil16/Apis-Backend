@@ -161,6 +161,13 @@ REST_FRAMEWORK = {
     ),
 }
 
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'django_cache_table',
+    }
+}
+
 # Email (Gmail SMTP) — set EMAIL_HOST_USER and EMAIL_HOST_PASSWORD in .env
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
