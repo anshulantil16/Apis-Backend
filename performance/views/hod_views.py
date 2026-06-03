@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from ..models import EmployeeProfile, GoalCard, KPI, ApprovalLog
 from ..serializers import GoalCardSerializer
+from ..notifications import notify_on_hod_approval
 
 
 class HODTeamView(APIView):
@@ -97,12 +98,16 @@ class HODReviewGoalCardView(APIView):
         gc.hod_reviewed_at = timezone.now()
         gc.save()
 
+        hod_name = request.data.get('hod_name', 'HOD')
         ApprovalLog.objects.create(
             goal_card=gc,
             actor_role='hod',
-            actor_name=request.data.get('hod_name', 'HOD'),
+            actor_name=hod_name,
             action=gc.status,
             comment=gc.hod_remarks,
         )
+
+        if action == 'approved':
+            notify_on_hod_approval(gc, hod_name)
 
         return Response(GoalCardSerializer(gc).data)

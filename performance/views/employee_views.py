@@ -13,6 +13,7 @@ from ..serializers import (
     EmployeeProfileSerializer, PerformanceCycleSerializer,
     GoalCardSerializer, GoalSerializer, QuarterlyReviewSerializer
 )
+from ..notifications import notify_manager_on_employee_submit
 
 
 class EmployeeProfileView(APIView):
@@ -171,6 +172,8 @@ class SubmitGoalCardView(APIView):
             action='submitted',
             comment=request.data.get('comment', 'Submitted for manager review.')
         )
+
+        notify_manager_on_employee_submit(gc)
 
         return Response(GoalCardSerializer(gc).data)
 

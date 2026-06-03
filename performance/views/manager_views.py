@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from ..models import EmployeeProfile, GoalCard, Goal, KPI, QuarterlyReview, ApprovalLog, CompetencyRating
 from ..serializers import GoalCardSerializer, QuarterlyReviewSerializer
+from ..notifications import notify_on_manager_approval
 
 
 class ManagerTeamView(APIView):
@@ -89,13 +90,17 @@ class ManagerReviewGoalCardView(APIView):
             except Goal.DoesNotExist:
                 pass
 
+        manager_name = request.data.get('manager_name', 'Manager')
         ApprovalLog.objects.create(
             goal_card=gc,
             actor_role='manager',
-            actor_name=request.data.get('manager_name', 'Manager'),
+            actor_name=manager_name,
             action=action,
             comment=gc.manager_remarks
         )
+
+        if action == 'approved':
+            notify_on_manager_approval(gc, manager_name)
 
         return Response(GoalCardSerializer(gc).data)
 
