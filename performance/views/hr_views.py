@@ -256,13 +256,29 @@ class OrgOverviewView(APIView):
         if not cycle_id:
             return Response({'error': 'cycle_id required'}, status=400)
 
-        gcs = GoalCard.objects.filter(cycle_id=cycle_id).select_related('employee')
-        total = gcs.count()
+        # Total active employees (exclude HR admins — they don't fill appraisals)
+        total_employees = EmployeeProfile.objects.filter(is_active=True).exclude(user_type='hr').count()
 
-        status_counts = {}
-        for gc in gcs:
-            s = gc.status
-            status_counts[s] = status_counts.get(s, 0) + 1
+        gcs = GoalCard.objects.filter(cycle_id=cycle_id).select_related('employee')
+
+        # Cumulative funnel counts — each stage includes all cards that have
+        # reached OR passed that stage, so numbers only ever increase down the funnel.
+        BEYOND_SUBMITTED     = {'submitted', 'manager_approved', 'hod_approved'}
+        BEYOND_MGR_APPROVED  = {'manager_approved', 'hod_approved'}
+        BEYOND_HOD_APPROVED  = {'hod_approved'}
+
+        submitted_count    = gcs.filter(status__in=BEYOND_SUBMITTED).count()
+        mgr_approved_count = gcs.filter(status__in=BEYOND_MGR_APPROVED).count()
+        hod_approved_count = gcs.filter(status__in=BEYOND_HOD_APPROVED).count()
+        # Pending = employees who haven't submitted yet (no card or draft)
+        pending_count = max(0, total_employees - submitted_count)
+
+        status_counts = {
+            'submitted':        submitted_count,
+            'manager_approved': mgr_approved_count,
+            'hod_approved':     hod_approved_count,
+            'draft':            pending_count,
+        }
 
         reviews = QuarterlyReview.objects.filter(goal_card__cycle_id=cycle_id)
         review_status_counts = {}
@@ -280,7 +296,7 @@ class OrgOverviewView(APIView):
             band_counts[b] = band_counts.get(b, 0) + 1
 
         return Response({
-            'total_employees': total,
+            'total_employees': total_employees,
             'goal_card_status': status_counts,
             'review_status': review_status_counts,
             'avg_score': avg_score,
