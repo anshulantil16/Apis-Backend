@@ -69,6 +69,8 @@ class ManagerReviewGoalCardView(APIView):
         gc.manager_promoted_justification = request.data.get('manager_promoted_justification', gc.manager_promoted_justification)
         gc.manager_salary_correction = request.data.get('manager_salary_correction', gc.manager_salary_correction)
         gc.manager_salary_justification = request.data.get('manager_salary_justification', gc.manager_salary_justification)
+        gc.manager_uplift_ratings = request.data.get('manager_uplift_ratings', gc.manager_uplift_ratings)
+        gc.manager_uplift_comments = request.data.get('manager_uplift_comments', gc.manager_uplift_comments)
         gc.manager_reviewed_at = timezone.now()
         gc.save()
 

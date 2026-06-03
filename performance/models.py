@@ -121,6 +121,13 @@ class GoalCard(models.Model):
     hod_salary_justification = models.TextField(blank=True)
     hod_reviewed_at = models.DateTimeField(null=True, blank=True)
 
+    # UPLIFT values assessment (manager fills)
+    manager_uplift_ratings = models.JSONField(default=dict, blank=True)   # { "U": "Always", ... }
+    manager_uplift_comments = models.JSONField(default=dict, blank=True)  # { "U": "comment", ... }
+
+    # Competency assessment (HOD fills)
+    hod_competency_ratings = models.JSONField(default=dict, blank=True)   # { "1": "Always", ... }
+
     class Meta:
         unique_together = ['employee', 'cycle']
         ordering = ['-created_at']

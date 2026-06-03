@@ -92,6 +92,7 @@ class HODReviewGoalCardView(APIView):
         gc.hod_promoted_justification = request.data.get('hod_promoted_justification', gc.hod_promoted_justification)
         gc.hod_salary_correction = request.data.get('hod_salary_correction', gc.hod_salary_correction)
         gc.hod_salary_justification = request.data.get('hod_salary_justification', gc.hod_salary_justification)
+        gc.hod_competency_ratings = request.data.get('hod_competency_ratings', gc.hod_competency_ratings)
         gc.status = 'hod_approved' if action == 'approved' else 'hod_rejected'
         gc.hod_reviewed_at = timezone.now()
         gc.save()
