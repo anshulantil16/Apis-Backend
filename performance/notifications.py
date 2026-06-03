@@ -1,7 +1,10 @@
 """
 Appraisal email notifications — sent after each stage transition.
-All sends are wrapped in try/except so a mail failure never breaks the main action.
+Emails are dispatched in a daemon thread so the HTTP response is never delayed
+by SMTP latency. Failures are silently ignored.
 """
+import threading
+
 from django.conf import settings
 from django.core.mail import send_mail
 
@@ -12,16 +15,21 @@ def _send(subject: str, body: str, recipient_emails: list[str]):
     emails = [e for e in recipient_emails if e]
     if not emails:
         return
-    try:
-        send_mail(
-            subject=subject,
-            message=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=emails,
-            fail_silently=True,
-        )
-    except Exception:
-        pass
+
+    def _do_send():
+        try:
+            send_mail(
+                subject=subject,
+                message=body,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=emails,
+                fail_silently=True,
+            )
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_do_send, daemon=True)
+    t.start()
 
 
 def notify_manager_on_employee_submit(gc):
