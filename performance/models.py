@@ -98,7 +98,9 @@ class GoalCard(models.Model):
     key_skills = models.JSONField(default=list, blank=True)
     training_programs = models.TextField(blank=True)
     feedback_manager = models.TextField(blank=True)
+    feedback_manager_rating = models.PositiveSmallIntegerField(null=True, blank=True)
     feedback_organization = models.TextField(blank=True)
+    feedback_organization_rating = models.PositiveSmallIntegerField(null=True, blank=True)
 
     # Manager remarks (manager fills before submitting rating)
     manager_special_achievements = models.TextField(blank=True)

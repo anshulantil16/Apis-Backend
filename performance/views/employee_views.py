@@ -129,7 +129,9 @@ class EmployeeGoalCardView(APIView):
         gc.key_skills = request.data.get('key_skills', gc.key_skills)
         gc.training_programs = request.data.get('training_programs', gc.training_programs)
         gc.feedback_manager = request.data.get('feedback_manager', gc.feedback_manager)
+        gc.feedback_manager_rating = request.data.get('feedback_manager_rating', gc.feedback_manager_rating)
         gc.feedback_organization = request.data.get('feedback_organization', gc.feedback_organization)
+        gc.feedback_organization_rating = request.data.get('feedback_organization_rating', gc.feedback_organization_rating)
         gc.save()
 
         return Response(GoalCardSerializer(gc).data, status=201 if created else 200)
