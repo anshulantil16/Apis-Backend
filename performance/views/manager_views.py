@@ -63,6 +63,7 @@ class ManagerReviewGoalCardView(APIView):
 
         gc.status = 'manager_approved' if action == 'approved' else 'manager_rejected'
         gc.manager_remarks = request.data.get('remarks', '')
+        gc.manager_suggested_skills = request.data.get('manager_suggested_skills', gc.manager_suggested_skills)
         gc.manager_special_achievements = request.data.get('manager_special_achievements', gc.manager_special_achievements)
         gc.manager_promoted = request.data.get('manager_promoted', gc.manager_promoted)
         gc.manager_promoted_justification = request.data.get('manager_promoted_justification', gc.manager_promoted_justification)

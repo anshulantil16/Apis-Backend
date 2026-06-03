@@ -102,6 +102,9 @@ class GoalCard(models.Model):
     feedback_organization = models.TextField(blank=True)
     feedback_organization_rating = models.PositiveSmallIntegerField(null=True, blank=True)
 
+    # Manager-suggested additional skills (beyond what employee filled)
+    manager_suggested_skills = models.JSONField(default=list, blank=True)
+
     # Manager remarks (manager fills before submitting rating)
     manager_special_achievements = models.TextField(blank=True)
     manager_promoted = models.CharField(max_length=10, blank=True)          # 'Yes' or 'No'
