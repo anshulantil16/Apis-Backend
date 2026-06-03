@@ -256,8 +256,8 @@ class OrgOverviewView(APIView):
         if not cycle_id:
             return Response({'error': 'cycle_id required'}, status=400)
 
-        # Total active employees (exclude HR admins — they don't fill appraisals)
-        total_employees = EmployeeProfile.objects.filter(is_active=True).exclude(user_type='hr').count()
+        # Total active employees — everyone uploaded via Excel
+        total_employees = EmployeeProfile.objects.filter(is_active=True).count()
 
         gcs = GoalCard.objects.filter(cycle_id=cycle_id).select_related('employee')
 
