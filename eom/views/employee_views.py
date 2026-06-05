@@ -2,8 +2,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from performance.models import EmployeeProfile
-from ..models import EOMCycle, EOMNomination
+from ..models import EOMEmployee, EOMCycle, EOMNomination
 from ..serializers import EOMNominationSerializer, EOMCycleSerializer
 
 EMPLOYEE_FORM_FIELDS = [
@@ -17,11 +16,10 @@ EMPLOYEE_FORM_FIELDS = [
 
 
 class EOMActiveCyclesView(APIView):
-    """GET /api/eom/cycles/active/ — cycles currently open for nominations."""
+    """GET /api/eom/cycles/active/"""
 
     def get(self, request):
-        cycles = EOMCycle.objects.filter(status='open')
-        return Response(EOMCycleSerializer(cycles, many=True).data)
+        return Response(EOMCycleSerializer(EOMCycle.objects.filter(status='open'), many=True).data)
 
 
 class EOMNominationView(APIView):
@@ -29,18 +27,16 @@ class EOMNominationView(APIView):
 
     def get(self, request, employee_id, cycle_id):
         try:
-            nom = EOMNomination.objects.get(
-                employee__employee_id=employee_id, cycle_id=cycle_id
-            )
+            nom = EOMNomination.objects.get(employee__employee_id=employee_id, cycle_id=cycle_id)
             return Response(EOMNominationSerializer(nom).data)
         except EOMNomination.DoesNotExist:
             return Response({'detail': 'No nomination yet.'}, status=404)
 
     def post(self, request, employee_id, cycle_id):
         try:
-            emp   = EmployeeProfile.objects.get(employee_id=employee_id)
+            emp   = EOMEmployee.objects.get(employee_id=employee_id, is_active=True)
             cycle = EOMCycle.objects.get(id=cycle_id)
-        except (EmployeeProfile.DoesNotExist, EOMCycle.DoesNotExist) as e:
+        except (EOMEmployee.DoesNotExist, EOMCycle.DoesNotExist) as e:
             return Response({'error': str(e)}, status=404)
 
         if cycle.status != 'open':

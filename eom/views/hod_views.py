@@ -2,8 +2,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from performance.models import EmployeeProfile
-from ..models import EOMNomination
+from ..models import EOMEmployee, EOMNomination
 from ..serializers import EOMNominationSerializer
 
 
@@ -12,7 +11,7 @@ class EOMHODTeamView(APIView):
 
     def get(self, request, hod_id):
         cycle_id = request.query_params.get('cycle_id')
-        team     = EmployeeProfile.objects.filter(hod_id=hod_id, is_active=True)
+        team     = EOMEmployee.objects.filter(hod_id=hod_id, is_active=True)
 
         result = []
         for emp in team:

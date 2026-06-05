@@ -1,5 +1,11 @@
 from rest_framework import serializers
-from .models import EOMCycle, EOMNomination
+from .models import EOMEmployee, EOMCycle, EOMNomination
+
+
+class EOMEmployeeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = EOMEmployee
+        fields = '__all__'
 
 
 class EOMCycleSerializer(serializers.ModelSerializer):

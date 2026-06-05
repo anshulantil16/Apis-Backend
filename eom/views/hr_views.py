@@ -1,11 +1,116 @@
+import pandas as pd
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser
 
-from performance.models import EmployeeProfile
-from ..models import EOMCycle, EOMNomination
-from ..serializers import EOMCycleSerializer, EOMNominationSerializer
+from ..models import EOMEmployee, EOMCycle, EOMNomination
+from ..serializers import EOMEmployeeSerializer, EOMCycleSerializer, EOMNominationSerializer
 
+
+# ── Employee management ──────────────────────────────────────────────────────
+
+class EOMEmployeeImportView(APIView):
+    """POST /api/eom/employees/import/"""
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request):
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'error': 'No file uploaded.'}, status=400)
+
+        try:
+            if file.name.lower().endswith('.csv'):
+                try:
+                    df = pd.read_csv(file)
+                except UnicodeDecodeError:
+                    file.seek(0)
+                    df = pd.read_csv(file, encoding='latin1')
+            else:
+                df = pd.read_excel(file)
+
+            df.columns = df.columns.astype(str).str.strip().str.lower().str.replace(' ', '_')
+            df = df.fillna('')
+        except Exception as e:
+            return Response({'error': f'Could not read file: {str(e)}'}, status=400)
+
+        COLUMN_MAP = {
+            'employee_id':          ['employee_id', 'emp_id', 'emp_code'],
+            'name':                 ['name', 'employee_name'],
+            'email':                ['email', 'email_id'],
+            'designation':          ['designation', 'role'],
+            'department':           ['department', 'dept'],
+            'zone':                 ['zone', 'location', 'unit'],
+            'reporting_manager_id': ['reporting_manager_id', 'manager_id', 'reporting_to'],
+            'hod_id':               ['hod_id', 'hod'],
+            'user_type':            ['user_type', 'type', 'role_type'],
+        }
+
+        def get_col(df, aliases):
+            for a in aliases:
+                if a in df.columns:
+                    return a
+            return None
+
+        created, updated, errors = 0, 0, []
+
+        for i, row in df.iterrows():
+            def val(field):
+                col = get_col(df, COLUMN_MAP[field])
+                return str(row[col]).strip() if col and str(row[col]).strip() else ''
+
+            emp_id = val('employee_id')
+            if not emp_id:
+                errors.append(f'Row {i+2}: Missing employee_id'); continue
+
+            name = val('name')
+            if not name:
+                errors.append(f'Row {i+2}: Missing name for {emp_id}'); continue
+
+            raw_type = val('user_type').lower()
+            if 'hr' in raw_type:
+                user_type = 'hr'
+            elif 'hod' in raw_type or 'head' in raw_type:
+                user_type = 'hod'
+            elif 'manager' in raw_type or 'mgr' in raw_type:
+                user_type = 'manager'
+            else:
+                user_type = 'employee'
+
+            _, was_created = EOMEmployee.objects.update_or_create(
+                employee_id=emp_id,
+                defaults={
+                    'name':                 name,
+                    'email':                val('email'),
+                    'designation':          val('designation'),
+                    'department':           val('department'),
+                    'zone':                 val('zone'),
+                    'reporting_manager_id': val('reporting_manager_id'),
+                    'hod_id':               val('hod_id'),
+                    'user_type':            user_type,
+                    'is_active':            True,
+                },
+            )
+            if was_created: created += 1
+            else: updated += 1
+
+        return Response({
+            'message': f'Import complete. {created} created, {updated} updated.',
+            'created': created,
+            'updated': updated,
+            'errors':  errors,
+        })
+
+
+class EOMEmployeeListView(APIView):
+    """GET /api/eom/employees/"""
+
+    def get(self, request):
+        qs = EOMEmployee.objects.filter(is_active=True)
+        return Response(EOMEmployeeSerializer(qs, many=True).data)
+
+
+# ── Cycle management ─────────────────────────────────────────────────────────
 
 class EOMCycleListCreateView(APIView):
     """GET/POST /api/eom/cycles/"""
@@ -36,6 +141,8 @@ class EOMCycleUpdateView(APIView):
         return Response(s.errors, status=400)
 
 
+# ── Nominations ──────────────────────────────────────────────────────────────
+
 class EOMAllNominationsView(APIView):
     """GET /api/eom/all-nominations/?cycle_id=<id>"""
 
@@ -55,7 +162,7 @@ class EOMOverviewView(APIView):
         if not cycle_id:
             return Response({'error': 'cycle_id required.'}, status=400)
 
-        total_employees = EmployeeProfile.objects.filter(is_active=True).count()
+        total_employees = EOMEmployee.objects.filter(is_active=True).count()
         noms = EOMNomination.objects.filter(cycle_id=cycle_id)
 
         submitted    = noms.filter(status__in=['submitted', 'manager_approved', 'hod_approved', 'hr_finalized']).count()

@@ -2,6 +2,48 @@ from django.db import models
 from django.utils import timezone
 
 
+class EOMEmployee(models.Model):
+    USER_TYPE_CHOICES = [
+        ('employee', 'Employee'),
+        ('manager',  'Manager'),
+        ('hod',      'HOD'),
+        ('hr',       'HR Admin'),
+    ]
+
+    employee_id          = models.CharField(max_length=50, unique=True)
+    name                 = models.CharField(max_length=200)
+    email                = models.EmailField(blank=True)
+    designation          = models.CharField(max_length=100, blank=True)
+    department           = models.CharField(max_length=100, blank=True)
+    zone                 = models.CharField(max_length=100, blank=True)   # Location / Unit
+    reporting_manager_id = models.CharField(max_length=50, blank=True)
+    hod_id               = models.CharField(max_length=50, blank=True)
+    user_type            = models.CharField(max_length=20, choices=USER_TYPE_CHOICES, default='employee')
+    is_active            = models.BooleanField(default=True)
+    created_at           = models.DateTimeField(auto_now_add=True)
+    updated_at           = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.employee_id} — {self.name}"
+
+
+class EOMOTPToken(models.Model):
+    employee   = models.ForeignKey(EOMEmployee, on_delete=models.CASCADE, related_name='otp_tokens')
+    otp_code   = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    is_used    = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def is_valid(self):
+        return not self.is_used and self.expires_at > timezone.now()
+
+
 class EOMCycle(models.Model):
     STATUS_CHOICES = [
         ('open',   'Open — Nominations Accepted'),
@@ -13,7 +55,7 @@ class EOMCycle(models.Model):
         (9,'September'),(10,'October'),(11,'November'),(12,'December'),
     ]
 
-    name       = models.CharField(max_length=120)           # "Employee of the Month — June 2026"
+    name       = models.CharField(max_length=120)
     month      = models.IntegerField(choices=MONTH_CHOICES)
     year       = models.IntegerField()
     status     = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
@@ -39,16 +81,12 @@ class EOMNomination(models.Model):
         ('hr_finalized',     'HR Finalized'),
     ]
 
-    employee = models.ForeignKey(
-        'performance.EmployeeProfile',
-        on_delete=models.CASCADE,
-        related_name='eom_nominations',
-    )
-    cycle  = models.ForeignKey(EOMCycle, on_delete=models.CASCADE, related_name='nominations')
-    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='draft')
+    employee = models.ForeignKey(EOMEmployee, on_delete=models.CASCADE, related_name='nominations')
+    cycle    = models.ForeignKey(EOMCycle, on_delete=models.CASCADE, related_name='nominations')
+    status   = models.CharField(max_length=30, choices=STATUS_CHOICES, default='draft')
 
-    # ── Employee fills ───────────────────────────────────────────────────────
-    track                  = models.CharField(max_length=20, blank=True)   # sales / non_sales / plant
+    # ── Employee form fields ─────────────────────────────────────────────────
+    track                  = models.CharField(max_length=20, blank=True)
     part_a_achievement     = models.TextField(blank=True)
     smart_specific         = models.TextField(blank=True)
     smart_measurable       = models.TextField(blank=True)
@@ -71,9 +109,9 @@ class EOMNomination(models.Model):
     hod_reviewed_at = models.DateTimeField(null=True, blank=True)
 
     # ── HR finalisation ──────────────────────────────────────────────────────
-    hr_remarks       = models.TextField(blank=True)
-    hr_finalized_at  = models.DateTimeField(null=True, blank=True)
-    is_winner        = models.BooleanField(default=False)
+    hr_remarks      = models.TextField(blank=True)
+    hr_finalized_at = models.DateTimeField(null=True, blank=True)
+    is_winner       = models.BooleanField(default=False)
 
     submitted_at = models.DateTimeField(null=True, blank=True)
     created_at   = models.DateTimeField(auto_now_add=True)
