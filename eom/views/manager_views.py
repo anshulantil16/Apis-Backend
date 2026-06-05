@@ -5,6 +5,16 @@ from rest_framework.response import Response
 from ..models import EOMEmployee, EOMNomination
 from ..serializers import EOMNominationSerializer
 
+MANAGER_SCORE_FIELDS = [
+    'manager_dim1_score', 'manager_dim1_comments',
+    'manager_dim2_score', 'manager_dim2_comments',
+    'manager_dim3_score', 'manager_dim3_comments',
+    'manager_dim4_score', 'manager_dim4_comments',
+    'manager_sustainability_desc', 'manager_sustainability_bonus',
+    'manager_sustainability_just', 'manager_recommendation',
+    'manager_panel_name', 'manager_remarks',
+]
+
 
 class EOMManagerTeamView(APIView):
     """GET /api/eom/manager/<manager_id>/team/?cycle_id=<id>"""
@@ -42,12 +52,20 @@ class EOMManagerReviewView(APIView):
         except EOMNomination.DoesNotExist:
             return Response({'error': 'Nomination not found.'}, status=404)
 
-        action = request.data.get('action')
-        if action not in ('approved', 'rejected'):
-            return Response({'error': 'action must be approved or rejected.'}, status=400)
+        if nom.status not in ('submitted', 'manager_rejected'):
+            return Response({'error': f'Cannot review from status: {nom.status}'}, status=400)
 
-        nom.status              = 'manager_approved' if action == 'approved' else 'manager_rejected'
-        nom.manager_remarks     = request.data.get('manager_remarks', nom.manager_remarks)
+        # Save all scorecard fields
+        for field in MANAGER_SCORE_FIELDS:
+            if field in request.data:
+                setattr(nom, field, request.data[field])
+
+        action = request.data.get('action')
+        if action == 'approved':
+            nom.status = 'manager_approved'
+        elif action == 'rejected':
+            nom.status = 'manager_rejected'
+
         nom.manager_reviewed_at = timezone.now()
         nom.save()
         return Response(EOMNominationSerializer(nom).data)

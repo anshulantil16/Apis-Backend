@@ -100,9 +100,22 @@ class EOMNomination(models.Model):
     declaration_agreed     = models.BooleanField(default=False)
     signature_name         = models.CharField(max_length=200, blank=True)
 
-    # ── Manager review ───────────────────────────────────────────────────────
-    manager_remarks     = models.TextField(blank=True)
-    manager_reviewed_at = models.DateTimeField(null=True, blank=True)
+    # ── Manager scorecard (Annexure B) ──────────────────────────────────────
+    manager_dim1_score              = models.PositiveSmallIntegerField(null=True, blank=True)  # max 50
+    manager_dim1_comments           = models.TextField(blank=True)
+    manager_dim2_score              = models.PositiveSmallIntegerField(null=True, blank=True)  # max 20
+    manager_dim2_comments           = models.TextField(blank=True)
+    manager_dim3_score              = models.PositiveSmallIntegerField(null=True, blank=True)  # max 10
+    manager_dim3_comments           = models.TextField(blank=True)
+    manager_dim4_score              = models.PositiveSmallIntegerField(null=True, blank=True)  # max 10
+    manager_dim4_comments           = models.TextField(blank=True)
+    manager_sustainability_desc     = models.TextField(blank=True)
+    manager_sustainability_bonus    = models.PositiveSmallIntegerField(null=True, blank=True)  # 0 or 5
+    manager_sustainability_just     = models.TextField(blank=True)
+    manager_recommendation          = models.CharField(max_length=20, blank=True)   # recommend / not_recommend
+    manager_panel_name              = models.CharField(max_length=200, blank=True)
+    manager_remarks                 = models.TextField(blank=True)
+    manager_reviewed_at             = models.DateTimeField(null=True, blank=True)
 
     # ── HOD review ───────────────────────────────────────────────────────────
     hod_remarks     = models.TextField(blank=True)
