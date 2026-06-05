@@ -6,6 +6,15 @@ from performance.models import EmployeeProfile
 from ..models import EOMCycle, EOMNomination
 from ..serializers import EOMNominationSerializer, EOMCycleSerializer
 
+EMPLOYEE_FORM_FIELDS = [
+    'track', 'part_a_achievement',
+    'smart_specific', 'smart_measurable', 'smart_achievable',
+    'smart_relevant', 'smart_timebound',
+    'evidence_1_description', 'evidence_1_source',
+    'evidence_2_description', 'evidence_2_source',
+    'declaration_agreed', 'signature_name',
+]
+
 
 class EOMActiveCyclesView(APIView):
     """GET /api/eom/cycles/active/ — cycles currently open for nominations."""
@@ -39,8 +48,12 @@ class EOMNominationView(APIView):
 
         nom, _ = EOMNomination.objects.get_or_create(employee=emp, cycle=cycle)
 
-        # Update form fields from request data (employee fills these)
-        # Fields will be wired once the form design is confirmed.
+        if nom.status not in ('draft', 'manager_rejected'):
+            return Response({'error': f'Cannot edit a nomination with status: {nom.status}'}, status=400)
+
+        for field in EMPLOYEE_FORM_FIELDS:
+            if field in request.data:
+                setattr(nom, field, request.data[field])
         nom.save()
         return Response(EOMNominationSerializer(nom).data)
 

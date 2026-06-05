@@ -47,8 +47,20 @@ class EOMNomination(models.Model):
     cycle  = models.ForeignKey(EOMCycle, on_delete=models.CASCADE, related_name='nominations')
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='draft')
 
-    # ── Employee fills (form fields added here once design is confirmed) ─────
-    # Placeholder — user will specify fields; add migration when ready.
+    # ── Employee fills ───────────────────────────────────────────────────────
+    track                  = models.CharField(max_length=20, blank=True)   # sales / non_sales / plant
+    part_a_achievement     = models.TextField(blank=True)
+    smart_specific         = models.TextField(blank=True)
+    smart_measurable       = models.TextField(blank=True)
+    smart_achievable       = models.TextField(blank=True)
+    smart_relevant         = models.TextField(blank=True)
+    smart_timebound        = models.TextField(blank=True)
+    evidence_1_description = models.TextField(blank=True)
+    evidence_1_source      = models.CharField(max_length=300, blank=True)
+    evidence_2_description = models.TextField(blank=True)
+    evidence_2_source      = models.CharField(max_length=300, blank=True)
+    declaration_agreed     = models.BooleanField(default=False)
+    signature_name         = models.CharField(max_length=200, blank=True)
 
     # ── Manager review ───────────────────────────────────────────────────────
     manager_remarks     = models.TextField(blank=True)
