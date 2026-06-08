@@ -5,6 +5,16 @@ from rest_framework.response import Response
 from ..models import EOMEmployee, EOMNomination
 from ..serializers import EOMNominationSerializer
 
+HOD_SCORE_FIELDS = [
+    'hod_dim1_score', 'hod_dim1_comments',
+    'hod_dim2_score', 'hod_dim2_comments',
+    'hod_dim3_score', 'hod_dim3_comments',
+    'hod_dim4_score', 'hod_dim4_comments',
+    'hod_sustainability_desc', 'hod_sustainability_bonus',
+    'hod_sustainability_just', 'hod_recommendation',
+    'hod_panel_name', 'hod_remarks',
+]
+
 
 class EOMHODTeamView(APIView):
     """GET /api/eom/hod/<hod_id>/team/?cycle_id=<id>"""
@@ -42,12 +52,19 @@ class EOMHODReviewView(APIView):
         except EOMNomination.DoesNotExist:
             return Response({'error': 'Nomination not found.'}, status=404)
 
-        action = request.data.get('action')
-        if action not in ('approved', 'rejected'):
-            return Response({'error': 'action must be approved or rejected.'}, status=400)
+        if nom.status not in ('submitted', 'hod_rejected'):
+            return Response({'error': f'Cannot review from status: {nom.status}'}, status=400)
 
-        nom.status          = 'hod_approved' if action == 'approved' else 'hod_rejected'
-        nom.hod_remarks     = request.data.get('hod_remarks', nom.hod_remarks)
+        for field in HOD_SCORE_FIELDS:
+            if field in request.data:
+                setattr(nom, field, request.data[field])
+
+        action = request.data.get('action')
+        if action == 'approved':
+            nom.status = 'hod_approved'
+        elif action == 'rejected':
+            nom.status = 'hod_rejected'
+
         nom.hod_reviewed_at = timezone.now()
         nom.save()
         return Response(EOMNominationSerializer(nom).data)

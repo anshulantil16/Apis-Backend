@@ -5,7 +5,6 @@ from django.utils import timezone
 class EOMEmployee(models.Model):
     USER_TYPE_CHOICES = [
         ('employee', 'Employee'),
-        ('manager',  'Manager'),
         ('hod',      'HOD'),
         ('hr',       'HR Admin'),
     ]
@@ -15,7 +14,7 @@ class EOMEmployee(models.Model):
     email                = models.EmailField(blank=True)
     designation          = models.CharField(max_length=100, blank=True)
     department           = models.CharField(max_length=100, blank=True)
-    zone                 = models.CharField(max_length=100, blank=True)   # Location / Unit
+    zone                 = models.CharField(max_length=100, blank=True)
     reporting_manager_id = models.CharField(max_length=50, blank=True)
     hod_id               = models.CharField(max_length=50, blank=True)
     user_type            = models.CharField(max_length=20, choices=USER_TYPE_CHOICES, default='employee')
@@ -72,13 +71,11 @@ class EOMCycle(models.Model):
 
 class EOMNomination(models.Model):
     STATUS_CHOICES = [
-        ('draft',            'Draft'),
-        ('submitted',        'Submitted'),
-        ('manager_approved', 'Manager Approved'),
-        ('manager_rejected', 'Manager Rejected'),
-        ('hod_approved',     'HOD Approved'),
-        ('hod_rejected',     'HOD Rejected'),
-        ('hr_finalized',     'HR Finalized'),
+        ('draft',        'Draft'),
+        ('submitted',    'Submitted'),
+        ('hod_approved', 'HOD Approved'),
+        ('hod_rejected', 'HOD Rejected'),
+        ('hr_finalized', 'HR Finalized'),
     ]
 
     employee = models.ForeignKey(EOMEmployee, on_delete=models.CASCADE, related_name='nominations')
@@ -100,26 +97,22 @@ class EOMNomination(models.Model):
     declaration_agreed     = models.BooleanField(default=False)
     signature_name         = models.CharField(max_length=200, blank=True)
 
-    # ── Manager scorecard (Annexure B) ──────────────────────────────────────
-    manager_dim1_score              = models.PositiveSmallIntegerField(null=True, blank=True)  # max 50
-    manager_dim1_comments           = models.TextField(blank=True)
-    manager_dim2_score              = models.PositiveSmallIntegerField(null=True, blank=True)  # max 20
-    manager_dim2_comments           = models.TextField(blank=True)
-    manager_dim3_score              = models.PositiveSmallIntegerField(null=True, blank=True)  # max 10
-    manager_dim3_comments           = models.TextField(blank=True)
-    manager_dim4_score              = models.PositiveSmallIntegerField(null=True, blank=True)  # max 10
-    manager_dim4_comments           = models.TextField(blank=True)
-    manager_sustainability_desc     = models.TextField(blank=True)
-    manager_sustainability_bonus    = models.PositiveSmallIntegerField(null=True, blank=True)  # 0 or 5
-    manager_sustainability_just     = models.TextField(blank=True)
-    manager_recommendation          = models.CharField(max_length=20, blank=True)   # recommend / not_recommend
-    manager_panel_name              = models.CharField(max_length=200, blank=True)
-    manager_remarks                 = models.TextField(blank=True)
-    manager_reviewed_at             = models.DateTimeField(null=True, blank=True)
-
-    # ── HOD review ───────────────────────────────────────────────────────────
-    hod_remarks     = models.TextField(blank=True)
-    hod_reviewed_at = models.DateTimeField(null=True, blank=True)
+    # ── HOD scorecard (Annexure B) ───────────────────────────────────────────
+    hod_dim1_score           = models.PositiveSmallIntegerField(null=True, blank=True)  # max 50
+    hod_dim1_comments        = models.TextField(blank=True)
+    hod_dim2_score           = models.PositiveSmallIntegerField(null=True, blank=True)  # max 20
+    hod_dim2_comments        = models.TextField(blank=True)
+    hod_dim3_score           = models.PositiveSmallIntegerField(null=True, blank=True)  # max 10
+    hod_dim3_comments        = models.TextField(blank=True)
+    hod_dim4_score           = models.PositiveSmallIntegerField(null=True, blank=True)  # max 10
+    hod_dim4_comments        = models.TextField(blank=True)
+    hod_sustainability_desc  = models.TextField(blank=True)
+    hod_sustainability_bonus = models.PositiveSmallIntegerField(null=True, blank=True)  # 0 or 5
+    hod_sustainability_just  = models.TextField(blank=True)
+    hod_recommendation       = models.CharField(max_length=20, blank=True)
+    hod_panel_name           = models.CharField(max_length=200, blank=True)
+    hod_remarks              = models.TextField(blank=True)
+    hod_reviewed_at          = models.DateTimeField(null=True, blank=True)
 
     # ── HR finalisation ──────────────────────────────────────────────────────
     hr_remarks      = models.TextField(blank=True)
