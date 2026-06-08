@@ -35,15 +35,14 @@ class EOMEmployeeImportView(APIView):
             return Response({'error': f'Could not read file: {str(e)}'}, status=400)
 
         COLUMN_MAP = {
-            'employee_id':          ['employee_id', 'emp_id', 'emp_code'],
-            'name':                 ['name', 'employee_name'],
-            'email':                ['email', 'email_id'],
-            'designation':          ['designation', 'role'],
-            'department':           ['department', 'dept'],
-            'zone':                 ['zone', 'location', 'unit'],
-            'reporting_manager_id': ['reporting_manager_id', 'manager_id', 'reporting_to'],
-            'hod_id':               ['hod_id', 'hod'],
-            'user_type':            ['user_type', 'type', 'role_type'],
+            'employee_id': ['employee_id', 'emp_id', 'emp_code'],
+            'name':        ['name', 'employee_name'],
+            'email':       ['email', 'email_id'],
+            'designation': ['designation', 'role'],
+            'department':  ['department', 'dept'],
+            'zone':        ['zone', 'location', 'unit', 'zone_/_location'],
+            'hod_id':      ['hod_id', 'hod'],
+            'user_type':   ['user_type', 'type', 'role_type'],
         }
 
         def get_col(df, aliases):
@@ -68,27 +67,24 @@ class EOMEmployeeImportView(APIView):
                 errors.append(f'Row {i+2}: Missing name for {emp_id}'); continue
 
             raw_type = val('user_type').lower()
-            if 'hr' in raw_type:
+            if 'hr' in raw_type or 'admin' in raw_type:
                 user_type = 'hr'
             elif 'hod' in raw_type or 'head' in raw_type:
                 user_type = 'hod'
-            elif 'manager' in raw_type or 'mgr' in raw_type:
-                user_type = 'manager'
             else:
                 user_type = 'employee'
 
             _, was_created = EOMEmployee.objects.update_or_create(
                 employee_id=emp_id,
                 defaults={
-                    'name':                 name,
-                    'email':                val('email'),
-                    'designation':          val('designation'),
-                    'department':           val('department'),
-                    'zone':                 val('zone'),
-                    'reporting_manager_id': val('reporting_manager_id'),
-                    'hod_id':               val('hod_id'),
-                    'user_type':            user_type,
-                    'is_active':            True,
+                    'name':        name,
+                    'email':       val('email'),
+                    'designation': val('designation'),
+                    'department':  val('department'),
+                    'zone':        val('zone'),
+                    'hod_id':      val('hod_id'),
+                    'user_type':   user_type,
+                    'is_active':   True,
                 },
             )
             if was_created: created += 1

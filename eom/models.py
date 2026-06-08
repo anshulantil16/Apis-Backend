@@ -9,14 +9,13 @@ class EOMEmployee(models.Model):
         ('hr',       'HR Admin'),
     ]
 
-    employee_id          = models.CharField(max_length=50, unique=True)
-    name                 = models.CharField(max_length=200)
-    email                = models.EmailField(blank=True)
-    designation          = models.CharField(max_length=100, blank=True)
-    department           = models.CharField(max_length=100, blank=True)
-    zone                 = models.CharField(max_length=100, blank=True)
-    reporting_manager_id = models.CharField(max_length=50, blank=True)
-    hod_id               = models.CharField(max_length=50, blank=True)
+    employee_id = models.CharField(max_length=50, unique=True)
+    name        = models.CharField(max_length=200)
+    email       = models.EmailField(blank=True)
+    designation = models.CharField(max_length=100, blank=True)
+    department  = models.CharField(max_length=100, blank=True)
+    zone        = models.CharField(max_length=100, blank=True)
+    hod_id      = models.CharField(max_length=50, blank=True)
     user_type            = models.CharField(max_length=20, choices=USER_TYPE_CHOICES, default='employee')
     is_active            = models.BooleanField(default=True)
     created_at           = models.DateTimeField(auto_now_add=True)
