@@ -29,7 +29,7 @@ class EOMNominationView(APIView):
     def get(self, request, employee_id, cycle_id):
         try:
             nom = EOMNomination.objects.get(employee__employee_id=employee_id, cycle_id=cycle_id)
-            return Response(EOMNominationSerializer(nom).data)
+            return Response(EOMNominationSerializer(nom, context={'request': request}).data)
         except EOMNomination.DoesNotExist:
             return Response({'detail': 'No nomination yet.'}, status=404)
 
@@ -52,7 +52,7 @@ class EOMNominationView(APIView):
             if field in request.data:
                 setattr(nom, field, request.data[field])
         nom.save()
-        return Response(EOMNominationSerializer(nom).data)
+        return Response(EOMNominationSerializer(nom, context={'request': request}).data)
 
 
 class EOMDocumentUploadView(APIView):
@@ -110,4 +110,4 @@ class EOMSubmitNominationView(APIView):
         nom.status       = 'submitted'
         nom.submitted_at = timezone.now()
         nom.save()
-        return Response(EOMNominationSerializer(nom).data)
+        return Response(EOMNominationSerializer(nom, context={'request': request}).data)

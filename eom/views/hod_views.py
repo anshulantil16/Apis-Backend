@@ -31,7 +31,7 @@ class EOMHODTeamView(APIView):
             if cycle_id:
                 try:
                     nom = EOMNomination.objects.get(employee=emp, cycle_id=cycle_id)
-                    entry['nomination'] = EOMNominationSerializer(nom).data
+                    entry['nomination'] = EOMNominationSerializer(nom, context={'request': request}).data
                 except EOMNomination.DoesNotExist:
                     pass
             result.append(entry)
@@ -62,4 +62,4 @@ class EOMHODReviewView(APIView):
 
         nom.hod_reviewed_at = timezone.now()
         nom.save()
-        return Response(EOMNominationSerializer(nom).data)
+        return Response(EOMNominationSerializer(nom, context={'request': request}).data)

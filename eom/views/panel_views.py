@@ -32,7 +32,7 @@ class EOMPanelNominationsView(APIView):
             status__in=['hod_approved', 'panel_approved', 'panel_rejected', 'hr_finalized'],
         ).select_related('employee', 'cycle')
 
-        return Response(EOMNominationSerializer(noms, many=True).data)
+        return Response(EOMNominationSerializer(noms, many=True, context={'request': request}).data)
 
 
 class EOMPanelReviewView(APIView):
@@ -59,4 +59,4 @@ class EOMPanelReviewView(APIView):
 
         nom.panel_reviewed_at = timezone.now()
         nom.save()
-        return Response(EOMNominationSerializer(nom).data)
+        return Response(EOMNominationSerializer(nom, context={'request': request}).data)

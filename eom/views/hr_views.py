@@ -149,7 +149,7 @@ class EOMAllNominationsView(APIView):
         qs = EOMNomination.objects.select_related('employee', 'cycle')
         if cycle_id:
             qs = qs.filter(cycle_id=cycle_id)
-        return Response(EOMNominationSerializer(qs, many=True).data)
+        return Response(EOMNominationSerializer(qs, many=True, context={'request': request}).data)
 
 
 class EOMOverviewView(APIView):
@@ -195,7 +195,7 @@ class EOMHRFinalizeView(APIView):
         nom.is_winner       = request.data.get('is_winner', nom.is_winner)
         nom.hr_finalized_at = timezone.now()
         nom.save()
-        return Response(EOMNominationSerializer(nom).data)
+        return Response(EOMNominationSerializer(nom, context={'request': request}).data)
 
 
 class EOMDatabaseResetView(APIView):
