@@ -44,7 +44,7 @@ class EOMNominationView(APIView):
 
         nom, _ = EOMNomination.objects.get_or_create(employee=emp, cycle=cycle)
 
-        if nom.status not in ('draft', 'manager_rejected'):
+        if nom.status not in ('draft', 'hod_rejected'):
             return Response({'error': f'Cannot edit a nomination with status: {nom.status}'}, status=400)
 
         for field in EMPLOYEE_FORM_FIELDS:
@@ -63,7 +63,7 @@ class EOMSubmitNominationView(APIView):
         except EOMNomination.DoesNotExist:
             return Response({'error': 'Nomination not found.'}, status=404)
 
-        if nom.status not in ('draft', 'manager_rejected'):
+        if nom.status not in ('draft', 'hod_rejected'):
             return Response({'error': f'Cannot submit from status: {nom.status}'}, status=400)
 
         nom.status       = 'submitted'

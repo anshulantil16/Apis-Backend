@@ -161,8 +161,7 @@ class EOMOverviewView(APIView):
         total_employees = EOMEmployee.objects.filter(is_active=True).count()
         noms = EOMNomination.objects.filter(cycle_id=cycle_id)
 
-        submitted    = noms.filter(status__in=['submitted', 'manager_approved', 'hod_approved', 'hr_finalized']).count()
-        mgr_approved = noms.filter(status__in=['manager_approved', 'hod_approved', 'hr_finalized']).count()
+        submitted    = noms.filter(status__in=['submitted', 'hod_approved', 'hod_rejected', 'hr_finalized']).count()
         hod_approved = noms.filter(status__in=['hod_approved', 'hr_finalized']).count()
         finalized    = noms.filter(status='hr_finalized').count()
         winners      = noms.filter(is_winner=True).count()
@@ -171,7 +170,6 @@ class EOMOverviewView(APIView):
         return Response({
             'total_employees': total_employees,
             'submitted':       submitted,
-            'mgr_approved':    mgr_approved,
             'hod_approved':    hod_approved,
             'hr_finalized':    finalized,
             'winners':         winners,
