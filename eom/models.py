@@ -116,6 +116,8 @@ class EOMNomination(models.Model):
     panel_dim4_comments        = models.TextField(blank=True)
     panel_dim5_score           = models.PositiveSmallIntegerField(null=True, blank=True)  # max 10
     panel_dim5_comments        = models.TextField(blank=True)
+    panel_dim6_score           = models.PositiveSmallIntegerField(null=True, blank=True)  # max 10
+    panel_dim6_comments        = models.TextField(blank=True)
     panel_sustainability_desc  = models.TextField(blank=True)
     panel_sustainability_bonus = models.PositiveSmallIntegerField(null=True, blank=True)  # 0 or 5
     panel_sustainability_just  = models.TextField(blank=True)

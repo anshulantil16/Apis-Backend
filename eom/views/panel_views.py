@@ -10,6 +10,7 @@ PANEL_SCORE_FIELDS = [
     'panel_dim3_score', 'panel_dim3_comments',
     'panel_dim4_score', 'panel_dim4_comments',
     'panel_dim5_score', 'panel_dim5_comments',
+    'panel_dim6_score', 'panel_dim6_comments',
     'panel_sustainability_desc', 'panel_sustainability_bonus',
     'panel_sustainability_just', 'panel_recommendation',
     'panel_panel_name', 'panel_remarks',
