@@ -20,8 +20,9 @@ class EmployeeProfileView(APIView):
     """GET /api/performance/employee/<employee_id>/ — fetch own profile."""
 
     def get(self, request, employee_id):
+        source = getattr(request, 'app_source', 'performance')
         try:
-            emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True)
+            emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True, app_source=source)
             serializer = EmployeeProfileSerializer(emp)
             return Response(serializer.data)
         except EmployeeProfile.DoesNotExist:
@@ -34,15 +35,18 @@ class ActiveCyclesView(APIView):
     """
 
     def get(self, request):
+        source = getattr(request, 'app_source', 'performance')
         cycles = PerformanceCycle.objects.filter(
-            status__in=['goal_setting', 'goals_locked', 'review_open']
+            status__in=['goal_setting', 'goals_locked', 'review_open'],
+            app_source=source,
         )
 
-        if not cycles.exists() and not PerformanceCycle.objects.exists():
+        if not cycles.exists() and not PerformanceCycle.objects.filter(app_source=source).exists():
             from datetime import date
             cycle, _ = PerformanceCycle.objects.get_or_create(
                 quarter=4,
                 fiscal_year='2025-26',
+                app_source=source,
                 defaults={
                     'name': 'Annual Appraisal FY 2025-26',
                     'goal_setting_deadline': date(2027, 12, 31),
@@ -65,8 +69,9 @@ class EmployeeGoalCardView(APIView):
     """
 
     def get(self, request, employee_id, cycle_id):
+        source = getattr(request, 'app_source', 'performance')
         try:
-            emp = EmployeeProfile.objects.get(employee_id=employee_id)
+            emp = EmployeeProfile.objects.get(employee_id=employee_id, app_source=source)
             gc = GoalCard.objects.get(employee=emp, cycle_id=cycle_id)
             return Response(GoalCardSerializer(gc).data)
         except EmployeeProfile.DoesNotExist:
@@ -76,9 +81,10 @@ class EmployeeGoalCardView(APIView):
 
     def post(self, request, employee_id, cycle_id):
         """Create a new GoalCard with goals."""
+        source = getattr(request, 'app_source', 'performance')
         try:
-            emp = EmployeeProfile.objects.get(employee_id=employee_id)
-            cycle = PerformanceCycle.objects.get(id=cycle_id)
+            emp = EmployeeProfile.objects.get(employee_id=employee_id, app_source=source)
+            cycle = PerformanceCycle.objects.get(id=cycle_id, app_source=source)
         except EmployeeProfile.DoesNotExist:
             return Response({'error': 'Employee not found'}, status=404)
         except PerformanceCycle.DoesNotExist:
@@ -182,8 +188,9 @@ class EmployeeAllGoalCardsView(APIView):
     """GET /api/performance/employee/<employee_id>/goal-cards/ — all cycles for employee."""
 
     def get(self, request, employee_id):
+        source = getattr(request, 'app_source', 'performance')
         try:
-            emp = EmployeeProfile.objects.get(employee_id=employee_id)
+            emp = EmployeeProfile.objects.get(employee_id=employee_id, app_source=source)
             gcs = GoalCard.objects.filter(employee=emp).select_related('cycle')
             return Response(GoalCardSerializer(gcs, many=True).data)
         except EmployeeProfile.DoesNotExist:

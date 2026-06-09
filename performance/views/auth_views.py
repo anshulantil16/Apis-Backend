@@ -37,8 +37,9 @@ class SendOTPView(APIView):
         if not employee_id:
             return Response({'error': 'Employee ID is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        source = getattr(request, 'app_source', 'performance')
         try:
-            emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True)
+            emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True, app_source=source)
         except EmployeeProfile.DoesNotExist:
             return Response(
                 {'error': 'Employee ID not found. Please check and try again.'},
@@ -95,8 +96,9 @@ class VerifyOTPView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        source = getattr(request, 'app_source', 'performance')
         try:
-            emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True)
+            emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True, app_source=source)
         except EmployeeProfile.DoesNotExist:
             return Response({'error': 'Employee not found.'}, status=status.HTTP_404_NOT_FOUND)
 
