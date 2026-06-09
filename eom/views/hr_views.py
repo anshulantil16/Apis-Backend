@@ -200,27 +200,17 @@ class EOMHRFinalizeView(APIView):
 
 class EOMDatabaseResetView(APIView):
     """POST /api/eom/admin/reset-database/
-    Deletes all EOMNomination and EOMOTPToken records (admin only, requires confirmation).
-    Preserves EOMEmployee and EOMCycle.
+    Clears all EOM data — nominations, OTP tokens, employees, and cycles.
+    Same pattern as the appraisal ResetDatabaseView.
     """
 
     def post(self, request):
-        confirm = request.data.get('confirm')
-        if confirm != 'RESET_EOM_DATABASE':
-            return Response({'error': 'Confirmation code required.'}, status=400)
-
         try:
-            from ..models import EOMNomination, EOMOTPToken
-            nom_count = EOMNomination.objects.count()
-            otp_count = EOMOTPToken.objects.count()
-
+            from ..models import EOMNomination, EOMOTPToken, EOMEmployee, EOMCycle
             EOMNomination.objects.all().delete()
             EOMOTPToken.objects.all().delete()
-
-            return Response({
-                'message': f'Database reset complete. Deleted {nom_count} nominations and {otp_count} OTP tokens.',
-                'deleted_nominations': nom_count,
-                'deleted_otp_tokens': otp_count,
-            })
+            EOMEmployee.objects.all().delete()
+            EOMCycle.objects.all().delete()
+            return Response({'message': 'All EOM database tables successfully cleared!'})
         except Exception as e:
             return Response({'error': f'Reset failed: {str(e)}'}, status=500)
