@@ -7,6 +7,7 @@ from .views.hr_views import (
     EOMEmployeeImportView, EOMEmployeeListView,
     EOMCycleListCreateView, EOMCycleUpdateView,
     EOMAllNominationsView, EOMOverviewView, EOMHRFinalizeView,
+    EOMDatabaseResetView,
 )
 
 urlpatterns = [
@@ -37,4 +38,5 @@ urlpatterns = [
     path('all-nominations/',           EOMAllNominationsView.as_view()),
     path('org/overview/',              EOMOverviewView.as_view()),
     path('nominations/<int:nom_id>/hr-finalize/', EOMHRFinalizeView.as_view()),
+    path('admin/reset-database/',      EOMDatabaseResetView.as_view()),
 ]
