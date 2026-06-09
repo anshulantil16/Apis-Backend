@@ -7,12 +7,7 @@ from ..serializers import EOMNominationSerializer
 
 HOD_SCORE_FIELDS = [
     'hod_dim1_score', 'hod_dim1_comments',
-    'hod_dim2_score', 'hod_dim2_comments',
-    'hod_dim3_score', 'hod_dim3_comments',
-    'hod_dim4_score', 'hod_dim4_comments',
-    'hod_sustainability_desc', 'hod_sustainability_bonus',
-    'hod_sustainability_just', 'hod_recommendation',
-    'hod_panel_name', 'hod_remarks',
+    'hod_recommendation', 'hod_panel_name', 'hod_remarks',
 ]
 
 

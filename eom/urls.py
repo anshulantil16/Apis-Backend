@@ -2,6 +2,7 @@ from django.urls import path
 from .views.auth_views     import EOMSendOTPView, EOMVerifyOTPView, EOMAdminOTPView, EOMAdminVerifyView
 from .views.employee_views import EOMActiveCyclesView, EOMNominationView, EOMSubmitNominationView
 from .views.hod_views      import EOMHODTeamView, EOMHODReviewView
+from .views.panel_views    import EOMPanelNominationsView, EOMPanelReviewView
 from .views.hr_views import (
     EOMEmployeeImportView, EOMEmployeeListView,
     EOMCycleListCreateView, EOMCycleUpdateView,
@@ -23,6 +24,10 @@ urlpatterns = [
     # HOD
     path('hod/<str:hod_id>/team/',               EOMHODTeamView.as_view()),
     path('nominations/<int:nom_id>/hod-review/', EOMHODReviewView.as_view()),
+
+    # Panel
+    path('panel/nominations/',                       EOMPanelNominationsView.as_view()),
+    path('nominations/<int:nom_id>/panel-review/',   EOMPanelReviewView.as_view()),
 
     # HR
     path('employees/import/',          EOMEmployeeImportView.as_view()),

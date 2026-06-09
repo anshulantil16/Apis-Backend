@@ -71,6 +71,8 @@ class EOMEmployeeImportView(APIView):
                 user_type = 'hr'
             elif 'hod' in raw_type or 'head' in raw_type:
                 user_type = 'hod'
+            elif 'panel' in raw_type:
+                user_type = 'panel'
             else:
                 user_type = 'employee'
 
@@ -161,16 +163,18 @@ class EOMOverviewView(APIView):
         total_employees = EOMEmployee.objects.filter(is_active=True).count()
         noms = EOMNomination.objects.filter(cycle_id=cycle_id)
 
-        submitted    = noms.filter(status__in=['submitted', 'hod_approved', 'hod_rejected', 'hr_finalized']).count()
-        hod_approved = noms.filter(status__in=['hod_approved', 'hr_finalized']).count()
-        finalized    = noms.filter(status='hr_finalized').count()
-        winners      = noms.filter(is_winner=True).count()
-        pending      = max(0, total_employees - submitted)
+        submitted      = noms.exclude(status='draft').count()
+        hod_approved   = noms.filter(status__in=['hod_approved', 'panel_approved', 'panel_rejected', 'hr_finalized']).count()
+        panel_approved = noms.filter(status__in=['panel_approved', 'hr_finalized']).count()
+        finalized      = noms.filter(status='hr_finalized').count()
+        winners        = noms.filter(is_winner=True).count()
+        pending        = max(0, total_employees - submitted)
 
         return Response({
             'total_employees': total_employees,
             'submitted':       submitted,
             'hod_approved':    hod_approved,
+            'panel_approved':  panel_approved,
             'hr_finalized':    finalized,
             'winners':         winners,
             'pending':         pending,
