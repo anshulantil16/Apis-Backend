@@ -37,14 +37,20 @@ class SendOTPView(APIView):
         if not employee_id:
             return Response({'error': 'Employee ID is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        source = getattr(request, 'app_source', 'performance')
         try:
-            emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True, app_source=source)
+            emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True)
         except EmployeeProfile.DoesNotExist:
             return Response(
                 {'error': 'Employee ID not found. Please check and try again.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        except EmployeeProfile.MultipleObjectsReturned:
+            # Same employee_id exists in both hubs — pick by app_source
+            source = getattr(request, 'app_source', 'performance')
+            try:
+                emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True, app_source=source)
+            except EmployeeProfile.DoesNotExist:
+                emp = EmployeeProfile.objects.filter(employee_id=employee_id, is_active=True).first()
 
         if not emp.email:
             return Response(
@@ -96,11 +102,16 @@ class VerifyOTPView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        source = getattr(request, 'app_source', 'performance')
         try:
-            emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True, app_source=source)
+            emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True)
         except EmployeeProfile.DoesNotExist:
             return Response({'error': 'Employee not found.'}, status=status.HTTP_404_NOT_FOUND)
+        except EmployeeProfile.MultipleObjectsReturned:
+            source = getattr(request, 'app_source', 'performance')
+            try:
+                emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True, app_source=source)
+            except EmployeeProfile.DoesNotExist:
+                emp = EmployeeProfile.objects.filter(employee_id=employee_id, is_active=True).first()
 
         try:
             token = OTPToken.objects.filter(
