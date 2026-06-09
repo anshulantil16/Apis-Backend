@@ -103,10 +103,8 @@ class EmployeeImportView(APIView):
                 except Exception:
                     pass
 
-            source = getattr(request, 'app_source', 'performance')
             emp, was_created = EmployeeProfile.objects.update_or_create(
                 employee_id=emp_id,
-                app_source=source,
                 defaults={
                     'name': name,
                     'email': val('email'),
@@ -139,8 +137,7 @@ class EmployeeListView(APIView):
     """GET /api/performance/employees/ — list all employees with optional filters."""
 
     def get(self, request):
-        source = getattr(request, 'app_source', 'performance')
-        qs = EmployeeProfile.objects.filter(is_active=True, app_source=source)
+        qs = EmployeeProfile.objects.filter(is_active=True)
         zone = request.query_params.get('zone')
         user_type = request.query_params.get('user_type')
         if zone:
@@ -157,15 +154,13 @@ class CycleListCreateView(APIView):
     """
 
     def get(self, request):
-        source = getattr(request, 'app_source', 'performance')
-        cycles = PerformanceCycle.objects.filter(app_source=source)
+        cycles = PerformanceCycle.objects.all()
         return Response(PerformanceCycleSerializer(cycles, many=True).data)
 
     def post(self, request):
-        source = getattr(request, 'app_source', 'performance')
         serializer = PerformanceCycleSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(created_by=request.data.get('created_by', 'HR'), app_source=source)
+            serializer.save(created_by=request.data.get('created_by', 'HR'))
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
@@ -261,11 +256,10 @@ class OrgOverviewView(APIView):
         if not cycle_id:
             return Response({'error': 'cycle_id required'}, status=400)
 
-        source = getattr(request, 'app_source', 'performance')
         # Total active employees — everyone uploaded via Excel
-        total_employees = EmployeeProfile.objects.filter(is_active=True, app_source=source).count()
+        total_employees = EmployeeProfile.objects.filter(is_active=True).count()
 
-        gcs = GoalCard.objects.filter(cycle_id=cycle_id, employee__app_source=source).select_related('employee')
+        gcs = GoalCard.objects.filter(cycle_id=cycle_id).select_related('employee')
 
         # Cumulative funnel counts — each stage includes all cards that have
         # reached OR passed that stage, so numbers only ever increase down the funnel.
@@ -318,10 +312,8 @@ class LeaderboardView(APIView):
         if not cycle_id:
             return Response({'error': 'cycle_id required'}, status=400)
 
-        source = getattr(request, 'app_source', 'performance')
         published_gcs = GoalCard.objects.filter(
             cycle_id=cycle_id,
-            employee__app_source=source,
             review__status='published'
         ).select_related('employee', 'review').order_by(
             '-review__final_weighted_score'
@@ -351,8 +343,7 @@ class AllGoalCardsView(APIView):
     """GET /api/performance/goal-cards/?cycle_id=<id>&status=<status> — HR sees all."""
 
     def get(self, request):
-        source = getattr(request, 'app_source', 'performance')
-        qs = GoalCard.objects.filter(employee__app_source=source).select_related('employee', 'cycle')
+        qs = GoalCard.objects.all().select_related('employee', 'cycle')
         cycle_id = request.query_params.get('cycle_id')
         gc_status = request.query_params.get('status')
         zone = request.query_params.get('zone')
@@ -372,7 +363,7 @@ class AllReviewsView(APIView):
 
     def get(self, request):
         source = getattr(request, 'app_source', 'performance')
-        qs = QuarterlyReview.objects.filter(goal_card__employee__app_source=source).select_related(
+        qs = QuarterlyReview.objects.all().select_related(
             'goal_card__employee', 'goal_card__cycle'
         )
         cycle_id = request.query_params.get('cycle_id')
@@ -390,15 +381,14 @@ class ResetDatabaseView(APIView):
     """POST /api/performance/org/reset/ — HR resets the entire database (employees, goal cards, cycles, reviews, logs)."""
 
     def post(self, request):
-        source = getattr(request, 'app_source', 'performance')
         try:
-            ApprovalLog.objects.filter(goal_card__employee__app_source=source).delete()
-            QuarterlyReview.objects.filter(goal_card__employee__app_source=source).delete()
-            CompetencyRating.objects.filter(goal_card__employee__app_source=source).delete()
-            Goal.objects.filter(goal_card__employee__app_source=source).delete()
-            GoalCard.objects.filter(employee__app_source=source).delete()
-            PerformanceCycle.objects.filter(app_source=source).delete()
-            EmployeeProfile.objects.filter(app_source=source).delete()
+            ApprovalLog.objects.all().delete()
+            QuarterlyReview.objects.all().delete()
+            CompetencyRating.objects.all().delete()
+            Goal.objects.all().delete()
+            GoalCard.objects.all().delete()
+            PerformanceCycle.objects.all().delete()
+            EmployeeProfile.objects.all().delete()
             return Response({'message': 'All performance database tables successfully cleared!'})
         except Exception as e:
             return Response({'error': f'Failed to reset database: {str(e)}'}, status=500)

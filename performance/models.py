@@ -11,9 +11,7 @@ class EmployeeProfile(models.Model):
         ('hr', 'HR Admin'),
     ]
 
-    APP_SOURCE_CHOICES = [('performance', 'Performance Hub'), ('appraisal', 'Appraisal Hub')]
-
-    employee_id = models.CharField(max_length=50)   # unique per source, see unique_together
+    employee_id = models.CharField(max_length=50, unique=True)
     name = models.CharField(max_length=200)
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=20, blank=True)
@@ -26,14 +24,12 @@ class EmployeeProfile(models.Model):
     user_type = models.CharField(max_length=20, choices=USER_TYPE_CHOICES, default='field_force')
     is_active = models.BooleanField(default=True)
     joined_date = models.DateField(null=True, blank=True)
-    app_source = models.CharField(max_length=20, choices=APP_SOURCE_CHOICES, default='performance', db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['name']
         verbose_name = 'Employee Profile'
-        unique_together = ['employee_id', 'app_source']
 
     def __str__(self):
         return f"{self.employee_id} — {self.name}"
@@ -64,12 +60,11 @@ class PerformanceCycle(models.Model):
     review_deadline = models.DateField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     created_by = models.CharField(max_length=200, blank=True)
-    app_source = models.CharField(max_length=20, default='performance', db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['-fiscal_year', 'quarter']
-        unique_together = ['quarter', 'fiscal_year', 'app_source']
+        unique_together = ['quarter', 'fiscal_year']
 
     def __str__(self):
         return self.name

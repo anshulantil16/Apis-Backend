@@ -46,9 +46,8 @@ class EmployeeProgressReportView(APIView):
     """Full performance history for one employee — all cycles, goals, updates, scores."""
 
     def get(self, request, employee_id):
-        source = getattr(request, 'app_source', 'performance')
         try:
-            emp = EmployeeProfile.objects.get(employee_id=employee_id, app_source=source)
+            emp = EmployeeProfile.objects.get(employee_id=employee_id)
         except EmployeeProfile.DoesNotExist:
             return Response({'error': 'Employee not found'}, status=404)
 
@@ -161,14 +160,13 @@ class TeamProgressReportView(APIView):
     """Manager's team progress dashboard for a given cycle."""
 
     def get(self, request, manager_id):
-        source = getattr(request, 'app_source', 'performance')
         try:
-            manager = EmployeeProfile.objects.get(employee_id=manager_id, app_source=source)
+            manager = EmployeeProfile.objects.get(employee_id=manager_id)
         except EmployeeProfile.DoesNotExist:
             return Response({'error': 'Manager not found'}, status=404)
 
         cycle_id = request.query_params.get('cycle_id')
-        team = EmployeeProfile.objects.filter(reporting_manager_id=manager_id, is_active=True, app_source=source)
+        team = EmployeeProfile.objects.filter(reporting_manager_id=manager_id, is_active=True)
 
         team_data = []
         for member in team:
@@ -263,13 +261,12 @@ class OrgAnalyticsView(APIView):
         if not cycle_id:
             return Response({'error': 'cycle_id query param is required'}, status=400)
 
-        source = getattr(request, 'app_source', 'performance')
         try:
-            cycle = PerformanceCycle.objects.get(id=cycle_id, app_source=source)
+            cycle = PerformanceCycle.objects.get(id=cycle_id)
         except PerformanceCycle.DoesNotExist:
             return Response({'error': 'Cycle not found'}, status=404)
 
-        goal_cards = GoalCard.objects.filter(cycle=cycle, employee__app_source=source).select_related('employee')
+        goal_cards = GoalCard.objects.filter(cycle=cycle).select_related('employee')
         all_goals = Goal.objects.filter(goal_card__cycle=cycle)
         reviews = QuarterlyReview.objects.filter(
             goal_card__cycle=cycle,

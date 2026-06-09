@@ -24,6 +24,5 @@ urlpatterns = [
     path('api/accounts/', include('accounts.urls')),
     path('api/user_management/', include('user_management.urls')),
     path('api/performance/', include('performance.urls')),
-    path('api/appraisal/',   include('performance.urls')),   # same views, separate source via middleware
     path('api/eom/',         include('eom.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

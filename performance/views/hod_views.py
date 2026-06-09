@@ -15,14 +15,13 @@ class HODTeamView(APIView):
     """GET /api/performance/hod/<hod_id>/team/?cycle_id=<id> — all employees under this HOD."""
 
     def get(self, request, hod_id):
-        source = getattr(request, 'app_source', 'performance')
         try:
-            EmployeeProfile.objects.get(employee_id=hod_id, app_source=source)
+            EmployeeProfile.objects.get(employee_id=hod_id)
         except EmployeeProfile.DoesNotExist:
             return Response({'error': 'HOD not found'}, status=404)
 
         cycle_id = request.query_params.get('cycle_id')
-        team = EmployeeProfile.objects.filter(hod_id=hod_id, is_active=True, app_source=source)
+        team = EmployeeProfile.objects.filter(hod_id=hod_id, is_active=True)
 
         result = []
         for emp in team:
