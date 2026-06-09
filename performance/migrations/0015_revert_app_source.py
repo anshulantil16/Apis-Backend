@@ -3,7 +3,8 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     """Reverts migration 0014 — removes app_source from EmployeeProfile and PerformanceCycle.
-    Deletes appraisal-source duplicates before restoring unique constraint on employee_id.
+    Deletes all appraisal-source data (cascading through FK relationships) before
+    restoring unique constraint on employee_id.
     """
 
     dependencies = [
@@ -11,8 +12,60 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Delete duplicate employees that were imported into the appraisal hub
-        # (same employee_id but app_source='appraisal') so unique constraint can be restored
+        # Delete all data related to appraisal employees in reverse FK order
+        migrations.RunSQL(
+            sql="""
+                DELETE FROM performance_approvallog
+                WHERE goal_card_id IN (
+                    SELECT gc.id FROM performance_goalcard gc
+                    JOIN performance_employeeprofile ep ON gc.employee_id = ep.id
+                    WHERE ep.app_source = 'appraisal'
+                );
+            """,
+            reverse_sql=migrations.RunSQL.noop,
+        ),
+        migrations.RunSQL(
+            sql="""
+                DELETE FROM performance_competencyrating
+                WHERE goal_card_id IN (
+                    SELECT gc.id FROM performance_goalcard gc
+                    JOIN performance_employeeprofile ep ON gc.employee_id = ep.id
+                    WHERE ep.app_source = 'appraisal'
+                );
+            """,
+            reverse_sql=migrations.RunSQL.noop,
+        ),
+        migrations.RunSQL(
+            sql="""
+                DELETE FROM performance_goal
+                WHERE goal_card_id IN (
+                    SELECT gc.id FROM performance_goalcard gc
+                    JOIN performance_employeeprofile ep ON gc.employee_id = ep.id
+                    WHERE ep.app_source = 'appraisal'
+                );
+            """,
+            reverse_sql=migrations.RunSQL.noop,
+        ),
+        migrations.RunSQL(
+            sql="""
+                DELETE FROM performance_quarterlyreview
+                WHERE goal_card_id IN (
+                    SELECT gc.id FROM performance_goalcard gc
+                    JOIN performance_employeeprofile ep ON gc.employee_id = ep.id
+                    WHERE ep.app_source = 'appraisal'
+                );
+            """,
+            reverse_sql=migrations.RunSQL.noop,
+        ),
+        migrations.RunSQL(
+            sql="""
+                DELETE FROM performance_goalcard
+                WHERE employee_id IN (
+                    SELECT id FROM performance_employeeprofile WHERE app_source = 'appraisal'
+                );
+            """,
+            reverse_sql=migrations.RunSQL.noop,
+        ),
         migrations.RunSQL(
             sql="DELETE FROM performance_employeeprofile WHERE app_source = 'appraisal';",
             reverse_sql=migrations.RunSQL.noop,
