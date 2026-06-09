@@ -126,6 +126,10 @@ class EOMNomination(models.Model):
     panel_remarks              = models.TextField(blank=True)
     panel_reviewed_at          = models.DateTimeField(null=True, blank=True)
 
+    # ── Supporting document (uploaded by employee) ───────────────────────────
+    support_document      = models.FileField(upload_to='eom_docs/', null=True, blank=True)
+    support_document_name = models.CharField(max_length=255, blank=True)
+
     # ── HR finalisation ──────────────────────────────────────────────────────
     hr_remarks      = models.TextField(blank=True)
     hr_finalized_at = models.DateTimeField(null=True, blank=True)

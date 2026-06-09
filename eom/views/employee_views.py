@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from ..models import EOMEmployee, EOMCycle, EOMNomination
 from ..serializers import EOMNominationSerializer, EOMCycleSerializer
@@ -52,6 +53,46 @@ class EOMNominationView(APIView):
                 setattr(nom, field, request.data[field])
         nom.save()
         return Response(EOMNominationSerializer(nom).data)
+
+
+class EOMDocumentUploadView(APIView):
+    """POST /api/eom/nominations/<nom_id>/upload-document/"""
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request, nom_id):
+        try:
+            nom = EOMNomination.objects.get(id=nom_id)
+        except EOMNomination.DoesNotExist:
+            return Response({'error': 'Nomination not found.'}, status=404)
+
+        if nom.status not in ('draft', 'hod_rejected'):
+            return Response({'error': 'Cannot upload document at this stage.'}, status=400)
+
+        file = request.FILES.get('document')
+        if not file:
+            return Response({'error': 'No file provided.'}, status=400)
+
+        # Delete old file if exists
+        if nom.support_document:
+            nom.support_document.delete(save=False)
+
+        nom.support_document      = file
+        nom.support_document_name = file.name
+        nom.save()
+        return Response(EOMNominationSerializer(nom, context={'request': request}).data)
+
+    def delete(self, request, nom_id):
+        try:
+            nom = EOMNomination.objects.get(id=nom_id)
+        except EOMNomination.DoesNotExist:
+            return Response({'error': 'Nomination not found.'}, status=404)
+
+        if nom.support_document:
+            nom.support_document.delete(save=False)
+            nom.support_document      = None
+            nom.support_document_name = ''
+            nom.save()
+        return Response({'message': 'Document removed.'})
 
 
 class EOMSubmitNominationView(APIView):
