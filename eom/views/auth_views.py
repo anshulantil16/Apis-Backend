@@ -170,6 +170,6 @@ class EOMAdminVerifyView(APIView):
             'email':       ADMIN_BOOTSTRAP_EMAIL,
             'user_type':   'hr',
             'zone':        '',
-            'reporting_manager_id': '',
+            'hod_id':      '',
             'is_active':   True,
         })
