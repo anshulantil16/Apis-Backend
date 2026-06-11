@@ -60,6 +60,9 @@ class EOMDocumentUploadView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, nom_id):
+        import os
+        from django.conf import settings
+
         try:
             nom = EOMNomination.objects.get(id=nom_id)
         except EOMNomination.DoesNotExist:
@@ -71,6 +74,10 @@ class EOMDocumentUploadView(APIView):
         file = request.FILES.get('document')
         if not file:
             return Response({'error': 'No file provided.'}, status=400)
+
+        # Ensure upload directory exists
+        upload_dir = os.path.join(settings.MEDIA_ROOT, 'eom_docs')
+        os.makedirs(upload_dir, exist_ok=True)
 
         # Delete old file if exists
         if nom.support_document:
