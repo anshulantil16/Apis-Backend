@@ -150,10 +150,6 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# Ensure upload directories exist on startup
-import pathlib
-pathlib.Path(os.path.join(MEDIA_ROOT, 'eom_docs')).mkdir(parents=True, exist_ok=True)
-
 CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL', 'True') == 'True'
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
