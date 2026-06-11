@@ -9,6 +9,7 @@ from .views.hr_views import (
     EOMAllNominationsView, EOMOverviewView, EOMHRFinalizeView,
     EOMDatabaseResetView,
 )
+from .views.export_views import EOMExportView
 
 urlpatterns = [
     # Auth
@@ -40,4 +41,5 @@ urlpatterns = [
     path('org/overview/',              EOMOverviewView.as_view()),
     path('nominations/<int:nom_id>/hr-finalize/', EOMHRFinalizeView.as_view()),
     path('admin/reset-database/',      EOMDatabaseResetView.as_view()),
+    path('export/',                    EOMExportView.as_view()),
 ]

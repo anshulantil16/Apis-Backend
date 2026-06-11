@@ -21,6 +21,7 @@ from .views.progress_views import (
     GoalProgressView, EmployeeProgressReportView,
     TeamProgressReportView, OrgAnalyticsView,
 )
+from .views.export_views import AppraisalExportView
 
 urlpatterns = [
     # Auth (OTP login)
@@ -66,4 +67,5 @@ urlpatterns = [
     path('all-goal-cards/', AllGoalCardsView.as_view()),
     path('all-reviews/', AllReviewsView.as_view()),
     path('org/reset/', ResetDatabaseView.as_view()),
+    path('export/', AppraisalExportView.as_view()),
 ]
