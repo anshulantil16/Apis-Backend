@@ -246,9 +246,9 @@ class EOMExportView(APIView):
 
         for ri, nom in enumerate(winners, 3):
             hod_t = nom.hod_dim1_score or 0
-            panel_t = sum(filter(None, [nom.panel_dim2_score, nom.panel_dim3_score,
-                                        nom.panel_dim4_score, nom.panel_dim5_score,
-                                        nom.panel_dim6_score]))
+            panel_t = sum(v or 0 for v in [nom.panel_dim2_score, nom.panel_dim3_score,
+                                             nom.panel_dim4_score, nom.panel_dim5_score,
+                                             nom.panel_dim6_score])
             bonus = nom.panel_sustainability_bonus or 0
             row = [nom.cycle.name, nom.employee.employee_id, nom.employee.name,
                    nom.employee.designation, nom.employee.department, nom.employee.zone,
@@ -280,9 +280,9 @@ class EOMExportView(APIView):
 
         for ri, nom in enumerate(qs, 3):
             hod_t = nom.hod_dim1_score or 0
-            panel_t = sum(filter(None, [nom.panel_dim2_score, nom.panel_dim3_score,
-                                        nom.panel_dim4_score, nom.panel_dim5_score,
-                                        nom.panel_dim6_score]))
+            panel_t = sum(v or 0 for v in [nom.panel_dim2_score, nom.panel_dim3_score,
+                                             nom.panel_dim4_score, nom.panel_dim5_score,
+                                             nom.panel_dim6_score])
             bonus = nom.panel_sustainability_bonus or 0
             row = [nom.cycle.name, nom.employee.name, nom.employee.department,
                    nom.employee.zone, hod_t, panel_t, bonus, hod_t + panel_t + bonus]
