@@ -11,7 +11,7 @@ from .views.manager_views import (
 )
 from .views.hod_views import HODTeamView, HODReviewGoalCardView, HODKPIScoresView
 from .views.hr_views import (
-    EmployeeImportView, EmployeeListView,
+    EmployeeImportView, EmployeeListView, EmployeeDetailView,
     CycleListCreateView, CycleUpdateView,
     HRFinalizeReviewView, OrgOverviewView,
     LeaderboardView, AllGoalCardsView, AllReviewsView,
@@ -58,6 +58,7 @@ urlpatterns = [
     # HR routes
     path('employees/import/', EmployeeImportView.as_view()),
     path('employees/', EmployeeListView.as_view()),
+    path('employees/<str:employee_id>/', EmployeeDetailView.as_view()),
     path('cycles/', CycleListCreateView.as_view()),
     path('cycles/<int:cycle_id>/', CycleUpdateView.as_view()),
     path('reviews/<int:review_id>/hr-finalize/', HRFinalizeReviewView.as_view()),

@@ -134,7 +134,8 @@ class EmployeeImportView(APIView):
 
 
 class EmployeeListView(APIView):
-    """GET /api/performance/employees/ — list all employees with optional filters."""
+    """GET /api/appraisal/employees/ — list employees
+       POST /api/appraisal/employees/ — add a single employee"""
 
     def get(self, request):
         qs = EmployeeProfile.objects.filter(is_active=True)
@@ -145,6 +146,70 @@ class EmployeeListView(APIView):
         if user_type:
             qs = qs.filter(user_type=user_type)
         return Response(EmployeeProfileSerializer(qs, many=True).data)
+
+    def post(self, request):
+        emp_id = request.data.get('employee_id', '').strip()
+        if not emp_id:
+            return Response({'error': 'employee_id is required.'}, status=400)
+        user_type_raw = request.data.get('user_type', 'field_force').lower()
+        if 'hr' in user_type_raw:
+            user_type = 'hr'
+        elif 'hod' in user_type_raw or 'head' in user_type_raw:
+            user_type = 'hod'
+        elif 'manager' in user_type_raw or 'mgr' in user_type_raw:
+            user_type = 'manager'
+        else:
+            user_type = 'field_force'
+        emp, created = EmployeeProfile.objects.update_or_create(
+            employee_id=emp_id,
+            defaults={
+                'name':                 request.data.get('name', '').strip(),
+                'email':                request.data.get('email', '').strip(),
+                'phone':                request.data.get('phone', '').strip(),
+                'designation':          request.data.get('designation', '').strip(),
+                'department':           request.data.get('department', '').strip(),
+                'zone':                 request.data.get('zone', '').strip(),
+                'subzone':              request.data.get('subzone', '').strip(),
+                'reporting_manager_id': request.data.get('reporting_manager_id', '').strip(),
+                'hod_id':               request.data.get('hod_id', '').strip(),
+                'user_type':            user_type,
+                'is_active':            True,
+            }
+        )
+        return Response(EmployeeProfileSerializer(emp).data, status=201 if created else 200)
+
+
+class EmployeeDetailView(APIView):
+    """GET/PATCH/DELETE /api/appraisal/employees/<employee_id>/"""
+
+    def get(self, request, employee_id):
+        try:
+            emp = EmployeeProfile.objects.get(employee_id=employee_id)
+            return Response(EmployeeProfileSerializer(emp).data)
+        except EmployeeProfile.DoesNotExist:
+            return Response({'error': 'Employee not found.'}, status=404)
+
+    def patch(self, request, employee_id):
+        try:
+            emp = EmployeeProfile.objects.get(employee_id=employee_id)
+        except EmployeeProfile.DoesNotExist:
+            return Response({'error': 'Employee not found.'}, status=404)
+        allowed = ['name', 'email', 'phone', 'designation', 'department', 'zone',
+                   'subzone', 'reporting_manager_id', 'hod_id', 'user_type', 'is_active']
+        for field in allowed:
+            if field in request.data:
+                setattr(emp, field, request.data[field])
+        emp.save()
+        return Response(EmployeeProfileSerializer(emp).data)
+
+    def delete(self, request, employee_id):
+        try:
+            emp = EmployeeProfile.objects.get(employee_id=employee_id)
+        except EmployeeProfile.DoesNotExist:
+            return Response({'error': 'Employee not found.'}, status=404)
+        emp.is_active = False
+        emp.save()
+        return Response({'message': f'{emp.name} deactivated successfully.'})
 
 
 class CycleListCreateView(APIView):

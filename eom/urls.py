@@ -4,7 +4,7 @@ from .views.employee_views import EOMActiveCyclesView, EOMNominationView, EOMSub
 from .views.hod_views      import EOMHODTeamView, EOMHODReviewView
 from .views.panel_views    import EOMPanelNominationsView, EOMPanelReviewView
 from .views.hr_views import (
-    EOMEmployeeImportView, EOMEmployeeListView,
+    EOMEmployeeImportView, EOMEmployeeListView, EOMEmployeeDetailView,
     EOMCycleListCreateView, EOMCycleUpdateView,
     EOMAllNominationsView, EOMOverviewView, EOMHRFinalizeView,
     EOMDatabaseResetView,
@@ -35,6 +35,7 @@ urlpatterns = [
     # HR
     path('employees/import/',          EOMEmployeeImportView.as_view()),
     path('employees/',                 EOMEmployeeListView.as_view()),
+    path('employees/<str:employee_id>/', EOMEmployeeDetailView.as_view()),
     path('cycles/',                    EOMCycleListCreateView.as_view()),
     path('cycles/<int:cycle_id>/',     EOMCycleUpdateView.as_view()),
     path('all-nominations/',           EOMAllNominationsView.as_view()),

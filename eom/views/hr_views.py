@@ -101,11 +101,63 @@ class EOMEmployeeImportView(APIView):
 
 
 class EOMEmployeeListView(APIView):
-    """GET /api/eom/employees/"""
+    """GET /api/eom/employees/ — list active employees
+       POST /api/eom/employees/ — add a single employee"""
 
     def get(self, request):
         qs = EOMEmployee.objects.filter(is_active=True)
         return Response(EOMEmployeeSerializer(qs, many=True).data)
+
+    def post(self, request):
+        emp_id = request.data.get('employee_id', '').strip()
+        if not emp_id:
+            return Response({'error': 'employee_id is required.'}, status=400)
+        emp, created = EOMEmployee.objects.update_or_create(
+            employee_id=emp_id,
+            defaults={
+                'name':        request.data.get('name', '').strip(),
+                'email':       request.data.get('email', '').strip(),
+                'designation': request.data.get('designation', '').strip(),
+                'department':  request.data.get('department', '').strip(),
+                'zone':        request.data.get('zone', '').strip(),
+                'hod_id':      request.data.get('hod_id', '').strip(),
+                'user_type':   request.data.get('user_type', 'employee'),
+                'is_active':   True,
+            }
+        )
+        return Response(EOMEmployeeSerializer(emp).data, status=201 if created else 200)
+
+
+class EOMEmployeeDetailView(APIView):
+    """GET/PATCH/DELETE /api/eom/employees/<employee_id>/"""
+
+    def get(self, request, employee_id):
+        try:
+            emp = EOMEmployee.objects.get(employee_id=employee_id)
+            return Response(EOMEmployeeSerializer(emp).data)
+        except EOMEmployee.DoesNotExist:
+            return Response({'error': 'Employee not found.'}, status=404)
+
+    def patch(self, request, employee_id):
+        try:
+            emp = EOMEmployee.objects.get(employee_id=employee_id)
+        except EOMEmployee.DoesNotExist:
+            return Response({'error': 'Employee not found.'}, status=404)
+        allowed = ['name', 'email', 'designation', 'department', 'zone', 'hod_id', 'user_type', 'is_active']
+        for field in allowed:
+            if field in request.data:
+                setattr(emp, field, request.data[field])
+        emp.save()
+        return Response(EOMEmployeeSerializer(emp).data)
+
+    def delete(self, request, employee_id):
+        try:
+            emp = EOMEmployee.objects.get(employee_id=employee_id)
+        except EOMEmployee.DoesNotExist:
+            return Response({'error': 'Employee not found.'}, status=404)
+        emp.is_active = False
+        emp.save()
+        return Response({'message': f'{emp.name} deactivated successfully.'})
 
 
 # ── Cycle management ─────────────────────────────────────────────────────────
