@@ -121,7 +121,18 @@ class VerifyOTPView(APIView):
         token.is_used = True
         token.save()
 
-        return Response(EmployeeProfileSerializer(emp).data)
+        # Auto-detect all roles this employee can access based on data
+        detected_roles = ['employee']
+        if EmployeeProfile.objects.filter(reporting_manager_id=emp.employee_id, is_active=True).exists():
+            detected_roles.append('manager')
+        if EmployeeProfile.objects.filter(hod_id=emp.employee_id, is_active=True).exists():
+            detected_roles.append('hod')
+        if emp.user_type == 'hr':
+            detected_roles.append('hr')
+
+        data = EmployeeProfileSerializer(emp).data
+        data['detected_roles'] = detected_roles
+        return Response(data)
 
 
 class AdminBootstrapOTPView(APIView):
