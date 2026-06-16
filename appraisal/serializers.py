@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from .models import (
     EmployeeProfile, PerformanceCycle, GoalCard,
-    Goal, KPI, QuarterlyReview, ApprovalLog, GoalProgressUpdate, CompetencyRating
+    Goal, KPI, QuarterlyReview, ApprovalLog, GoalProgressUpdate, CompetencyRating,
+    SupportDocument
 )
 
 
@@ -51,10 +52,25 @@ class CompetencyRatingSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class SupportDocumentSerializer(serializers.ModelSerializer):
+    document_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SupportDocument
+        fields = ['id', 'file_name', 'document_url', 'uploaded_at']
+
+    def get_document_url(self, obj):
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(obj.document.url)
+        return obj.document.url
+
+
 class GoalCardSerializer(serializers.ModelSerializer):
     goals = GoalSerializer(many=True, read_only=True)
     competency_ratings = CompetencyRatingSerializer(many=True, read_only=True)
     approval_logs = ApprovalLogSerializer(many=True, read_only=True)
+    support_documents = serializers.SerializerMethodField()
     employee_name = serializers.CharField(source='employee.name', read_only=True)
     employee_id_str = serializers.CharField(source='employee.employee_id', read_only=True)
     employee_designation = serializers.CharField(source='employee.designation', read_only=True)
@@ -64,15 +80,10 @@ class GoalCardSerializer(serializers.ModelSerializer):
     final_weighted_score = serializers.FloatField(read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     review_data = serializers.SerializerMethodField()
-    support_document_url = serializers.SerializerMethodField()
 
-    def get_support_document_url(self, obj):
-        if not obj.support_document:
-            return None
-        request = self.context.get('request')
-        if request:
-            return request.build_absolute_uri(obj.support_document.url)
-        return obj.support_document.url
+    def get_support_documents(self, obj):
+        docs = obj.support_documents.all().order_by('-uploaded_at')
+        return SupportDocumentSerializer(docs, many=True, context=self.context).data
 
     class Meta:
         model = GoalCard
