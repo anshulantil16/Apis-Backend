@@ -420,7 +420,7 @@ class AllGoalCardsView(APIView):
         if zone:
             qs = qs.filter(employee__zone__icontains=zone)
 
-        return Response(GoalCardSerializer(qs, many=True).data)
+        return Response(GoalCardSerializer(qs, many=True, context={'request': request}).data)
 
 
 class AllReviewsView(APIView):

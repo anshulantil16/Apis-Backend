@@ -69,7 +69,7 @@ class EmployeeGoalCardView(APIView):
         try:
             emp = EmployeeProfile.objects.get(employee_id=employee_id)
             gc = GoalCard.objects.get(employee=emp, cycle_id=cycle_id)
-            return Response(GoalCardSerializer(gc).data)
+            return Response(GoalCardSerializer(gc, context={'request': request}).data)
         except EmployeeProfile.DoesNotExist:
             return Response({'error': 'Employee not found'}, status=404)
         except GoalCard.DoesNotExist:
@@ -136,7 +136,7 @@ class EmployeeGoalCardView(APIView):
         gc.feedback_organization_rating = request.data.get('feedback_organization_rating', gc.feedback_organization_rating)
         gc.save()
 
-        return Response(GoalCardSerializer(gc).data, status=201 if created else 200)
+        return Response(GoalCardSerializer(gc, context={'request': request}).data, status=201 if created else 200)
 
 
 class SubmitGoalCardView(APIView):
@@ -176,7 +176,7 @@ class SubmitGoalCardView(APIView):
 
         notify_manager_on_employee_submit(gc)
 
-        return Response(GoalCardSerializer(gc).data)
+        return Response(GoalCardSerializer(gc, context={'request': request}).data)
 
 
 class EmployeeAllGoalCardsView(APIView):
@@ -186,7 +186,7 @@ class EmployeeAllGoalCardsView(APIView):
         try:
             emp = EmployeeProfile.objects.get(employee_id=employee_id)
             gcs = GoalCard.objects.filter(employee=emp).select_related('cycle')
-            return Response(GoalCardSerializer(gcs, many=True).data)
+            return Response(GoalCardSerializer(gcs, many=True, context={'request': request}).data)
         except EmployeeProfile.DoesNotExist:
             return Response({'error': 'Employee not found'}, status=404)
 

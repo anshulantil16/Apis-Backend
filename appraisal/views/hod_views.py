@@ -38,7 +38,7 @@ class HODTeamView(APIView):
                 if cycle_id:
                     gc_qs = gc_qs.filter(cycle_id=cycle_id)
                 gc = gc_qs.latest('created_at')
-                entry['goal_card'] = GoalCardSerializer(gc).data
+                entry['goal_card'] = GoalCardSerializer(gc, context={'request': request}).data
             except GoalCard.DoesNotExist:
                 pass
             result.append(entry)
@@ -65,7 +65,7 @@ class HODKPIScoresView(APIView):
             except KPI.DoesNotExist:
                 pass
 
-        return Response(GoalCardSerializer(gc).data)
+        return Response(GoalCardSerializer(gc, context={'request': request}).data)
 
 
 class HODReviewGoalCardView(APIView):
@@ -110,4 +110,4 @@ class HODReviewGoalCardView(APIView):
         if action == 'approved':
             notify_on_hod_approval(gc, hod_name)
 
-        return Response(GoalCardSerializer(gc).data)
+        return Response(GoalCardSerializer(gc, context={'request': request}).data)
