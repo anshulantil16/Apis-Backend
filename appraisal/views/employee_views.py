@@ -192,9 +192,7 @@ class EmployeeAllGoalCardsView(APIView):
 
 
 class EmployeeSupportDocumentUploadView(APIView):
-    """POST /api/appraisal/goal-cards/<gc_id>/upload-document/ — add document
-    DELETE /api/appraisal/goal-cards/<gc_id>/upload-document/?doc_id=<id> — remove specific doc
-    """
+    """POST/DELETE /api/appraisal/goal-cards/<gc_id>/upload-document/"""
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, gc_id):
@@ -216,11 +214,12 @@ class EmployeeSupportDocumentUploadView(APIView):
         upload_dir = os.path.join(settings.MEDIA_ROOT, 'appraisal_docs')
         os.makedirs(upload_dir, exist_ok=True)
 
-        doc = SupportDocument.objects.create(
-            goal_card=gc,
-            document=file,
-            file_name=file.name
-        )
+        if gc.support_document:
+            gc.support_document.delete(save=False)
+
+        gc.support_document = file
+        gc.support_document_name = file.name
+        gc.save()
         return Response(GoalCardSerializer(gc, context={'request': request}).data)
 
     def delete(self, request, gc_id):
@@ -229,17 +228,12 @@ class EmployeeSupportDocumentUploadView(APIView):
         except GoalCard.DoesNotExist:
             return Response({'error': 'Goal card not found'}, status=404)
 
-        doc_id = request.query_params.get('doc_id')
-        if not doc_id:
-            return Response({'error': 'doc_id required'}, status=400)
-
-        try:
-            doc = SupportDocument.objects.get(id=doc_id, goal_card=gc)
-            doc.document.delete(save=False)
-            doc.delete()
-            return Response(GoalCardSerializer(gc, context={'request': request}).data)
-        except SupportDocument.DoesNotExist:
-            return Response({'error': 'Document not found'}, status=404)
+        if gc.support_document:
+            gc.support_document.delete(save=False)
+            gc.support_document = None
+            gc.support_document_name = ''
+            gc.save()
+        return Response({'message': 'Document removed.'})
 
 
 class SubmitQuarterlyReviewView(APIView):
