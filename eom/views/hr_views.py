@@ -22,14 +22,17 @@ class EOMEmployeeImportView(APIView):
         try:
             if file.name.lower().endswith('.csv'):
                 try:
-                    df = pd.read_csv(file)
+                    df = pd.read_csv(file, comment='#')
                 except UnicodeDecodeError:
                     file.seek(0)
-                    df = pd.read_csv(file, encoding='latin1')
+                    df = pd.read_csv(file, encoding='latin1', comment='#')
             else:
                 df = pd.read_excel(file)
+                # Skip rows starting with # for Excel too
+                if df.columns[0].startswith('#'):
+                    df = df[~df.iloc[:, 0].astype(str).str.startswith('#')]
 
-            df.columns = df.columns.astype(str).str.strip().str.lower().str.replace(' ', '_')
+            df.columns = df.columns.astype(str).str.strip().str.lower().str.replace(' ', '_').str.replace('/', '_')
             df = df.fillna('')
         except Exception as e:
             return Response({'error': f'Could not read file: {str(e)}'}, status=400)
@@ -40,7 +43,7 @@ class EOMEmployeeImportView(APIView):
             'email':       ['email', 'email_id'],
             'designation': ['designation', 'role'],
             'department':  ['department', 'dept'],
-            'zone':        ['zone', 'location', 'unit', 'zone_/_location'],
+            'zone':        ['zone', 'location', 'unit', 'zone_/_location', 'zone___location'],
             'hod_id':      ['hod_id', 'hod'],
             'user_type':   ['user_type', 'type', 'role_type'],
         }
