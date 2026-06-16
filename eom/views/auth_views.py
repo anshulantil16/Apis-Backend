@@ -113,13 +113,16 @@ class EOMVerifyOTPView(APIView):
         token.is_used = True
         token.save()
 
-        # Auto-detect all roles this employee can access
+        # Auto-detect ALL roles this employee can access
         detected_roles = ['employee']
+        # HOD: detected from data — someone has this person as their HOD
         if EOMEmployee.objects.filter(hod_id=emp.employee_id, is_active=True).exists():
             detected_roles.append('hod')
-        if emp.user_type == 'panel':
+        # Panel: explicit flag OR user_type = panel
+        if emp.is_panel_member or emp.user_type == 'panel':
             detected_roles.append('panel')
-        if emp.user_type == 'hr':
+        # HR: explicit flag OR user_type = hr
+        if emp.is_hr or emp.user_type == 'hr':
             detected_roles.append('hr')
 
         data = EOMEmployeeSerializer(emp).data

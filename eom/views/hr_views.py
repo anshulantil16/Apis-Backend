@@ -38,14 +38,16 @@ class EOMEmployeeImportView(APIView):
             return Response({'error': f'Could not read file: {str(e)}'}, status=400)
 
         COLUMN_MAP = {
-            'employee_id': ['employee_id', 'emp_id', 'emp_code'],
-            'name':        ['name', 'employee_name'],
-            'email':       ['email', 'email_id'],
-            'designation': ['designation', 'role'],
-            'department':  ['department', 'dept'],
-            'zone':        ['zone', 'location', 'unit', 'zone_/_location', 'zone___location'],
-            'hod_id':      ['hod_id', 'hod'],
-            'user_type':   ['user_type', 'type', 'role_type'],
+            'employee_id':     ['employee_id', 'emp_id', 'emp_code'],
+            'name':            ['name', 'employee_name'],
+            'email':           ['email', 'email_id'],
+            'designation':     ['designation', 'role'],
+            'department':      ['department', 'dept'],
+            'zone':            ['zone', 'location', 'unit', 'zone_/_location', 'zone___location'],
+            'hod_id':          ['hod_id', 'hod'],
+            'user_type':       ['user_type', 'type', 'role_type'],
+            'is_panel_member': ['is_panel_member', 'panel_member', 'is_panel', 'panel'],
+            'is_hr':           ['is_hr', 'hr_access', 'is_admin'],
         }
 
         def get_col(df, aliases):
@@ -79,17 +81,26 @@ class EOMEmployeeImportView(APIView):
             else:
                 user_type = 'employee'
 
+            def is_yes(field):
+                col = get_col(df, COLUMN_MAP[field])
+                if not col:
+                    return False
+                v = str(row[col]).strip().lower()
+                return v in ('yes', 'true', '1', 'y')
+
             _, was_created = EOMEmployee.objects.update_or_create(
                 employee_id=emp_id,
                 defaults={
-                    'name':        name,
-                    'email':       val('email'),
-                    'designation': val('designation'),
-                    'department':  val('department'),
-                    'zone':        val('zone'),
-                    'hod_id':      val('hod_id'),
-                    'user_type':   user_type,
-                    'is_active':   True,
+                    'name':            name,
+                    'email':           val('email'),
+                    'designation':     val('designation'),
+                    'department':      val('department'),
+                    'zone':            val('zone'),
+                    'hod_id':          val('hod_id'),
+                    'user_type':       user_type,
+                    'is_panel_member': is_yes('is_panel_member') or 'panel' in raw_type,
+                    'is_hr':           is_yes('is_hr') or 'hr' in raw_type or 'admin' in raw_type,
+                    'is_active':       True,
                 },
             )
             if was_created: created += 1
@@ -118,14 +129,16 @@ class EOMEmployeeListView(APIView):
         emp, created = EOMEmployee.objects.update_or_create(
             employee_id=emp_id,
             defaults={
-                'name':        request.data.get('name', '').strip(),
-                'email':       request.data.get('email', '').strip(),
-                'designation': request.data.get('designation', '').strip(),
-                'department':  request.data.get('department', '').strip(),
-                'zone':        request.data.get('zone', '').strip(),
-                'hod_id':      request.data.get('hod_id', '').strip(),
-                'user_type':   request.data.get('user_type', 'employee'),
-                'is_active':   True,
+                'name':            request.data.get('name', '').strip(),
+                'email':           request.data.get('email', '').strip(),
+                'designation':     request.data.get('designation', '').strip(),
+                'department':      request.data.get('department', '').strip(),
+                'zone':            request.data.get('zone', '').strip(),
+                'hod_id':          request.data.get('hod_id', '').strip(),
+                'user_type':       request.data.get('user_type', 'employee'),
+                'is_panel_member': bool(request.data.get('is_panel_member', False)),
+                'is_hr':           bool(request.data.get('is_hr', False)),
+                'is_active':       True,
             }
         )
         return Response(EOMEmployeeSerializer(emp).data, status=201 if created else 200)
@@ -146,7 +159,7 @@ class EOMEmployeeDetailView(APIView):
             emp = EOMEmployee.objects.get(employee_id=employee_id)
         except EOMEmployee.DoesNotExist:
             return Response({'error': 'Employee not found.'}, status=404)
-        allowed = ['name', 'email', 'designation', 'department', 'zone', 'hod_id', 'user_type', 'is_active']
+        allowed = ['name', 'email', 'designation', 'department', 'zone', 'hod_id', 'user_type', 'is_panel_member', 'is_hr', 'is_active']
         for field in allowed:
             if field in request.data:
                 setattr(emp, field, request.data[field])
