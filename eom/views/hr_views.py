@@ -71,12 +71,21 @@ class EOMEmployeeImportView(APIView):
             if not name:
                 errors.append(f'Row {i+2}: Missing name for {emp_id}'); continue
 
-            raw_type = val('user_type').lower()
-            if 'hr' in raw_type or 'admin' in raw_type:
+            raw_type = val('user_type').lower().strip()
+
+            # Parse flexible user type: "employee", "hod", "panel", "hr", "hod+panel", etc.
+            is_hod = 'hod' in raw_type or 'head' in raw_type
+            is_panel = 'panel' in raw_type
+            is_hr_flag = 'hr' in raw_type or 'admin' in raw_type
+
+            # Determine primary user_type
+            if is_hr_flag:
                 user_type = 'hr'
-            elif 'hod' in raw_type or 'head' in raw_type:
+            elif is_hod and is_panel:
+                user_type = 'hod+panel'
+            elif is_hod:
                 user_type = 'hod'
-            elif 'panel' in raw_type:
+            elif is_panel:
                 user_type = 'panel'
             else:
                 user_type = 'employee'

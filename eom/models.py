@@ -4,10 +4,11 @@ from django.utils import timezone
 
 class EOMEmployee(models.Model):
     USER_TYPE_CHOICES = [
-        ('employee', 'Employee'),
-        ('hod',      'HOD'),
-        ('panel',    'Panel Member'),
-        ('hr',       'HR Admin'),
+        ('employee',   'Employee — Can fill form'),
+        ('hod',        'HOD Only — Reviews HOD section'),
+        ('panel',      'Panel Only — Reviews Panel sections'),
+        ('hod+panel',  'HOD + Panel — Reviews both sections'),
+        ('hr',         'HR Admin — Manages & finalizes'),
     ]
 
     employee_id     = models.CharField(max_length=50, unique=True)
