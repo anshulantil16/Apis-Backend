@@ -346,3 +346,17 @@ class ApprovalLog(models.Model):
 
     def __str__(self):
         return f"{self.actor_role} {self.action} on {self.goal_card}"
+
+
+class SupportDocument(models.Model):
+    """Multiple support documents per appraisal."""
+    goal_card = models.ForeignKey(GoalCard, on_delete=models.CASCADE, related_name='support_documents')
+    document = models.FileField(upload_to='appraisal_docs/')
+    file_name = models.CharField(max_length=255)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f"{self.goal_card} — {self.file_name}"
