@@ -211,8 +211,8 @@ class EmployeeSupportDocumentUploadView(APIView):
         if not file:
             return Response({'error': 'No file provided.'}, status=400)
 
-        if file.size > 20 * 1024 * 1024:
-            return Response({'error': 'File too large. Maximum size is 20MB.'}, status=400)
+        if file.size > 10 * 1024 * 1024:
+            return Response({'error': 'File too large. Maximum size is 10MB.'}, status=400)
 
         upload_dir = os.path.join(settings.MEDIA_ROOT, 'appraisal_docs')
         os.makedirs(upload_dir, exist_ok=True)
