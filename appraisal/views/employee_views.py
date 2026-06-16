@@ -9,7 +9,7 @@ from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.utils import timezone
 
-from appraisal.models import EmployeeProfile, PerformanceCycle, GoalCard, Goal, KPI, QuarterlyReview, ApprovalLog, SupportDocument
+from appraisal.models import EmployeeProfile, PerformanceCycle, GoalCard, Goal, KPI, QuarterlyReview, ApprovalLog
 from appraisal.serializers import (
     EmployeeProfileSerializer, PerformanceCycleSerializer,
     GoalCardSerializer, GoalSerializer, QuarterlyReviewSerializer
@@ -192,9 +192,7 @@ class EmployeeAllGoalCardsView(APIView):
 
 
 class EmployeeSupportDocumentUploadView(APIView):
-    """POST /api/appraisal/goal-cards/<gc_id>/upload-document/ — upload new document
-    DELETE /api/appraisal/goal-cards/<gc_id>/upload-document/?doc_id=<id> — delete specific doc
-    """
+    """POST/DELETE /api/appraisal/goal-cards/<gc_id>/upload-document/"""
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, gc_id):
@@ -213,15 +211,18 @@ class EmployeeSupportDocumentUploadView(APIView):
         if not file:
             return Response({'error': 'No file provided.'}, status=400)
 
+        if file.size > 20 * 1024 * 1024:
+            return Response({'error': 'File too large. Maximum size is 20MB.'}, status=400)
+
         upload_dir = os.path.join(settings.MEDIA_ROOT, 'appraisal_docs')
         os.makedirs(upload_dir, exist_ok=True)
 
-        # Create new document (don't replace)
-        doc = SupportDocument.objects.create(
-            goal_card=gc,
-            document=file,
-            file_name=file.name
-        )
+        if gc.support_document:
+            gc.support_document.delete(save=False)
+
+        gc.support_document = file
+        gc.support_document_name = file.name
+        gc.save()
         return Response(GoalCardSerializer(gc, context={'request': request}).data)
 
     def delete(self, request, gc_id):
@@ -230,17 +231,12 @@ class EmployeeSupportDocumentUploadView(APIView):
         except GoalCard.DoesNotExist:
             return Response({'error': 'Goal card not found'}, status=404)
 
-        doc_id = request.query_params.get('doc_id')
-        if not doc_id:
-            return Response({'error': 'doc_id query parameter required'}, status=400)
-
-        try:
-            doc = SupportDocument.objects.get(id=doc_id, goal_card=gc)
-            doc.document.delete(save=False)
-            doc.delete()
-            return Response(GoalCardSerializer(gc, context={'request': request}).data)
-        except SupportDocument.DoesNotExist:
-            return Response({'error': 'Document not found'}, status=404)
+        if gc.support_document:
+            gc.support_document.delete(save=False)
+            gc.support_document = None
+            gc.support_document_name = ''
+            gc.save()
+        return Response({'message': 'Document removed.'})
 
 
 class SubmitQuarterlyReviewView(APIView):
