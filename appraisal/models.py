@@ -120,6 +120,8 @@ class GoalCard(models.Model):
     manager_uplift_ratings = models.JSONField(default=dict, blank=True)
     manager_uplift_comments = models.JSONField(default=dict, blank=True)
     hod_competency_ratings = models.JSONField(default=dict, blank=True)
+    support_document = models.FileField(upload_to='appraisal_docs/', null=True, blank=True)
+    support_document_name = models.CharField(max_length=255, blank=True)
 
     class Meta:
         unique_together = ['employee', 'cycle']

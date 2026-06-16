@@ -6,6 +6,7 @@ import json
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.parsers import MultiPartParser, FormParser
 from django.utils import timezone
 
 from appraisal.models import EmployeeProfile, PerformanceCycle, GoalCard, Goal, KPI, QuarterlyReview, ApprovalLog
@@ -179,7 +180,7 @@ class SubmitGoalCardView(APIView):
 
 
 class EmployeeAllGoalCardsView(APIView):
-    """GET /api/performance/employee/<employee_id>/goal-cards/ — all cycles for employee."""
+    """GET /api/appraisal/employee/<employee_id>/goal-cards/ — all cycles for employee."""
 
     def get(self, request, employee_id):
         try:
@@ -188,6 +189,51 @@ class EmployeeAllGoalCardsView(APIView):
             return Response(GoalCardSerializer(gcs, many=True).data)
         except EmployeeProfile.DoesNotExist:
             return Response({'error': 'Employee not found'}, status=404)
+
+
+class EmployeeSupportDocumentUploadView(APIView):
+    """POST/DELETE /api/appraisal/goal-cards/<gc_id>/upload-document/"""
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request, gc_id):
+        import os
+        from django.conf import settings
+
+        try:
+            gc = GoalCard.objects.get(id=gc_id)
+        except GoalCard.DoesNotExist:
+            return Response({'error': 'Goal card not found'}, status=404)
+
+        if gc.status not in ('draft', 'submitted'):
+            return Response({'error': 'Cannot upload document at this stage.'}, status=400)
+
+        file = request.FILES.get('document')
+        if not file:
+            return Response({'error': 'No file provided.'}, status=400)
+
+        upload_dir = os.path.join(settings.MEDIA_ROOT, 'appraisal_docs')
+        os.makedirs(upload_dir, exist_ok=True)
+
+        if gc.support_document:
+            gc.support_document.delete(save=False)
+
+        gc.support_document = file
+        gc.support_document_name = file.name
+        gc.save()
+        return Response(GoalCardSerializer(gc, context={'request': request}).data)
+
+    def delete(self, request, gc_id):
+        try:
+            gc = GoalCard.objects.get(id=gc_id)
+        except GoalCard.DoesNotExist:
+            return Response({'error': 'Goal card not found'}, status=404)
+
+        if gc.support_document:
+            gc.support_document.delete(save=False)
+            gc.support_document = None
+            gc.support_document_name = ''
+            gc.save()
+        return Response({'message': 'Document removed.'})
 
 
 class SubmitQuarterlyReviewView(APIView):

@@ -64,6 +64,15 @@ class GoalCardSerializer(serializers.ModelSerializer):
     final_weighted_score = serializers.FloatField(read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     review_data = serializers.SerializerMethodField()
+    support_document_url = serializers.SerializerMethodField()
+
+    def get_support_document_url(self, obj):
+        if not obj.support_document:
+            return None
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(obj.support_document.url)
+        return obj.support_document.url
 
     class Meta:
         model = GoalCard

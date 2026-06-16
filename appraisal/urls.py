@@ -4,6 +4,7 @@ from .views.employee_views import (
     EmployeeProfileView, ActiveCyclesView,
     EmployeeGoalCardView, SubmitGoalCardView,
     EmployeeAllGoalCardsView, SubmitQuarterlyReviewView,
+    EmployeeSupportDocumentUploadView,
 )
 from .views.manager_views import (
     ManagerTeamView, ManagerReviewGoalCardView,
@@ -37,6 +38,7 @@ urlpatterns = [
     path('cycles/active/', ActiveCyclesView.as_view()),
     path('goal-cards/<str:employee_id>/<int:cycle_id>/', EmployeeGoalCardView.as_view()),
     path('goal-cards/<int:gc_id>/submit/', SubmitGoalCardView.as_view()),
+    path('goal-cards/<int:gc_id>/upload-document/', EmployeeSupportDocumentUploadView.as_view()),
     path('reviews/<int:gc_id>/', SubmitQuarterlyReviewView.as_view()),
 
     # Goal progress updates
