@@ -87,7 +87,26 @@ class GoalCardSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = GoalCard
-        fields = '__all__'
+        fields = [
+            'id', 'employee', 'cycle', 'status', 'manager_remarks', 'hr_remarks',
+            'created_at', 'submitted_at', 'manager_reviewed_at', 'hr_approved_at',
+            'self_review_answers', 'key_skills', 'training_programs',
+            'feedback_manager', 'feedback_manager_rating',
+            'feedback_organization', 'feedback_organization_rating',
+            'manager_suggested_skills', 'manager_special_achievements',
+            'manager_promoted', 'manager_promoted_justification',
+            'manager_salary_correction', 'manager_salary_justification',
+            'hod_remarks', 'hod_special_achievements',
+            'hod_promoted', 'hod_promoted_justification',
+            'hod_salary_correction', 'hod_salary_justification',
+            'hod_reviewed_at', 'manager_uplift_ratings', 'manager_uplift_comments',
+            'hod_competency_ratings', 'support_document', 'support_document_name',
+            # Custom fields
+            'goals', 'competency_ratings', 'approval_logs', 'support_documents',
+            'employee_name', 'employee_id_str', 'employee_designation', 'employee_zone',
+            'cycle_name', 'total_weightage', 'final_weighted_score', 'status_display',
+            'review_data'
+        ]
 
     def get_review_data(self, obj):
         try:
