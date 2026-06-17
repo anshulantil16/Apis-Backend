@@ -443,9 +443,12 @@ class AllReviewsView(APIView):
 
 
 class ResetDatabaseView(APIView):
-    """POST /api/performance/org/reset/ — HR resets the entire database (employees, goal cards, cycles, reviews, logs)."""
+    """POST /api/performance/org/reset/ — HR resets the appraisal database. Requires confirmation key."""
 
     def post(self, request):
+        # Require explicit confirmation to prevent accidental wipes
+        if request.data.get('confirm') != 'RESET_CONFIRMED':
+            return Response({'error': 'Missing confirmation. Pass confirm=RESET_CONFIRMED to proceed.'}, status=400)
         try:
             ApprovalLog.objects.all().delete()
             QuarterlyReview.objects.all().delete()
@@ -454,7 +457,7 @@ class ResetDatabaseView(APIView):
             GoalCard.objects.all().delete()
             PerformanceCycle.objects.all().delete()
             EmployeeProfile.objects.all().delete()
-            return Response({'message': 'All performance database tables successfully cleared!'})
+            return Response({'message': 'All appraisal database tables successfully cleared!'})
         except Exception as e:
             return Response({'error': f'Failed to reset database: {str(e)}'}, status=500)
 

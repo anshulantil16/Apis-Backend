@@ -1,6 +1,5 @@
 """
 Employee-facing API views.
-Employees access their own data by providing their employee_id.
 """
 import json
 from rest_framework.views import APIView
@@ -8,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.utils import timezone
+from django.db import transaction
 
 from appraisal.models import EmployeeProfile, PerformanceCycle, GoalCard, Goal, KPI, QuarterlyReview, ApprovalLog
 from appraisal.serializers import (
@@ -18,32 +18,23 @@ from ..notifications import notify_manager_on_employee_submit
 
 
 class EmployeeProfileView(APIView):
-    """GET /api/performance/employee/<employee_id>/ — fetch own profile."""
-
     def get(self, request, employee_id):
         try:
             emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True)
-            serializer = EmployeeProfileSerializer(emp)
-            return Response(serializer.data)
+            return Response(EmployeeProfileSerializer(emp).data)
         except EmployeeProfile.DoesNotExist:
-            return Response({'error': 'Employee not found'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Employee not found'}, status=404)
 
 
 class ActiveCyclesView(APIView):
-    """GET /api/performance/cycles/active/ — get all open cycles.
-    Auto-creates the annual cycle for the current Indian FY if none exists.
-    """
-
     def get(self, request):
         cycles = PerformanceCycle.objects.filter(
             status__in=['goal_setting', 'goals_locked', 'review_open']
         )
-
         if not cycles.exists() and not PerformanceCycle.objects.exists():
             from datetime import date
             cycle, _ = PerformanceCycle.objects.get_or_create(
-                quarter=4,
-                fiscal_year='2025-26',
+                quarter=4, fiscal_year='2025-26',
                 defaults={
                     'name': 'Annual Appraisal FY 2025-26',
                     'goal_setting_deadline': date(2027, 12, 31),
@@ -54,17 +45,10 @@ class ActiveCyclesView(APIView):
                 }
             )
             cycles = PerformanceCycle.objects.filter(id=cycle.id)
-
         return Response(PerformanceCycleSerializer(cycles, many=True).data)
 
 
 class EmployeeGoalCardView(APIView):
-    """
-    GET  /api/performance/goal-cards/<employee_id>/<cycle_id>/
-    POST /api/performance/goal-cards/<employee_id>/<cycle_id>/
-    — Create or retrieve the employee's GoalCard for a given cycle.
-    """
-
     def get(self, request, employee_id, cycle_id):
         try:
             emp = EmployeeProfile.objects.get(employee_id=employee_id)
@@ -76,7 +60,6 @@ class EmployeeGoalCardView(APIView):
             return Response({'error': 'Goal card not found'}, status=404)
 
     def post(self, request, employee_id, cycle_id):
-        """Create a new GoalCard with goals."""
         try:
             emp = EmployeeProfile.objects.get(employee_id=employee_id)
             cycle = PerformanceCycle.objects.get(id=cycle_id)
@@ -85,108 +68,119 @@ class EmployeeGoalCardView(APIView):
         except PerformanceCycle.DoesNotExist:
             return Response({'error': 'Cycle not found'}, status=404)
 
-        # Enforce cycle phase: goals can only be set/edited during goal_setting
-        if cycle.status not in ('goal_setting',):
-            # Allow reading but not submitting — only block new submissions
-            existing_gc = GoalCard.objects.filter(employee=emp, cycle=cycle).first()
+        # Allow saving if cycle is goal_setting, OR if employee has an existing draft/rejected card
+        existing_gc = GoalCard.objects.filter(employee=emp, cycle=cycle).first()
+        if cycle.status != 'goal_setting':
             if not existing_gc or existing_gc.status not in ('draft', 'manager_rejected'):
                 phase_messages = {
                     'draft':        'This cycle has not been opened for goal setting yet. Contact HR.',
-                    'goals_locked': 'Goal setting is now locked for this cycle. Contact HR if you need to make changes.',
-                    'review_open':  'Goals are locked. The review phase is now open — submit your quarterly review instead.',
+                    'goals_locked': 'Goal setting is now locked. Contact HR if you need changes.',
+                    'review_open':  'Goals are locked. The review phase is now open.',
                     'closed':       'This performance cycle is closed.',
                 }
-                msg = phase_messages.get(cycle.status, f'Goal setting is not allowed in the current phase: {cycle.get_status_display()}')
-                return Response({'error': msg, 'cycle_status': cycle.status}, status=status.HTTP_403_FORBIDDEN)
+                msg = phase_messages.get(cycle.status, f'Goal setting not allowed: {cycle.get_status_display()}')
+                return Response({'error': msg, 'cycle_status': cycle.status}, status=403)
 
-        # Get or create the goal card
-        gc, created = GoalCard.objects.get_or_create(employee=emp, cycle=cycle)
+        try:
+            with transaction.atomic():
+                gc, created = GoalCard.objects.get_or_create(employee=emp, cycle=cycle)
 
-        # Save/overwrite KRAs and KPIs — only update if goals sent
-        goals_data = request.data.get('goals', None)
-        if goals_data is not None and len(goals_data) > 0:
-            # Keep track of which goal/kpi IDs are still present
-            incoming_goal_ids = [g.get('id') for g in goals_data if g.get('id')]
-            # Delete goals that were removed by employee
-            gc.goals.exclude(id__in=incoming_goal_ids).delete()
+                goals_data = request.data.get('goals', None)
+                if goals_data is not None and len(goals_data) > 0:
+                    # IDs present in request — only delete goals not in list
+                    incoming_goal_ids = [g.get('id') for g in goals_data if g.get('id')]
+                    gc.goals.exclude(id__in=incoming_goal_ids).delete()
 
-            for i, g in enumerate(goals_data):
-                goal_id = g.get('id')
-                if goal_id:
-                    # Update existing goal
-                    kra = Goal.objects.filter(id=goal_id, goal_card=gc).first()
-                    if kra:
-                        kra.category = g.get('category', kra.category)
-                        kra.title = g.get('title', kra.title)
-                        kra.description = g.get('description', kra.description)
-                        kra.order = i
-                        kra.save()
-                    else:
-                        kra = Goal.objects.create(
-                            goal_card=gc, category=g.get('category', ''),
-                            title=g.get('title', ''), description=g.get('description', ''), order=i
-                        )
-                else:
-                    kra = Goal.objects.create(
-                        goal_card=gc, category=g.get('category', ''),
-                        title=g.get('title', ''), description=g.get('description', ''), order=i
-                    )
+                    for i, g in enumerate(goals_data):
+                        goal_id = g.get('id')
+                        # Try to find existing goal by id
+                        kra = Goal.objects.filter(id=goal_id, goal_card=gc).first() if goal_id else None
+                        if kra:
+                            kra.category = g.get('category', kra.category)
+                            kra.title = g.get('title', kra.title)
+                            kra.description = g.get('description', kra.description)
+                            kra.order = i
+                            kra.save()
+                        else:
+                            kra = Goal.objects.create(
+                                goal_card=gc,
+                                category=g.get('category', ''),
+                                title=g.get('title', ''),
+                                description=g.get('description', ''),
+                                order=i
+                            )
 
-                incoming_kpi_ids = [k.get('id') for k in g.get('kpis', []) if k.get('id')]
-                kra.kpis.exclude(id__in=incoming_kpi_ids).delete()
+                        incoming_kpi_ids = [k.get('id') for k in g.get('kpis', []) if k.get('id')]
+                        kra.kpis.exclude(id__in=incoming_kpi_ids).delete()
 
-                for j, kpi_data in enumerate(g.get('kpis', [])):
-                    kpi_id = kpi_data.get('id')
-                    kpi = KPI.objects.filter(id=kpi_id, kra=kra).first() if kpi_id else None
-                    if kpi:
-                        kpi.metric = kpi_data.get('metric', kpi.metric)
-                        kpi.target_value = kpi_data.get('target_value', kpi.target_value)
-                        kpi.weightage = kpi_data['weightage'] if 'weightage' in kpi_data and kpi_data['weightage'] != '' else kpi.weightage
-                        kpi.frequency = kpi_data.get('frequency', kpi.frequency)
-                        kpi.unit_of_measurement = kpi_data.get('unit_of_measurement', kpi.unit_of_measurement)
-                        kpi.parameter_type = kpi_data.get('parameter_type', kpi.parameter_type)
-                        kpi.data_source = kpi_data.get('data_source', kpi.data_source)
-                        kpi.actual_achievement = kpi_data.get('actual_achievement', kpi.actual_achievement)
-                        kpi.order = j
-                        kpi.save()
-                    else:
-                        KPI.objects.create(
-                            kra=kra,
-                            metric=kpi_data.get('metric', ''),
-                            target_value=kpi_data.get('target_value', ''),
-                            weightage=kpi_data.get('weightage') or 0,
-                            frequency=kpi_data.get('frequency', ''),
-                            unit_of_measurement=kpi_data.get('unit_of_measurement', ''),
-                            parameter_type=kpi_data.get('parameter_type', ''),
-                            data_source=kpi_data.get('data_source', ''),
-                            actual_achievement=kpi_data.get('actual_achievement', ''),
-                            manager_score=kpi_data.get('manager_score') or None,
-                            order=j
-                        )
+                        for j, kd in enumerate(g.get('kpis', [])):
+                            kpi = KPI.objects.filter(id=kd.get('id'), kra=kra).first() if kd.get('id') else None
+                            if kpi:
+                                kpi.metric = kd.get('metric', kpi.metric)
+                                kpi.target_value = kd.get('target_value', kpi.target_value)
+                                # Only update weightage if explicitly provided and non-empty
+                                if 'weightage' in kd and kd['weightage'] != '' and kd['weightage'] is not None:
+                                    try:
+                                        kpi.weightage = float(kd['weightage'])
+                                    except (ValueError, TypeError):
+                                        pass
+                                kpi.frequency = kd.get('frequency', kpi.frequency)
+                                kpi.unit_of_measurement = kd.get('unit_of_measurement', kpi.unit_of_measurement)
+                                kpi.parameter_type = kd.get('parameter_type', kpi.parameter_type)
+                                kpi.data_source = kd.get('data_source', kpi.data_source)
+                                kpi.actual_achievement = kd.get('actual_achievement', kpi.actual_achievement)
+                                kpi.order = j
+                                kpi.save()
+                            else:
+                                try:
+                                    weightage = float(kd.get('weightage') or 0)
+                                except (ValueError, TypeError):
+                                    weightage = 0
+                                KPI.objects.create(
+                                    kra=kra,
+                                    metric=kd.get('metric', ''),
+                                    target_value=kd.get('target_value', ''),
+                                    weightage=weightage,
+                                    frequency=kd.get('frequency', ''),
+                                    unit_of_measurement=kd.get('unit_of_measurement', ''),
+                                    parameter_type=kd.get('parameter_type', ''),
+                                    data_source=kd.get('data_source', ''),
+                                    actual_achievement=kd.get('actual_achievement', ''),
+                                    manager_score=kd.get('manager_score') or None,
+                                    order=j
+                                )
 
-        # Save appraisal form steps 2-4 data
-        gc.self_review_answers = request.data.get('self_review_answers', gc.self_review_answers)
-        gc.key_skills = request.data.get('key_skills', gc.key_skills)
-        gc.training_programs = request.data.get('training_programs', gc.training_programs)
-        gc.feedback_manager = request.data.get('feedback_manager', gc.feedback_manager)
-        gc.feedback_manager_rating = request.data.get('feedback_manager_rating', gc.feedback_manager_rating)
-        gc.feedback_organization = request.data.get('feedback_organization', gc.feedback_organization)
-        gc.feedback_organization_rating = request.data.get('feedback_organization_rating', gc.feedback_organization_rating)
-        gc.save()
+                # Save steps 2-4 data — only overwrite if key is present in request
+                data = request.data
+                if 'self_review_answers' in data:
+                    gc.self_review_answers = data['self_review_answers']
+                if 'key_skills' in data:
+                    gc.key_skills = data['key_skills']
+                if 'training_programs' in data:
+                    gc.training_programs = data['training_programs']
+                if 'feedback_manager' in data:
+                    gc.feedback_manager = data['feedback_manager']
+                if 'feedback_manager_rating' in data:
+                    gc.feedback_manager_rating = data['feedback_manager_rating'] or None
+                if 'feedback_organization' in data:
+                    gc.feedback_organization = data['feedback_organization']
+                if 'feedback_organization_rating' in data:
+                    gc.feedback_organization_rating = data['feedback_organization_rating'] or None
+                gc.save()
+
+        except Exception as e:
+            return Response({'error': f'Failed to save. Please try again. ({str(e)})'}, status=500)
 
         return Response(GoalCardSerializer(gc, context={'request': request}).data, status=201 if created else 200)
 
 
 class SubmitGoalCardView(APIView):
-    """PATCH /api/performance/goal-cards/<gc_id>/submit/ — employee submits for manager review."""
-
     def patch(self, request, gc_id):
         try:
             gc = GoalCard.objects.get(id=gc_id)
         except GoalCard.DoesNotExist:
             return Response({'error': 'Goal card not found'}, status=404)
 
-        # Enforce cycle phase: goals can only be submitted during goal_setting
         if gc.cycle.status != 'goal_setting':
             phase_messages = {
                 'draft':        'This cycle is not open for goal setting yet.',
@@ -194,8 +188,8 @@ class SubmitGoalCardView(APIView):
                 'review_open':  'Goals are locked. Submit your quarterly review instead.',
                 'closed':       'This performance cycle is closed.',
             }
-            msg = phase_messages.get(gc.cycle.status, f'Goal submission is not allowed: {gc.cycle.get_status_display()}')
-            return Response({'error': msg, 'cycle_status': gc.cycle.status}, status=status.HTTP_403_FORBIDDEN)
+            msg = phase_messages.get(gc.cycle.status, f'Goal submission not allowed: {gc.cycle.get_status_display()}')
+            return Response({'error': msg, 'cycle_status': gc.cycle.status}, status=403)
 
         if gc.status not in ['draft', 'manager_rejected']:
             return Response({'error': f'Cannot submit from status: {gc.status}'}, status=400)
@@ -205,21 +199,14 @@ class SubmitGoalCardView(APIView):
         gc.save()
 
         ApprovalLog.objects.create(
-            goal_card=gc,
-            actor_role='employee',
-            actor_name=gc.employee.name,
-            action='submitted',
-            comment=request.data.get('comment', 'Submitted for manager review.')
+            goal_card=gc, actor_role='employee', actor_name=gc.employee.name,
+            action='submitted', comment=request.data.get('comment', 'Submitted for manager review.')
         )
-
         notify_manager_on_employee_submit(gc)
-
         return Response(GoalCardSerializer(gc, context={'request': request}).data)
 
 
 class EmployeeAllGoalCardsView(APIView):
-    """GET /api/appraisal/employee/<employee_id>/goal-cards/ — all cycles for employee."""
-
     def get(self, request, employee_id):
         try:
             emp = EmployeeProfile.objects.get(employee_id=employee_id)
@@ -230,13 +217,11 @@ class EmployeeAllGoalCardsView(APIView):
 
 
 class EmployeeSupportDocumentUploadView(APIView):
-    """POST/DELETE /api/appraisal/goal-cards/<gc_id>/upload-document/"""
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, gc_id):
         import os
         from django.conf import settings
-
         try:
             gc = GoalCard.objects.get(id=gc_id)
         except GoalCard.DoesNotExist:
@@ -278,34 +263,26 @@ class EmployeeSupportDocumentUploadView(APIView):
 
 
 class SubmitQuarterlyReviewView(APIView):
-    """POST /api/performance/reviews/<gc_id>/ — employee submits quarter-end review + evidence."""
-
     def post(self, request, gc_id):
         try:
             gc = GoalCard.objects.get(id=gc_id)
         except GoalCard.DoesNotExist:
             return Response({'error': 'Goal card not found'}, status=404)
 
-        # Enforce cycle phase: reviews can only be submitted during review_open
         if gc.cycle.status != 'review_open':
             phase_messages = {
                 'draft':        'The review phase has not started yet.',
-                'goal_setting': 'Goal setting is still in progress. Reviews open after goals are locked.',
-                'goals_locked': 'Goals are locked but the review window is not open yet. Wait for HR to open reviews.',
+                'goal_setting': 'Goal setting is still in progress.',
+                'goals_locked': 'Review window not open yet. Wait for HR.',
                 'closed':       'This performance cycle is closed.',
             }
-            msg = phase_messages.get(gc.cycle.status, f'Quarterly review submission is not allowed: {gc.cycle.get_status_display()}')
-            return Response({'error': msg, 'cycle_status': gc.cycle.status}, status=status.HTTP_403_FORBIDDEN)
+            msg = phase_messages.get(gc.cycle.status, f'Review submission not allowed: {gc.cycle.get_status_display()}')
+            return Response({'error': msg, 'cycle_status': gc.cycle.status}, status=403)
 
-        # Enforce review deadline
         if gc.cycle.review_deadline and timezone.now().date() > gc.cycle.review_deadline:
-            return Response({
-                'error': f'The review submission deadline ({gc.cycle.review_deadline}) has passed.',
-                'cycle_status': gc.cycle.status,
-            }, status=status.HTTP_403_FORBIDDEN)
+            return Response({'error': f'Review deadline ({gc.cycle.review_deadline}) has passed.'}, status=403)
 
         review, created = QuarterlyReview.objects.get_or_create(goal_card=gc)
-
         review.employee_summary = request.data.get('employee_summary', '')
         review.key_achievements = request.data.get('key_achievements', '')
         review.challenges_faced = request.data.get('challenges_faced', '')
@@ -318,13 +295,10 @@ class SubmitQuarterlyReviewView(APIView):
         review.status = 'submitted'
         review.submitted_at = timezone.now()
 
-        # Handle evidence file
         if 'evidence_file' in request.FILES:
             review.evidence_file = request.FILES['evidence_file']
-
         review.save()
 
-        # Update self-ratings per KPI
         kpi_ratings_raw = request.data.get('kpi_ratings', [])
         kpi_ratings = json.loads(kpi_ratings_raw) if isinstance(kpi_ratings_raw, str) else kpi_ratings_raw
         for kr in kpi_ratings:
@@ -339,11 +313,7 @@ class SubmitQuarterlyReviewView(APIView):
                 pass
 
         ApprovalLog.objects.create(
-            goal_card=gc,
-            actor_role='employee',
-            actor_name=gc.employee.name,
-            action='review_submitted',
-            comment='Quarterly review submitted for manager rating.'
+            goal_card=gc, actor_role='employee', actor_name=gc.employee.name,
+            action='review_submitted', comment='Quarterly review submitted for manager rating.'
         )
-
         return Response(QuarterlyReviewSerializer(review).data, status=201 if created else 200)

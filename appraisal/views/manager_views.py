@@ -75,19 +75,19 @@ class ManagerReviewGoalCardView(APIView):
         gc.manager_reviewed_at = timezone.now()
         gc.save()
 
-        # Apply goal-level adjustments if provided
-        goal_adjustments = request.data.get('goal_adjustments', [])
-        for adj in goal_adjustments:
+        # Apply KPI-level adjustments if provided (Goal model has no weightage/target_value — those are on KPI)
+        kpi_adjustments = request.data.get('kpi_adjustments', [])
+        for adj in kpi_adjustments:
             try:
-                goal = Goal.objects.get(id=adj['goal_id'], goal_card=gc)
+                kpi = KPI.objects.get(id=adj['kpi_id'], kra__goal_card=gc)
                 if 'weightage' in adj:
-                    goal.weightage = adj['weightage']
+                    kpi.weightage = adj['weightage']
                 if 'target_value' in adj:
-                    goal.target_value = adj['target_value']
-                if 'kpi_metric' in adj:
-                    goal.kpi_metric = adj['kpi_metric']
-                goal.save()
-            except Goal.DoesNotExist:
+                    kpi.target_value = adj['target_value']
+                if 'metric' in adj:
+                    kpi.metric = adj['metric']
+                kpi.save()
+            except KPI.DoesNotExist:
                 pass
 
         manager_name = request.data.get('manager_name', 'Manager')
