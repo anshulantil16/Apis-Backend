@@ -86,15 +86,18 @@ class EmployeeGoalCardView(APIView):
             return Response({'error': 'Cycle not found'}, status=404)
 
         # Enforce cycle phase: goals can only be set/edited during goal_setting
-        if cycle.status != 'goal_setting':
-            phase_messages = {
-                'draft':        'This cycle has not been opened for goal setting yet. Contact HR.',
-                'goals_locked': 'Goal setting is now locked for this cycle. Contact HR if you need to make changes.',
-                'review_open':  'Goals are locked. The review phase is now open — submit your quarterly review instead.',
-                'closed':       'This performance cycle is closed.',
-            }
-            msg = phase_messages.get(cycle.status, f'Goal setting is not allowed in the current phase: {cycle.get_status_display()}')
-            return Response({'error': msg, 'cycle_status': cycle.status}, status=status.HTTP_403_FORBIDDEN)
+        if cycle.status not in ('goal_setting',):
+            # Allow reading but not submitting — only block new submissions
+            existing_gc = GoalCard.objects.filter(employee=emp, cycle=cycle).first()
+            if not existing_gc or existing_gc.status not in ('draft', 'manager_rejected'):
+                phase_messages = {
+                    'draft':        'This cycle has not been opened for goal setting yet. Contact HR.',
+                    'goals_locked': 'Goal setting is now locked for this cycle. Contact HR if you need to make changes.',
+                    'review_open':  'Goals are locked. The review phase is now open — submit your quarterly review instead.',
+                    'closed':       'This performance cycle is closed.',
+                }
+                msg = phase_messages.get(cycle.status, f'Goal setting is not allowed in the current phase: {cycle.get_status_display()}')
+                return Response({'error': msg, 'cycle_status': cycle.status}, status=status.HTTP_403_FORBIDDEN)
 
         # Get or create the goal card
         gc, created = GoalCard.objects.get_or_create(employee=emp, cycle=cycle)
@@ -134,33 +137,32 @@ class EmployeeGoalCardView(APIView):
 
                 for j, kpi_data in enumerate(g.get('kpis', [])):
                     kpi_id = kpi_data.get('id')
-                    if kpi_id:
-                        kpi = KPI.objects.filter(id=kpi_id, kra=kra).first()
-                        if kpi:
-                            kpi.metric = kpi_data.get('metric', kpi.metric)
-                            kpi.target_value = kpi_data.get('target_value', kpi.target_value)
-                            kpi.weightage = kpi_data.get('weightage') or kpi.weightage
-                            kpi.frequency = kpi_data.get('frequency', kpi.frequency)
-                            kpi.unit_of_measurement = kpi_data.get('unit_of_measurement', kpi.unit_of_measurement)
-                            kpi.parameter_type = kpi_data.get('parameter_type', kpi.parameter_type)
-                            kpi.data_source = kpi_data.get('data_source', kpi.data_source)
-                            kpi.actual_achievement = kpi_data.get('actual_achievement', kpi.actual_achievement)
-                            kpi.order = j
-                            kpi.save()
-                            continue
-                    KPI.objects.create(
-                        kra=kra,
-                        metric=kpi_data.get('metric', ''),
-                        target_value=kpi_data.get('target_value', ''),
-                        weightage=kpi_data.get('weightage') or 0,
-                        frequency=kpi_data.get('frequency', ''),
-                        unit_of_measurement=kpi_data.get('unit_of_measurement', ''),
-                        parameter_type=kpi_data.get('parameter_type', ''),
-                        data_source=kpi_data.get('data_source', ''),
-                        actual_achievement=kpi_data.get('actual_achievement', ''),
-                        manager_score=kpi_data.get('manager_score') or None,
-                        order=j
-                    )
+                    kpi = KPI.objects.filter(id=kpi_id, kra=kra).first() if kpi_id else None
+                    if kpi:
+                        kpi.metric = kpi_data.get('metric', kpi.metric)
+                        kpi.target_value = kpi_data.get('target_value', kpi.target_value)
+                        kpi.weightage = kpi_data['weightage'] if 'weightage' in kpi_data and kpi_data['weightage'] != '' else kpi.weightage
+                        kpi.frequency = kpi_data.get('frequency', kpi.frequency)
+                        kpi.unit_of_measurement = kpi_data.get('unit_of_measurement', kpi.unit_of_measurement)
+                        kpi.parameter_type = kpi_data.get('parameter_type', kpi.parameter_type)
+                        kpi.data_source = kpi_data.get('data_source', kpi.data_source)
+                        kpi.actual_achievement = kpi_data.get('actual_achievement', kpi.actual_achievement)
+                        kpi.order = j
+                        kpi.save()
+                    else:
+                        KPI.objects.create(
+                            kra=kra,
+                            metric=kpi_data.get('metric', ''),
+                            target_value=kpi_data.get('target_value', ''),
+                            weightage=kpi_data.get('weightage') or 0,
+                            frequency=kpi_data.get('frequency', ''),
+                            unit_of_measurement=kpi_data.get('unit_of_measurement', ''),
+                            parameter_type=kpi_data.get('parameter_type', ''),
+                            data_source=kpi_data.get('data_source', ''),
+                            actual_achievement=kpi_data.get('actual_achievement', ''),
+                            manager_score=kpi_data.get('manager_score') or None,
+                            order=j
+                        )
 
         # Save appraisal form steps 2-4 data
         gc.self_review_answers = request.data.get('self_review_answers', gc.self_review_answers)
