@@ -99,19 +99,55 @@ class EmployeeGoalCardView(APIView):
         # Get or create the goal card
         gc, created = GoalCard.objects.get_or_create(employee=emp, cycle=cycle)
 
-        # Save/overwrite KRAs and KPIs
-        goals_data = request.data.get('goals', [])
-        if goals_data:
-            gc.goals.all().delete()
+        # Save/overwrite KRAs and KPIs — only update if goals sent
+        goals_data = request.data.get('goals', None)
+        if goals_data is not None and len(goals_data) > 0:
+            # Keep track of which goal/kpi IDs are still present
+            incoming_goal_ids = [g.get('id') for g in goals_data if g.get('id')]
+            # Delete goals that were removed by employee
+            gc.goals.exclude(id__in=incoming_goal_ids).delete()
+
             for i, g in enumerate(goals_data):
-                kra = Goal.objects.create(
-                    goal_card=gc,
-                    category=g.get('category', ''),
-                    title=g.get('title', ''),
-                    description=g.get('description', ''),
-                    order=i
-                )
+                goal_id = g.get('id')
+                if goal_id:
+                    # Update existing goal
+                    kra = Goal.objects.filter(id=goal_id, goal_card=gc).first()
+                    if kra:
+                        kra.category = g.get('category', kra.category)
+                        kra.title = g.get('title', kra.title)
+                        kra.description = g.get('description', kra.description)
+                        kra.order = i
+                        kra.save()
+                    else:
+                        kra = Goal.objects.create(
+                            goal_card=gc, category=g.get('category', ''),
+                            title=g.get('title', ''), description=g.get('description', ''), order=i
+                        )
+                else:
+                    kra = Goal.objects.create(
+                        goal_card=gc, category=g.get('category', ''),
+                        title=g.get('title', ''), description=g.get('description', ''), order=i
+                    )
+
+                incoming_kpi_ids = [k.get('id') for k in g.get('kpis', []) if k.get('id')]
+                kra.kpis.exclude(id__in=incoming_kpi_ids).delete()
+
                 for j, kpi_data in enumerate(g.get('kpis', [])):
+                    kpi_id = kpi_data.get('id')
+                    if kpi_id:
+                        kpi = KPI.objects.filter(id=kpi_id, kra=kra).first()
+                        if kpi:
+                            kpi.metric = kpi_data.get('metric', kpi.metric)
+                            kpi.target_value = kpi_data.get('target_value', kpi.target_value)
+                            kpi.weightage = kpi_data.get('weightage') or kpi.weightage
+                            kpi.frequency = kpi_data.get('frequency', kpi.frequency)
+                            kpi.unit_of_measurement = kpi_data.get('unit_of_measurement', kpi.unit_of_measurement)
+                            kpi.parameter_type = kpi_data.get('parameter_type', kpi.parameter_type)
+                            kpi.data_source = kpi_data.get('data_source', kpi.data_source)
+                            kpi.actual_achievement = kpi_data.get('actual_achievement', kpi.actual_achievement)
+                            kpi.order = j
+                            kpi.save()
+                            continue
                     KPI.objects.create(
                         kra=kra,
                         metric=kpi_data.get('metric', ''),
