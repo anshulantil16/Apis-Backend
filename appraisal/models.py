@@ -172,7 +172,7 @@ class Goal(models.Model):
     """Appraisal KRA."""
     goal_card = models.ForeignKey(GoalCard, on_delete=models.CASCADE, related_name='goals')
     category = models.CharField(max_length=100, blank=True)
-    title = models.CharField(max_length=200)
+    title = models.CharField(max_length=1000)
     description = models.TextField(blank=True)
     order = models.IntegerField(default=0)
 
@@ -186,14 +186,14 @@ class Goal(models.Model):
 class KPI(models.Model):
     """Appraisal KPI."""
     kra = models.ForeignKey(Goal, on_delete=models.CASCADE, related_name='kpis')
-    metric = models.CharField(max_length=200, blank=True)
-    target_value = models.CharField(max_length=200, blank=True)
+    metric = models.CharField(max_length=500, blank=True)
+    target_value = models.CharField(max_length=500, blank=True)
     weightage = models.FloatField(default=0)
-    frequency = models.CharField(max_length=50, blank=True)
-    unit_of_measurement = models.CharField(max_length=100, blank=True)
-    parameter_type = models.CharField(max_length=100, blank=True)
-    data_source = models.CharField(max_length=200, blank=True)
-    actual_achievement = models.CharField(max_length=200, blank=True)
+    frequency = models.CharField(max_length=100, blank=True)
+    unit_of_measurement = models.CharField(max_length=200, blank=True)
+    parameter_type = models.CharField(max_length=200, blank=True)
+    data_source = models.CharField(max_length=500, blank=True)
+    actual_achievement = models.CharField(max_length=500, blank=True)
     manager_score = models.FloatField(null=True, blank=True)
     self_completion_pct = models.IntegerField(null=True, blank=True)
     self_rating = models.IntegerField(null=True, blank=True)
