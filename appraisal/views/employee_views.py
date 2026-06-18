@@ -83,86 +83,94 @@ class EmployeeGoalCardView(APIView):
 
         gc, created = GoalCard.objects.get_or_create(employee=emp, cycle=cycle)
 
-        with transaction.atomic():
-            goals_data = request.data.get('goals', None)
-            if goals_data is not None and len(goals_data) > 0:
-                incoming_goal_ids = [g.get('id') for g in goals_data if g.get('id')]
-                gc.goals.exclude(id__in=incoming_goal_ids).delete()
+        try:
+            with transaction.atomic():
+                goals_data = request.data.get('goals', None)
+                if goals_data is not None and len(goals_data) > 0:
+                    incoming_goal_ids = [g.get('id') for g in goals_data if g.get('id')]
+                    gc.goals.exclude(id__in=incoming_goal_ids).delete()
 
-                for i, g in enumerate(goals_data):
-                    goal_id = g.get('id')
-                    kra = Goal.objects.filter(id=goal_id, goal_card=gc).first() if goal_id else None
-                    if kra:
-                        kra.category = g.get('category', kra.category)
-                        kra.title = g.get('title', kra.title)
-                        kra.description = g.get('description', kra.description)
-                        kra.order = i
-                        kra.save()
-                    else:
-                        kra = Goal.objects.create(
-                            goal_card=gc,
-                            category=g.get('category', ''),
-                            title=g.get('title', ''),
-                            description=g.get('description', ''),
-                            order=i
-                        )
-
-                    incoming_kpi_ids = [k.get('id') for k in g.get('kpis', []) if k.get('id')]
-                    kra.kpis.exclude(id__in=incoming_kpi_ids).delete()
-
-                    for j, kd in enumerate(g.get('kpis', [])):
-                        kpi = KPI.objects.filter(id=kd.get('id'), kra=kra).first() if kd.get('id') else None
-                        if kpi:
-                            kpi.metric = kd.get('metric', kpi.metric)
-                            kpi.target_value = kd.get('target_value', kpi.target_value)
-                            if 'weightage' in kd and kd['weightage'] != '' and kd['weightage'] is not None:
-                                try:
-                                    kpi.weightage = float(kd['weightage'])
-                                except (ValueError, TypeError):
-                                    pass
-                            kpi.frequency = kd.get('frequency', kpi.frequency)
-                            kpi.unit_of_measurement = kd.get('unit_of_measurement', kpi.unit_of_measurement)
-                            kpi.parameter_type = kd.get('parameter_type', kpi.parameter_type)
-                            kpi.data_source = kd.get('data_source', kpi.data_source)
-                            kpi.actual_achievement = kd.get('actual_achievement', kpi.actual_achievement)
-                            kpi.order = j
-                            kpi.save()
+                    for i, g in enumerate(goals_data):
+                        goal_id = g.get('id')
+                        kra = Goal.objects.filter(id=goal_id, goal_card=gc).first() if goal_id else None
+                        if kra:
+                            kra.category = g.get('category', kra.category)
+                            kra.title = g.get('title', kra.title)
+                            kra.description = g.get('description', kra.description)
+                            kra.order = i
+                            kra.save()
                         else:
-                            try:
-                                weightage = float(kd.get('weightage') or 0)
-                            except (ValueError, TypeError):
-                                weightage = 0
-                            KPI.objects.create(
-                                kra=kra,
-                                metric=kd.get('metric', ''),
-                                target_value=kd.get('target_value', ''),
-                                weightage=weightage,
-                                frequency=kd.get('frequency', ''),
-                                unit_of_measurement=kd.get('unit_of_measurement', ''),
-                                parameter_type=kd.get('parameter_type', ''),
-                                data_source=kd.get('data_source', ''),
-                                actual_achievement=kd.get('actual_achievement', ''),
-                                manager_score=kd.get('manager_score') or None,
-                                order=j
+                            kra = Goal.objects.create(
+                                goal_card=gc,
+                                category=g.get('category', ''),
+                                title=g.get('title', ''),
+                                description=g.get('description', ''),
+                                order=i
                             )
 
-            # Save steps 2-4 data — only overwrite if key is present in request
-            req = request.data
-            if 'self_review_answers' in req:
-                gc.self_review_answers = req['self_review_answers']
-            if 'key_skills' in req:
-                gc.key_skills = req['key_skills']
-            if 'training_programs' in req:
-                gc.training_programs = req['training_programs']
-            if 'feedback_manager' in req:
-                gc.feedback_manager = req['feedback_manager']
-            if 'feedback_manager_rating' in req:
-                gc.feedback_manager_rating = req['feedback_manager_rating'] or None
-            if 'feedback_organization' in req:
-                gc.feedback_organization = req['feedback_organization']
-            if 'feedback_organization_rating' in req:
-                gc.feedback_organization_rating = req['feedback_organization_rating'] or None
-            gc.save()
+                        incoming_kpi_ids = [k.get('id') for k in g.get('kpis', []) if k.get('id')]
+                        kra.kpis.exclude(id__in=incoming_kpi_ids).delete()
+
+                        for j, kd in enumerate(g.get('kpis', [])):
+                            kpi = KPI.objects.filter(id=kd.get('id'), kra=kra).first() if kd.get('id') else None
+                            if kpi:
+                                kpi.metric = kd.get('metric', kpi.metric)
+                                kpi.target_value = kd.get('target_value', kpi.target_value)
+                                if 'weightage' in kd and kd['weightage'] != '' and kd['weightage'] is not None:
+                                    try:
+                                        kpi.weightage = float(kd['weightage'])
+                                    except (ValueError, TypeError):
+                                        pass
+                                kpi.frequency = kd.get('frequency', kpi.frequency)
+                                kpi.unit_of_measurement = kd.get('unit_of_measurement', kpi.unit_of_measurement)
+                                kpi.parameter_type = kd.get('parameter_type', kpi.parameter_type)
+                                kpi.data_source = kd.get('data_source', kpi.data_source)
+                                kpi.actual_achievement = kd.get('actual_achievement', kpi.actual_achievement)
+                                kpi.order = j
+                                kpi.save()
+                            else:
+                                try:
+                                    weightage = float(kd.get('weightage') or 0)
+                                except (ValueError, TypeError):
+                                    weightage = 0
+                                KPI.objects.create(
+                                    kra=kra,
+                                    metric=kd.get('metric', ''),
+                                    target_value=kd.get('target_value', ''),
+                                    weightage=weightage,
+                                    frequency=kd.get('frequency', ''),
+                                    unit_of_measurement=kd.get('unit_of_measurement', ''),
+                                    parameter_type=kd.get('parameter_type', ''),
+                                    data_source=kd.get('data_source', ''),
+                                    actual_achievement=kd.get('actual_achievement', ''),
+                                    manager_score=kd.get('manager_score') or None,
+                                    order=j
+                                )
+
+                # Save steps 2-4 data
+                req = request.data
+                if 'self_review_answers' in req:
+                    gc.self_review_answers = req['self_review_answers']
+                if 'key_skills' in req:
+                    gc.key_skills = req['key_skills']
+                if 'training_programs' in req:
+                    gc.training_programs = req['training_programs']
+                if 'feedback_manager' in req:
+                    gc.feedback_manager = req['feedback_manager']
+                if 'feedback_manager_rating' in req:
+                    gc.feedback_manager_rating = req['feedback_manager_rating'] or None
+                if 'feedback_organization' in req:
+                    gc.feedback_organization = req['feedback_organization']
+                if 'feedback_organization_rating' in req:
+                    gc.feedback_organization_rating = req['feedback_organization_rating'] or None
+                gc.save()
+
+        except Exception as e:
+            import traceback
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"GoalCard save error for {employee_id}: {str(e)}\n{traceback.format_exc()}")
+            return Response({'error': f'Save failed: {str(e)}'}, status=500)
 
         return Response(GoalCardSerializer(gc, context={'request': request}).data, status=201 if created else 200)
 
