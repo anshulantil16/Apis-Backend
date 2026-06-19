@@ -193,11 +193,36 @@ class PMSImportView(APIView):
         except Exception as e:
             return Response({'error': f'Cannot read file: {str(e)}'}, status=400)
 
-        HEADERS = [
-            'employee_id', 'name', 'designation', 'department', 'location', 'band', 'gender',
-            'fiscal_year', 'current_ctc', 'manager_score', 'hod_score', 'management_score',
-            'fy_prev1_score', 'fy_prev2_score', 'manager_remarks', 'hod_remarks', 'promotion_readiness',
-        ]
+        # Read header row and build column name -> index map (case-insensitive, strip *)
+        HEADER_ALIASES = {
+            'employee id': 'employee_id', 'emp id': 'employee_id', 'empid': 'employee_id',
+            'employee name': 'name', 'name': 'name',
+            'designation': 'designation',
+            'department': 'department', 'dept': 'department',
+            'location': 'location', 'zone': 'location',
+            'band': 'band',
+            'gender': 'gender',
+            'fiscal year': 'fiscal_year', 'fy': 'fiscal_year',
+            'current ctc': 'current_ctc', 'ctc': 'current_ctc', 'current ctc (annual inr)': 'current_ctc',
+            'manager score': 'manager_score', 'mgr score': 'manager_score', 'manager score (0-100)': 'manager_score',
+            'hod score': 'hod_score', 'hod score (0-100)': 'hod_score',
+            'management score': 'management_score', 'mgt score': 'management_score', 'management score (0-100)': 'management_score',
+            'fy prev-1 score': 'fy_prev1_score', 'fy prev1 score': 'fy_prev1_score',
+            'fy prev-2 score': 'fy_prev2_score', 'fy prev2 score': 'fy_prev2_score',
+            'manager remarks': 'manager_remarks',
+            'hod remarks': 'hod_remarks',
+            'promotion readiness': 'promotion_readiness',
+        }
+
+        header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+        col_map = {}
+        for ci, cell in enumerate(header_row):
+            if cell is None:
+                continue
+            key = str(cell).strip().lower().replace('*', '').strip()
+            field = HEADER_ALIASES.get(key)
+            if field:
+                col_map[field] = ci
 
         created = updated = 0
         errors = []
@@ -205,7 +230,7 @@ class PMSImportView(APIView):
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row):
                 continue
-            data = dict(zip(HEADERS, row))
+            data = {field: row[ci] for field, ci in col_map.items() if ci < len(row)}
             emp_id = str(data.get('employee_id') or '').strip()
             name   = str(data.get('name') or '').strip()
             if not emp_id or not name:
