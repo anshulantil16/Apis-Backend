@@ -4,7 +4,7 @@ import openpyxl
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
-from .models import PMSEmployee
+from .models import PMSEmployee, PMSAuditLog, GRADE_META
 
 GRADE_ORDER = ['A+', 'A', 'B+', 'B', 'C', 'D']
 
@@ -16,17 +16,19 @@ def serialize_emp(e):
         'employee_id': e.employee_id,
         'name': e.name,
         'designation': e.designation,
-        'department': e.department,
-        'location': e.location,
+        'cadre': e.cadre,
         'band': e.band,
+        'department': e.department,
+        'business': e.business,
+        'location': e.location,
         'gender': e.gender,
         'fiscal_year': e.fiscal_year,
         'current_ctc': float(e.current_ctc),
         'manager_score': float(e.manager_score) if e.manager_score is not None else None,
         'hod_score': float(e.hod_score) if e.hod_score is not None else None,
         'management_score': float(e.management_score) if e.management_score is not None else None,
-        'fy_prev1_score': float(e.fy_prev1_score) if e.fy_prev1_score is not None else None,
-        'fy_prev2_score': float(e.fy_prev2_score) if e.fy_prev2_score is not None else None,
+        'fy_prev1_grade': e.fy_prev1_grade,
+        'fy_prev2_grade': e.fy_prev2_grade,
         'manager_remarks': e.manager_remarks,
         'hod_remarks': e.hod_remarks,
         'final_score': e.final_score,
@@ -41,10 +43,16 @@ def serialize_emp(e):
         'override_increment_pct': float(e.override_increment_pct) if e.override_increment_pct is not None else None,
         'effective_increment_pct': e.effective_increment_pct,
         'increment_amount': e.increment_amount,
+        'promotion_pct': float(e.promotion_pct),
+        'promotion_amount': e.promotion_amount,
+        'management_discretion_pct': float(e.management_discretion_pct),
+        'management_discretion_amount': e.management_discretion_amount,
+        'total_impact_pct': e.total_impact_pct,
         'new_ctc': e.new_ctc,
+        'new_ctc_monthly': e.new_ctc_monthly,
         'promoted': e.promoted,
         'on_time_reward': e.on_time_reward,
-        'management_discretion': e.management_discretion,
+        'reward_amount': float(e.reward_amount),
         'promotion_readiness': e.promotion_readiness,
         'notes': e.notes,
     }
@@ -286,23 +294,80 @@ class PMSEmployeeUpdateView(APIView):
             return Response({'error': 'Not found'}, status=404)
 
         d = request.data
+        simulate = d.get('simulate_only', False)
+        logs = []
+
+        def set_field(field, val, cast=str):
+            old = getattr(emp, field)
+            new = cast(val) if val not in (None, '', 'null') else (None if cast == float else '')
+            if str(old) != str(new):
+                logs.append({'field': field, 'old_value': str(old), 'new_value': str(new)})
+            setattr(emp, field, new)
+
         if 'override_increment_pct' in d:
             v = d['override_increment_pct']
-            emp.override_increment_pct = float(v) if v not in (None, '', 'null') else None
+            new_v = float(v) if v not in (None, '', 'null') else None
+            if str(emp.override_increment_pct) != str(new_v):
+                logs.append({'field': 'override_increment_pct', 'old_value': str(emp.override_increment_pct), 'new_value': str(new_v)})
+            emp.override_increment_pct = new_v
+
         if 'override_grade' in d:
-            emp.override_grade = d['override_grade'] or ''
+            v = d['override_grade'] or ''
+            if emp.override_grade != v:
+                logs.append({'field': 'override_grade', 'old_value': emp.override_grade, 'new_value': v})
+            emp.override_grade = v
+
         if 'promoted' in d:
-            emp.promoted = bool(d['promoted'])
+            v = bool(d['promoted'])
+            if emp.promoted != v:
+                logs.append({'field': 'promoted', 'old_value': str(emp.promoted), 'new_value': str(v)})
+            emp.promoted = v
+
+        if 'promotion_pct' in d:
+            v = float(d['promotion_pct'] or 0)
+            if float(emp.promotion_pct) != v:
+                logs.append({'field': 'promotion_pct', 'old_value': str(emp.promotion_pct), 'new_value': str(v)})
+            emp.promotion_pct = v
+
+        if 'management_discretion_pct' in d:
+            v = float(d['management_discretion_pct'] or 0)
+            if float(emp.management_discretion_pct) != v:
+                logs.append({'field': 'management_discretion_pct', 'old_value': str(emp.management_discretion_pct), 'new_value': str(v)})
+            emp.management_discretion_pct = v
+
         if 'on_time_reward' in d:
-            emp.on_time_reward = bool(d['on_time_reward'])
+            v = bool(d['on_time_reward'])
+            if emp.on_time_reward != v:
+                logs.append({'field': 'on_time_reward', 'old_value': str(emp.on_time_reward), 'new_value': str(v)})
+            emp.on_time_reward = v
+
+        if 'reward_amount' in d:
+            v = float(d['reward_amount'] or 0)
+            if float(emp.reward_amount) != v:
+                logs.append({'field': 'reward_amount', 'old_value': str(emp.reward_amount), 'new_value': str(v)})
+            emp.reward_amount = v
+
         if 'management_score' in d:
             v = d['management_score']
-            emp.management_score = float(v) if v not in (None, '', 'null') else None
+            new_v = float(v) if v not in (None, '', 'null') else None
+            if str(emp.management_score) != str(new_v):
+                logs.append({'field': 'management_score', 'old_value': str(emp.management_score), 'new_value': str(new_v)})
+            emp.management_score = new_v
+
         if 'promotion_readiness' in d:
-            emp.promotion_readiness = d['promotion_readiness'] or ''
+            v = d['promotion_readiness'] or ''
+            if emp.promotion_readiness != v:
+                logs.append({'field': 'promotion_readiness', 'old_value': emp.promotion_readiness, 'new_value': v})
+            emp.promotion_readiness = v
+
         if 'notes' in d:
             emp.notes = d['notes']
-        emp.save()
+
+        if not simulate:
+            emp.save()
+            for log in logs:
+                PMSAuditLog.objects.create(employee=emp, **log)
+
         return Response(serialize_emp(emp))
 
 
