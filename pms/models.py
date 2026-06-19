@@ -1,0 +1,112 @@
+"""
+PMS - Performance Management Simulator
+Completely separate from appraisal/eom systems.
+"""
+from django.db import models
+
+
+class PMSSession(models.Model):
+    name = models.CharField(max_length=200)
+    fiscal_year = models.CharField(max_length=20, default='2025-26')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.name} ({self.fiscal_year})"
+
+
+class PMSEmployee(models.Model):
+    BAND_CHOICES = [
+        ('D', 'Director Band'),
+        ('C', 'CXO / HOD / Leader'),
+        ('M', 'Middle Management'),
+        ('O', 'Officer / Supervisor'),
+        ('W', 'Workforce / Associate'),
+    ]
+
+    session = models.ForeignKey(PMSSession, on_delete=models.CASCADE, related_name='employees')
+    employee_id = models.CharField(max_length=50)
+    name = models.CharField(max_length=200)
+    designation = models.CharField(max_length=200, blank=True)
+    department = models.CharField(max_length=200, blank=True)
+    band = models.CharField(max_length=5, choices=BAND_CHOICES, blank=True)
+    current_ctc = models.DecimalField(max_digits=12, decimal_places=2)
+
+    manager_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    hod_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    management_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    manager_remarks = models.TextField(blank=True)
+    hod_remarks = models.TextField(blank=True)
+
+    override_increment_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    override_grade = models.CharField(max_length=5, blank=True)
+    promoted = models.BooleanField(default=False)
+    on_time_reward = models.BooleanField(default=False)
+    management_discretion = models.BooleanField(default=False)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['department', 'name']
+        unique_together = ['session', 'employee_id']
+
+    def __str__(self):
+        return f"{self.name} ({self.employee_id})"
+
+    @property
+    def final_score(self):
+        m = float(self.manager_score or 0)
+        h = float(self.hod_score or 0)
+        mg = float(self.management_score or 0)
+        return round(m * 0.35 + h * 0.35 + mg * 0.30, 2)
+
+    @property
+    def auto_grade(self):
+        score = self.final_score
+        if score >= 106: return 'A+'
+        if score >= 95:  return 'A'
+        if score >= 85:  return 'B+'
+        if score >= 65:  return 'B'
+        if score >= 51:  return 'C'
+        return 'D'
+
+    @property
+    def effective_grade(self):
+        return self.override_grade or self.auto_grade
+
+    @property
+    def grade_config(self):
+        GRADES = {
+            'A+': {'label': 'Exceptional',      'inc_min': 12, 'inc_max': 15, 'promo_pct': 10, 'color': '#16a34a'},
+            'A':  {'label': 'Outstanding',       'inc_min': 10, 'inc_max': 12, 'promo_pct': 8,  'color': '#22c55e'},
+            'B+': {'label': 'Exceeds Target',    'inc_min': 7,  'inc_max': 10, 'promo_pct': 6,  'color': '#eab308'},
+            'B':  {'label': 'Meets Target',      'inc_min': 4,  'inc_max': 7,  'promo_pct': 4,  'color': '#f97316'},
+            'C':  {'label': 'Near Target',       'inc_min': 0,  'inc_max': 4,  'promo_pct': 0,  'color': '#ef4444'},
+            'D':  {'label': 'Needs Improvement', 'inc_min': 2,  'inc_max': 2,  'promo_pct': 0,  'color': '#991b1b'},
+        }
+        return GRADES.get(self.effective_grade, GRADES['B'])
+
+    @property
+    def default_increment_pct(self):
+        cfg = self.grade_config
+        return (cfg['inc_min'] + cfg['inc_max']) / 2
+
+    @property
+    def effective_increment_pct(self):
+        if self.override_increment_pct is not None:
+            return float(self.override_increment_pct)
+        return self.default_increment_pct
+
+    @property
+    def increment_amount(self):
+        return round(float(self.current_ctc) * self.effective_increment_pct / 100, 2)
+
+    @property
+    def new_ctc(self):
+        return round(float(self.current_ctc) + self.increment_amount, 2)
