@@ -1,4 +1,4 @@
-"""PMS views — no sessions, single global employee pool."""
+"""PMS views — comprehensive HR data management with full Excel support."""
 import io
 import openpyxl
 from rest_framework.views import APIView
@@ -16,21 +16,45 @@ def serialize_emp(e):
         'employee_id': e.employee_id,
         'name': e.name,
         'designation': e.designation,
+        'new_designation': e.new_designation,
+        'new_designation_type': e.new_designation_type,
         'cadre': e.cadre,
         'band': e.band,
+        'level': e.level,
         'department': e.department,
         'business': e.business,
         'location': e.location,
+        'payroll_location': e.payroll_location,
+        'new_operational_location': e.new_operational_location,
+        'sub_category': e.sub_category,
+        'cost_centre': e.cost_centre,
+        'category': e.category,
+        'hq_location': e.hq_location,
         'gender': e.gender,
+        'qualification': e.qualification,
+        'date_of_birth': str(e.date_of_birth) if e.date_of_birth else None,
+        'date_of_joining': str(e.date_of_joining) if e.date_of_joining else None,
+        'age': e.age,
+        'tenure_years': e.tenure_years,
+        'reporting_manager': e.reporting_manager,
+        'reporting_manager_id': e.reporting_manager_id,
+        'hod_name': e.hod_name,
+        'hod_id': e.hod_id,
         'fiscal_year': e.fiscal_year,
+        'fy_2223_ctc': float(e.fy_2223_ctc) if e.fy_2223_ctc else None,
+        'fy_2324_ctc': float(e.fy_2324_ctc) if e.fy_2324_ctc else None,
+        'fy_2425_ctc': float(e.fy_2425_ctc) if e.fy_2425_ctc else None,
         'current_ctc': float(e.current_ctc),
+        'fy_2223_growth_pct': float(e.fy_2223_growth_pct) if e.fy_2223_growth_pct else None,
+        'fy_2324_growth_pct': float(e.fy_2324_growth_pct) if e.fy_2324_growth_pct else None,
+        'fy_2425_growth_pct': float(e.fy_2425_growth_pct) if e.fy_2425_growth_pct else None,
+        'self_score': float(e.self_score) if e.self_score is not None else None,
         'manager_score': float(e.manager_score) if e.manager_score is not None else None,
         'hod_score': float(e.hod_score) if e.hod_score is not None else None,
-        'management_score': float(e.management_score) if e.management_score is not None else None,
-        'fy_prev1_grade': e.fy_prev1_grade,
-        'fy_prev2_grade': e.fy_prev2_grade,
-        'manager_remarks': e.manager_remarks,
-        'hod_remarks': e.hod_remarks,
+        'fy_2223_grade': e.fy_2223_grade,
+        'fy_2324_grade': e.fy_2324_grade,
+        'fy_2425_grade': e.fy_2425_grade,
+        'last_promotion_year': e.last_promotion_year,
         'final_score': e.final_score,
         'auto_grade': e.auto_grade,
         'effective_grade': e.effective_grade,
@@ -47,13 +71,17 @@ def serialize_emp(e):
         'promotion_amount': e.promotion_amount,
         'management_discretion_pct': float(e.management_discretion_pct),
         'management_discretion_amount': e.management_discretion_amount,
+        'salary_correction': float(e.salary_correction),
         'total_impact_pct': e.total_impact_pct,
         'new_ctc': e.new_ctc,
         'new_ctc_monthly': e.new_ctc_monthly,
         'promoted': e.promoted,
+        'redesignation': e.redesignation,
         'on_time_reward': e.on_time_reward,
         'reward_amount': float(e.reward_amount),
         'promotion_readiness': e.promotion_readiness,
+        'manager_remarks': e.manager_remarks,
+        'hod_remarks': e.hod_remarks,
         'notes': e.notes,
     }
 
@@ -75,7 +103,6 @@ def build_summary(employees):
         g = e.effective_grade
         grade_dist[g] = grade_dist.get(g, 0) + 1
 
-    # Department breakdown
     dept_map = {}
     for e in employees:
         d = e.department or 'Unknown'
@@ -98,7 +125,6 @@ def build_summary(employees):
         'promotion_cases': v['promoted'],
     } for d, v in sorted(dept_map.items())]
 
-    # Grade increment breakdown
     grade_inc = {}
     for e in employees:
         g = e.effective_grade
@@ -108,18 +134,15 @@ def build_summary(employees):
         grade_inc[g]['count']     += 1
         grade_inc[g]['total_ctc'] += float(e.current_ctc)
 
-    # Top 10 / Bottom 10
     sorted_emps = sorted(employees, key=lambda e: e.final_score, reverse=True)
     top10 = [serialize_emp(e) for e in sorted_emps[:10]]
     bot10 = [serialize_emp(e) for e in sorted_emps[-10:]]
 
-    # Promotion readiness
     readiness = {'ready_now': 0, '1_year': 0, '2_years': 0, 'not_ready': 0}
     for e in employees:
         if e.promotion_readiness in readiness:
             readiness[e.promotion_readiness] += 1
 
-    # Performance vs salary quadrant
     scores = sorted(e.final_score for e in employees)
     ctcs   = sorted(float(e.current_ctc) for e in employees)
     med_score = scores[total // 2]
@@ -131,7 +154,6 @@ def build_summary(employees):
         key = ('high' if hp else 'low') + '_perf_' + ('high' if hs else 'low') + '_pay'
         quadrants[key] += 1
 
-    # Gender
     gender_map = {}
     for e in employees:
         g = e.gender or 'Not Specified'
@@ -141,7 +163,6 @@ def build_summary(employees):
         gender_map[g]['scores'].append(e.final_score)
     gender_breakdown = [{'gender': g, 'count': v['count'], 'avg_score': round(sum(v['scores'])/len(v['scores']), 2)} for g, v in gender_map.items()]
 
-    # Band breakdown
     band_map = {}
     for e in employees:
         b = e.band or 'Unknown'
@@ -201,25 +222,67 @@ class PMSImportView(APIView):
         except Exception as e:
             return Response({'error': f'Cannot read file: {str(e)}'}, status=400)
 
-        # Read header row and build column name -> index map (case-insensitive, strip *)
         HEADER_ALIASES = {
-            'employee id': 'employee_id', 'emp id': 'employee_id', 'empid': 'employee_id',
+            'sr no': 'sr_no', 'sr. no': 'sr_no', 'sno': 'sr_no',
+            'employee id': 'employee_id', 'emp id': 'employee_id', 'empid': 'employee_id', 'er no': 'employee_id',
             'employee name': 'name', 'name': 'name',
-            'designation': 'designation',
+            'designation': 'designation', 'current designation': 'designation',
+            'new designation': 'new_designation', 're-designation': 'new_designation',
+            'new designation type': 'new_designation_type', 'new employee type': 'new_designation_type',
             'department': 'department', 'dept': 'department',
             'location': 'location', 'zone': 'location',
-            'band': 'band',
+            'new operational location': 'new_operational_location', 'est': 'new_operational_location',
+            'sub category': 'sub_category', 'sub cat': 'sub_category',
+            'cost centre': 'cost_centre', 'cost center': 'cost_centre', 'cc': 'cost_centre',
+            'category': 'category',
+            'hq': 'hq_location', 'hq location': 'hq_location',
+            'payroll location': 'payroll_location',
+            'cadre': 'cadre',
+            'band': 'band', 'grade': 'band',
+            'level': 'level',
             'gender': 'gender',
-            'fiscal year': 'fiscal_year', 'fy': 'fiscal_year',
-            'current ctc': 'current_ctc', 'ctc': 'current_ctc', 'current ctc (annual inr)': 'current_ctc',
+            'qualification': 'qualification', 'qualifications': 'qualification',
+            'dob': 'date_of_birth', 'date of birth': 'date_of_birth',
+            'age': 'age',
+            'doj': 'date_of_joining', 'date of joining': 'date_of_joining',
+            'tenure': 'tenure_years', 'tenure in apis as on 31-mar-2026': 'tenure_years',
+            'reporting manager': 'reporting_manager', 'report manager': 'reporting_manager',
+            'report id': 'reporting_manager_id', 'report no id': 'reporting_manager_id',
+            'hod name': 'hod_name',
+            'hod id': 'hod_id', 'hod': 'hod_id',
+            'last promotion': 'last_promotion_year', 'last promotion (yr)': 'last_promotion_year',
+            'fy 22-23 ctc': 'fy_2223_ctc', 'fy 2223 ctc': 'fy_2223_ctc',
+            'fy 23-24 ctc': 'fy_2324_ctc', 'fy 2324 ctc': 'fy_2324_ctc',
+            'fy 24-25 ctc': 'fy_2425_ctc', 'fy 2425 ctc': 'fy_2425_ctc',
+            'fy 25-26 current ctc': 'current_ctc', 'current ctc': 'current_ctc', 'ctc': 'current_ctc', 'current ctc (annual inr)': 'current_ctc',
+            'fy 22-23 (%)': 'fy_2223_growth_pct', 'fy 22-23 %': 'fy_2223_growth_pct',
+            'fy 23-24 (%)': 'fy_2324_growth_pct', 'fy 23-24 %': 'fy_2324_growth_pct',
+            'fy 24-25 (%)': 'fy_2425_growth_pct', 'fy 24-25 %': 'fy_2425_growth_pct',
+            'self score': 'self_score',
             'manager score': 'manager_score', 'mgr score': 'manager_score', 'manager score (0-100)': 'manager_score',
             'hod score': 'hod_score', 'hod score (0-100)': 'hod_score',
+            'fy 22-23 grade': 'fy_2223_grade',
+            'fy 23-24 grade': 'fy_2324_grade',
+            'fy 24-25 grade': 'fy_2425_grade',
+            'score range': 'score_range',
+            'final score range': 'final_score_range',
+            'rating': 'rating',
+            'performance': 'performance',
+            'promotion (y/n)': 'promoted', 'promotion': 'promoted',
+            'promotion readiness': 'promotion_readiness',
+            'salary correction': 'salary_correction',
+            'management discretion': 'management_discretion_pct', 'management discretion %': 'management_discretion_pct',
+            'one time reward': 'on_time_reward', 'one time reward': 'on_time_reward',
+            'reward amount': 'reward_amount',
+            'redesignation': 'redesignation', 're-designation': 'redesignation',
+            'revised ctc': 'revised_ctc',
+            'increment nt %': 'increment_nt_pct', 'increment nt': 'increment_nt_pct',
+            'increment on %': 'promotion_pct', 'increment on': 'promotion_pct',
+            'hike %': 'total_impact_pct', 'total hike %': 'total_impact_pct',
+            'fy 26-27 ctc': 'new_ctc', 'fy 26-27': 'new_ctc',
             'management score': 'management_score', 'mgt score': 'management_score', 'management score (0-100)': 'management_score',
-            'fy prev-1 score': 'fy_prev1_score', 'fy prev1 score': 'fy_prev1_score',
-            'fy prev-2 score': 'fy_prev2_score', 'fy prev2 score': 'fy_prev2_score',
             'manager remarks': 'manager_remarks',
             'hod remarks': 'hod_remarks',
-            'promotion readiness': 'promotion_readiness',
         }
 
         header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
@@ -254,25 +317,73 @@ class PMSImportView(APIView):
                 v = sf(val)
                 return None if v is None else max(0.0, min(100.0, v))
 
+            def parse_bool(val):
+                if val is None or str(val).strip() == '': return False
+                return str(val).lower().strip() in ('y', 'yes', 'true', '1')
+
+            def parse_date(val):
+                if val is None or str(val).strip() == '': return None
+                try:
+                    from datetime import datetime
+                    if isinstance(val, str):
+                        return datetime.strptime(val, '%Y-%m-%d').date()
+                    else:
+                        return val.date() if hasattr(val, 'date') else val
+                except:
+                    return None
+
             obj, was_created = PMSEmployee.objects.update_or_create(
                 employee_id=emp_id,
                 defaults={
                     'name': name,
                     'designation': str(data.get('designation') or '').strip(),
+                    'new_designation': str(data.get('new_designation') or '').strip(),
+                    'new_designation_type': str(data.get('new_designation_type') or '').strip(),
                     'department': str(data.get('department') or '').strip(),
                     'location': str(data.get('location') or '').strip(),
+                    'new_operational_location': str(data.get('new_operational_location') or '').strip(),
+                    'sub_category': str(data.get('sub_category') or '').strip(),
+                    'cost_centre': str(data.get('cost_centre') or '').strip(),
+                    'category': str(data.get('category') or '').strip(),
+                    'hq_location': str(data.get('hq_location') or '').strip(),
+                    'payroll_location': str(data.get('payroll_location') or '').strip(),
+                    'cadre': str(data.get('cadre') or '').strip(),
                     'band': str(data.get('band') or '').strip().upper()[:5],
+                    'level': str(data.get('level') or '').strip(),
                     'gender': str(data.get('gender') or '').strip(),
+                    'qualification': str(data.get('qualification') or '').strip(),
+                    'date_of_birth': parse_date(data.get('date_of_birth')),
+                    'date_of_joining': parse_date(data.get('date_of_joining')),
+                    'reporting_manager': str(data.get('reporting_manager') or '').strip(),
+                    'reporting_manager_id': str(data.get('reporting_manager_id') or '').strip(),
+                    'hod_name': str(data.get('hod_name') or '').strip(),
+                    'hod_id': str(data.get('hod_id') or '').strip(),
                     'fiscal_year': str(data.get('fiscal_year') or '2025-26').strip(),
+                    'fy_2223_ctc': sf(data.get('fy_2223_ctc')),
+                    'fy_2324_ctc': sf(data.get('fy_2324_ctc')),
+                    'fy_2425_ctc': sf(data.get('fy_2425_ctc')),
                     'current_ctc': sf(data.get('current_ctc'), 0) or 0,
+                    'fy_2223_growth_pct': sf(data.get('fy_2223_growth_pct')),
+                    'fy_2324_growth_pct': sf(data.get('fy_2324_growth_pct')),
+                    'fy_2425_growth_pct': sf(data.get('fy_2425_growth_pct')),
+                    'self_score': ss(data.get('self_score')),
                     'manager_score': ss(data.get('manager_score')),
                     'hod_score': ss(data.get('hod_score')),
+                    'fy_2223_grade': str(data.get('fy_2223_grade') or '').strip(),
+                    'fy_2324_grade': str(data.get('fy_2324_grade') or '').strip(),
+                    'fy_2425_grade': str(data.get('fy_2425_grade') or '').strip(),
+                    'last_promotion_year': int(data.get('last_promotion_year')) if data.get('last_promotion_year') else None,
                     'management_score': ss(data.get('management_score')),
-                    'fy_prev1_score': ss(data.get('fy_prev1_score')),
-                    'fy_prev2_score': ss(data.get('fy_prev2_score')),
+                    'promoted': parse_bool(data.get('promoted')),
+                    'promotion_pct': sf(data.get('promotion_pct'), 0) or 0,
+                    'redesignation': parse_bool(data.get('redesignation')),
+                    'on_time_reward': parse_bool(data.get('on_time_reward')),
+                    'reward_amount': sf(data.get('reward_amount'), 0) or 0,
+                    'management_discretion_pct': sf(data.get('management_discretion_pct'), 0) or 0,
+                    'salary_correction': sf(data.get('salary_correction'), 0) or 0,
+                    'promotion_readiness': str(data.get('promotion_readiness') or '').strip(),
                     'manager_remarks': str(data.get('manager_remarks') or '').strip(),
                     'hod_remarks': str(data.get('hod_remarks') or '').strip(),
-                    'promotion_readiness': str(data.get('promotion_readiness') or '').strip(),
                 }
             )
             created += was_created
@@ -297,71 +408,32 @@ class PMSEmployeeUpdateView(APIView):
         simulate = d.get('simulate_only', False)
         logs = []
 
-        def set_field(field, val, cast=str):
-            old = getattr(emp, field)
-            new = cast(val) if val not in (None, '', 'null') else (None if cast == float else '')
-            if str(old) != str(new):
-                logs.append({'field': field, 'old_value': str(old), 'new_value': str(new)})
-            setattr(emp, field, new)
+        fields_to_update = [
+            'manager_score', 'hod_score', 'management_score', 'override_increment_pct',
+            'override_grade', 'promoted', 'promotion_pct', 'management_discretion_pct',
+            'on_time_reward', 'reward_amount', 'promotion_readiness', 'notes',
+            'salary_correction', 'redesignation', 'self_score',
+        ]
 
-        if 'override_increment_pct' in d:
-            v = d['override_increment_pct']
-            new_v = float(v) if v not in (None, '', 'null') else None
-            if str(emp.override_increment_pct) != str(new_v):
-                logs.append({'field': 'override_increment_pct', 'old_value': str(emp.override_increment_pct), 'new_value': str(new_v)})
-            emp.override_increment_pct = new_v
+        for field in fields_to_update:
+            if field in d:
+                old_val = getattr(emp, field)
+                if field in ('promoted', 'redesignation', 'on_time_reward'):
+                    new_val = bool(d[field])
+                elif field in ('manager_score', 'hod_score', 'management_score', 'self_score'):
+                    v = d[field]
+                    new_val = float(v) if v not in (None, '', 'null') else None
+                    if new_val is not None:
+                        new_val = max(0.0, min(100.0, new_val))
+                elif field in ('override_increment_pct', 'promotion_pct', 'management_discretion_pct', 'salary_correction', 'reward_amount'):
+                    v = d[field]
+                    new_val = float(v) if v not in (None, '', 'null') else (0 if field in ('promotion_pct', 'management_discretion_pct', 'salary_correction', 'reward_amount') else None)
+                else:
+                    new_val = d[field]
 
-        if 'override_grade' in d:
-            v = d['override_grade'] or ''
-            if emp.override_grade != v:
-                logs.append({'field': 'override_grade', 'old_value': emp.override_grade, 'new_value': v})
-            emp.override_grade = v
-
-        if 'promoted' in d:
-            v = bool(d['promoted'])
-            if emp.promoted != v:
-                logs.append({'field': 'promoted', 'old_value': str(emp.promoted), 'new_value': str(v)})
-            emp.promoted = v
-
-        if 'promotion_pct' in d:
-            v = float(d['promotion_pct'] or 0)
-            if float(emp.promotion_pct) != v:
-                logs.append({'field': 'promotion_pct', 'old_value': str(emp.promotion_pct), 'new_value': str(v)})
-            emp.promotion_pct = v
-
-        if 'management_discretion_pct' in d:
-            v = float(d['management_discretion_pct'] or 0)
-            if float(emp.management_discretion_pct) != v:
-                logs.append({'field': 'management_discretion_pct', 'old_value': str(emp.management_discretion_pct), 'new_value': str(v)})
-            emp.management_discretion_pct = v
-
-        if 'on_time_reward' in d:
-            v = bool(d['on_time_reward'])
-            if emp.on_time_reward != v:
-                logs.append({'field': 'on_time_reward', 'old_value': str(emp.on_time_reward), 'new_value': str(v)})
-            emp.on_time_reward = v
-
-        if 'reward_amount' in d:
-            v = float(d['reward_amount'] or 0)
-            if float(emp.reward_amount) != v:
-                logs.append({'field': 'reward_amount', 'old_value': str(emp.reward_amount), 'new_value': str(v)})
-            emp.reward_amount = v
-
-        if 'management_score' in d:
-            v = d['management_score']
-            new_v = float(v) if v not in (None, '', 'null') else None
-            if str(emp.management_score) != str(new_v):
-                logs.append({'field': 'management_score', 'old_value': str(emp.management_score), 'new_value': str(new_v)})
-            emp.management_score = new_v
-
-        if 'promotion_readiness' in d:
-            v = d['promotion_readiness'] or ''
-            if emp.promotion_readiness != v:
-                logs.append({'field': 'promotion_readiness', 'old_value': emp.promotion_readiness, 'new_value': v})
-            emp.promotion_readiness = v
-
-        if 'notes' in d:
-            emp.notes = d['notes']
+                if str(old_val) != str(new_val):
+                    logs.append({'field': field, 'old_value': str(old_val), 'new_value': str(new_val)})
+                setattr(emp, field, new_val)
 
         if not simulate:
             emp.save()
@@ -381,55 +453,100 @@ class PMSTemplateView(APIView):
         ws.title = 'PMS Import'
 
         headers = [
-            'Employee ID *', 'Employee Name *', 'Designation', 'Department', 'Location',
-            'Band (D/C/M/O/W)', 'Gender', 'Fiscal Year', 'Current CTC (Annual INR) *',
-            'Manager Score (0-100)', 'HOD Score (0-100)', 'Management Score (0-100)',
-            'FY Prev-1 Score', 'FY Prev-2 Score',
+            'SR NO', 'Employee ID *', 'Employee Name *', 'Designation', 'New Designation',
+            'New Designation Type', 'Department', 'Location', 'New Operational Location',
+            'Sub Category', 'Cost Centre', 'Category', 'HQ Location', 'Payroll Location',
+            'Cadre', 'Band', 'Level', 'Gender', 'Qualification', 'DOB', 'Age', 'DOJ', 'Tenure (Years)',
+            'Reporting Manager', 'Report ID', 'HOD Name', 'HOD ID',
+            'Last Promotion (Year)',
+            'FY 22-23 CTC', 'FY 23-24 CTC', 'FY 24-25 CTC', 'FY 25-26 Current CTC *',
+            'FY 22-23 (%)', 'FY 23-24 (%)', 'FY 24-25 (%)',
+            'Self Score (0-100)', 'Manager Score (0-100)', 'HOD Score (0-100)',
+            'FY 22-23 Grade', 'FY 23-24 Grade', 'FY 24-25 Grade',
+            'Promotion (Y/N)', 'Promotion %', 'Redesignation', 'Promotion Readiness',
+            'One Time Reward', 'Reward Amount', 'Management Discretion %', 'Salary Correction',
             'Manager Remarks', 'HOD Remarks',
-            'Promotion Readiness (ready_now / 1_year / 2_years / not_ready)',
         ]
 
-        hf = PatternFill(start_color='4F46E5', end_color='4F46E5', fill_type='solid')
+        hf = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
+        hf_yellow = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+
         for ci, h in enumerate(headers, 1):
             c = ws.cell(row=1, column=ci, value=h)
-            c.fill = hf
-            c.font = Font(color='FFFFFF', bold=True, size=10)
+            is_required = '*' in h
+            is_new = 'New' in h or 'Operating' in h
+            c.fill = hf_yellow if is_new else hf
+            c.font = Font(color='FFFFFF' if not is_new else '000000', bold=True, size=9)
             c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
         samples = [
-            ['EMP001','Rahul Sharma','Sales Manager','Sales','Mumbai','M','Male','2025-26',720000,85,82,88,78,72,'Good performance','Strong team player','ready_now'],
-            ['EMP002','Priya Singh','Sr. Executive','Marketing','Delhi','O','Female','2025-26',480000,92,90,94,88,85,'Exceptional','Outstanding','1_year'],
-            ['EMP003','Amit Kumar','Associate','Operations','Chennai','W','Male','2025-26',300000,68,70,65,60,55,'Average','Meets targets','not_ready'],
+            [1, 'EMP001', 'Rahul Sharma', 'Sales Manager', 'Sr Sales Manager', 'STAT',
+             'Sales', 'Mumbai', 'Delhi NCR', 'Executive', 'CC001', 'CAT01', 'HQ Mumbai', 'Mumbai',
+             'M1', 'M', 'L2', 'Male', 'MBA', '1985-05-15', 38, '2015-06-01', 9,
+             'Rajesh Kumar', 'MGR001', 'Priya Singh', 'HOD001',
+             2024,
+             600000, 650000, 700000, 720000,
+             8, 7.7, 7.7,
+             82, 85, 88,
+             'B', 'B+', 'A',
+             'Yes', 8, 'No', '1_year',
+             'No', 0, 5, 0,
+             'Performing well', 'Strong leader'],
+            [2, 'EMP002', 'Priya Singh', 'Sr Executive', '', 'MANAGER',
+             'Marketing', 'Delhi', 'Delhi NCR', 'Executive', 'CC002', 'CAT01', 'HQ Delhi', 'Delhi',
+             'O1', 'O', 'L1', 'Female', 'B.Tech', '1992-08-22', 31, '2018-03-15', 7,
+             'Ramesh Gupta', 'MGR002', 'Amit Kumar', 'HOD002',
+             2022,
+             450000, 480000, 520000, 560000,
+             6.7, 8.3, 7.7,
+             88, 92, 90,
+             'A', 'A', 'A+',
+             'Yes', 10, 'Yes', 'ready_now',
+             'Yes', 50000, 8, 0,
+             'Excellent performance', 'Promotion ready'],
+            [3, 'EMP003', 'Amit Kumar', 'Associate', '', '',
+             'Operations', 'Chennai', '', 'Junior', 'CC003', 'CAT02', 'HQ Chennai', 'Chennai',
+             'W1', 'W', 'L3', 'Male', 'B.Sc', '1998-12-10', 25, '2022-01-10', 2,
+             'Vikram Singh', 'MGR003', 'Deepak Nair', 'HOD003',
+             None,
+             250000, 280000, 300000, 320000,
+             12, 7.1, 7.1,
+             65, 68, 70,
+             'C', 'B', 'B',
+             'No', 0, 'No', 'not_ready',
+             'No', 0, 0, 0,
+             'Adequate performance', 'New employee'],
         ]
+
         for ri, row in enumerate(samples, 2):
             for ci, val in enumerate(row, 1):
                 ws.cell(row=ri, column=ci, value=val)
 
         ws2 = wb.create_sheet('Grade Guide')
         guide = [
-            ['Grade','Score Range','Label','Increment %','Promotion %'],
-            ['A+','≥ 106%','Exceptional','12–15%','10%'],
-            ['A','95–100%','Outstanding','10–12%','8%'],
-            ['B+','85–94%','Exceeds Target','7–10%','6%'],
-            ['B','65–84%','Meets Target','4–7%','4%'],
-            ['C','51–64%','Near Target','0–4%','0%'],
-            ['D','<50%','Needs Improvement','2%','0%'],
+            ['Grade', 'Score Range', 'Label', 'Increment %', 'Promotion %'],
+            ['A+', '≥ 106%', 'Exceptional', '12–15%', '10%'],
+            ['A', '95–100%', 'Outstanding', '10–12%', '8%'],
+            ['B+', '85–94%', 'Exceeds Target', '7–10%', '6%'],
+            ['B', '65–84%', 'Meets Target', '4–7%', '4%'],
+            ['C', '51–64%', 'Near Target', '0–4%', '0%'],
+            ['D', '<50%', 'Needs Improvement', '2%', '0%'],
         ]
         for ri, row in enumerate(guide, 1):
             for ci, val in enumerate(row, 1):
                 c = ws2.cell(row=ri, column=ci, value=val)
                 if ri == 1: c.font = Font(bold=True)
 
-        widths = [14,22,18,16,14,18,10,12,22,20,18,22,14,14,28,22,40]
-        for ci, w in enumerate(widths, 1):
+        widths = [8, 14, 18, 16, 16, 18, 14, 12, 20, 16, 12, 12, 16, 16, 10, 8, 8, 10, 14, 14, 10, 12, 14, 18, 12, 12, 10, 14, 14, 14, 16, 14, 14, 14, 16, 16, 16, 14, 14, 14, 14, 12, 12, 12, 16, 16, 16, 18, 18, 20, 20]
+        for ci, w in enumerate(widths[:len(headers)], 1):
             ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = w
-        ws.row_dimensions[1].height = 44
+        ws.row_dimensions[1].height = 55
 
         buf = io.BytesIO()
         wb.save(buf)
         buf.seek(0)
         resp = HttpResponse(buf.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        resp['Content-Disposition'] = 'attachment; filename="PMS_Import_Template.xlsx"'
+        resp['Content-Disposition'] = 'attachment; filename="PMS_Complete_Template.xlsx"'
         return resp
 
 
@@ -443,30 +560,41 @@ class PMSExportView(APIView):
         ws = wb.active
         ws.title = 'PMS Results'
 
-        headers = ['Emp ID','Name','Designation','Department','Band','Current CTC','Mgr Score','HOD Score','Mgt Score','Final Score','Grade','Label','Increment %','Increment Amt','New CTC','Promoted','Reward','Notes']
-        hf = PatternFill(start_color='4F46E5', end_color='4F46E5', fill_type='solid')
+        headers = [
+            'Emp ID', 'Name', 'Designation', 'Department', 'Band', 'Location',
+            'Current CTC', 'Mgr Score', 'HOD Score', 'Mgt Score', 'Final Score',
+            'Grade', 'Label', 'Increment %', 'Increment Amt', 'Promotion %',
+            'Promotion Amt', 'Mgmt Discretion %', 'Mgmt Discretion Amt',
+            'New CTC', 'New CTC (Monthly)', 'Promoted', 'Redesignation', 'Reward',
+            'Promotion Readiness', 'Notes'
+        ]
+
+        hf = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
         for ci, h in enumerate(headers, 1):
             c = ws.cell(row=1, column=ci, value=h)
-            c.fill = hf; c.font = Font(color='FFFFFF', bold=True)
+            c.fill = hf
+            c.font = Font(color='FFFFFF', bold=True)
             c.alignment = Alignment(horizontal='center')
 
         for ri, e in enumerate(employees, 2):
             for ci, val in enumerate([
-                e.employee_id, e.name, e.designation, e.department, e.band,
+                e.employee_id, e.name, e.designation, e.department, e.band, e.location,
                 float(e.current_ctc),
                 float(e.manager_score) if e.manager_score else '',
                 float(e.hod_score) if e.hod_score else '',
                 float(e.management_score) if e.management_score else '',
                 e.final_score, e.effective_grade, e.grade_config['label'],
-                e.effective_increment_pct, e.increment_amount, e.new_ctc,
-                'Yes' if e.promoted else 'No',
-                'Yes' if e.on_time_reward else 'No',
-                e.notes,
+                e.effective_increment_pct, e.increment_amount, float(e.promotion_pct),
+                e.promotion_amount, float(e.management_discretion_pct),
+                e.management_discretion_amount, e.new_ctc, e.new_ctc_monthly,
+                'Yes' if e.promoted else 'No', 'Yes' if e.redesignation else 'No',
+                'Yes' if e.on_time_reward else 'No', e.promotion_readiness, e.notes,
             ], 1):
                 ws.cell(row=ri, column=ci, value=val)
 
         buf = io.BytesIO()
-        wb.save(buf); buf.seek(0)
+        wb.save(buf)
+        buf.seek(0)
         resp = HttpResponse(buf.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        resp['Content-Disposition'] = 'attachment; filename="PMS_Results.xlsx"'
+        resp['Content-Disposition'] = 'attachment; filename="PMS_Results_Complete.xlsx"'
         return resp
