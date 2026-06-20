@@ -1,6 +1,9 @@
 """PMS views — comprehensive HR data management with full Excel support."""
 import io
+import random
 import openpyxl
+from django.core.mail import send_mail
+from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -598,3 +601,63 @@ class PMSExportView(APIView):
         resp = HttpResponse(buf.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         resp['Content-Disposition'] = 'attachment; filename="PMS_Results_Complete.xlsx"'
         return resp
+
+
+class PMSLoginView(APIView):
+    """PMS Admin login with OTP via email."""
+
+    def post(self, request):
+        action = request.data.get('action')
+        email = request.data.get('email', '').lower().strip()
+
+        if not email or '@' not in email:
+            return Response({'error': 'Invalid email address'}, status=400)
+
+        if action == 'send_otp':
+            # Generate 4-digit OTP
+            otp = str(random.randint(1000, 9999))
+
+            # Store OTP in session (in production, use Redis or database)
+            request.session[f'pms_otp_{email}'] = otp
+            request.session.set_expiry(300)  # 5 minutes expiry
+
+            # Send email
+            try:
+                send_mail(
+                    subject='PMS Simulator - Verification Code',
+                    message=f'Your PMS Simulator verification code is: {otp}\n\nThis code will expire in 5 minutes.',
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[email],
+                    fail_silently=False,
+                )
+                return Response({
+                    'success': True,
+                    'message': f'OTP sent to {email}',
+                    'note': 'Check your email for the verification code'
+                })
+            except Exception as e:
+                return Response({
+                    'error': f'Failed to send email: {str(e)}',
+                    'note': 'Demo mode: OTP is 1234'
+                }, status=500)
+
+        elif action == 'verify_otp':
+            otp = request.data.get('otp', '').strip()
+            stored_otp = request.session.get(f'pms_otp_{email}')
+
+            if not stored_otp:
+                return Response({'error': 'OTP expired or not found. Request a new one.'}, status=400)
+
+            if otp == stored_otp:
+                # OTP verified - set session token
+                request.session[f'pms_admin_{email}'] = True
+                del request.session[f'pms_otp_{email}']
+                return Response({
+                    'success': True,
+                    'message': 'Verified successfully!',
+                    'token': email
+                })
+            else:
+                return Response({'error': 'Invalid OTP'}, status=400)
+
+        return Response({'error': 'Invalid action'}, status=400)
