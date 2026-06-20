@@ -16,52 +16,112 @@ GRADE_META = {
 
 
 class PMSEmployee(models.Model):
-    # ── Identity ──────────────────────────────────────────────────────────────
+    # ── Identity & Personal ──────────────────────────────────────────────────────
     employee_id  = models.CharField(max_length=50, unique=True)
     name         = models.CharField(max_length=200)
+    gender       = models.CharField(max_length=20, blank=True)
+    qualification = models.CharField(max_length=200, blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    date_of_joining = models.DateField(null=True, blank=True)
+
+    # ── Designation & Organization ──────────────────────────────────────────────
     designation  = models.CharField(max_length=200, blank=True)
-    cadre        = models.CharField(max_length=50, blank=True)   # e.g. M1, M2, O1, W1
-    band         = models.CharField(max_length=10, blank=True)   # D/C/M/O/W
+    new_designation = models.CharField(max_length=200, blank=True)
+    new_designation_type = models.CharField(max_length=100, blank=True)
+    cadre        = models.CharField(max_length=50, blank=True)
+    band         = models.CharField(max_length=10, blank=True)
+    level        = models.CharField(max_length=10, blank=True)
     department   = models.CharField(max_length=200, blank=True)
     business     = models.CharField(max_length=200, blank=True)
     location     = models.CharField(max_length=200, blank=True)
-    gender       = models.CharField(max_length=20, blank=True)
-    fiscal_year  = models.CharField(max_length=20, blank=True, default='2025-26')
+    payroll_location = models.CharField(max_length=200, blank=True)
+    new_operational_location = models.CharField(max_length=200, blank=True)
+    sub_category = models.CharField(max_length=100, blank=True)
+    cost_centre  = models.CharField(max_length=100, blank=True)
+    category     = models.CharField(max_length=100, blank=True)
+    hq_location  = models.CharField(max_length=200, blank=True)
 
-    # ── CTC ───────────────────────────────────────────────────────────────────
+    # ── Reporting ───────────────────────────────────────────────────────────────
+    reporting_manager = models.CharField(max_length=200, blank=True)
+    reporting_manager_id = models.CharField(max_length=50, blank=True)
+    hod_name     = models.CharField(max_length=200, blank=True)
+    hod_id       = models.CharField(max_length=50, blank=True)
+
+    # ── CTC History ──────────────────────────────────────────────────────────────
+    fy_2223_ctc  = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    fy_2324_ctc  = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    fy_2425_ctc  = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     current_ctc  = models.DecimalField(max_digits=14, decimal_places=2, default=0)
 
-    # ── Scores (each out of 100) ───────────────────────────────────────────────
-    manager_score    = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
-    hod_score        = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    # ── CTC Growth % ─────────────────────────────────────────────────────────────
+    fy_2223_growth_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    fy_2324_growth_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    fy_2425_growth_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    # ── Performance Scores ───────────────────────────────────────────────────────
+    self_score   = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    manager_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    hod_score    = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     management_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
 
-    # ── Prior year GRADES for trend (A+/A/B+/B/C/D) ───────────────────────────
-    fy_prev1_grade = models.CharField(max_length=5, blank=True)  # last year grade
-    fy_prev2_grade = models.CharField(max_length=5, blank=True)  # 2 years ago grade
+    # ── Grade History ────────────────────────────────────────────────────────────
+    fy_2223_grade = models.CharField(max_length=5, blank=True)
+    fy_2324_grade = models.CharField(max_length=5, blank=True)
+    fy_2425_grade = models.CharField(max_length=5, blank=True)
 
-    # ── Remarks ───────────────────────────────────────────────────────────────
+    # ── Career Actions ──────────────────────────────────────────────────────────
+    last_promotion_year = models.IntegerField(null=True, blank=True)
+    promoted     = models.BooleanField(default=False)
+    promotion_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    redesignation = models.BooleanField(default=False)
+    on_time_reward = models.BooleanField(default=False)
+    reward_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    management_discretion_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    promotion_readiness = models.CharField(max_length=20, blank=True)
+
+    # ── Other ────────────────────────────────────────────────────────────────────
+    salary_correction = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    fiscal_year = models.CharField(max_length=20, blank=True, default='2025-26')
+
+    # ── Simulation overrides ────────────────────────────────────────────────────
+    override_increment_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    override_grade = models.CharField(max_length=5, blank=True)
+
+    # ── Remarks ──────────────────────────────────────────────────────────────────
     manager_remarks = models.TextField(blank=True)
-    hod_remarks     = models.TextField(blank=True)
+    hod_remarks = models.TextField(blank=True)
+    notes = models.TextField(blank=True)
 
-    # ── Simulation overrides ───────────────────────────────────────────────────
-    override_increment_pct      = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
-    override_grade              = models.CharField(max_length=5, blank=True)
-    promoted                    = models.BooleanField(default=False)
-    promotion_pct               = models.DecimalField(max_digits=5, decimal_places=2, default=0)  # % of current CTC
-    on_time_reward              = models.BooleanField(default=False)
-    reward_amount               = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    management_discretion_pct   = models.DecimalField(max_digits=5, decimal_places=2, default=0)  # % added directly
-    promotion_readiness         = models.CharField(max_length=20, blank=True)  # ready_now/1_year/2_years/not_ready
-    notes                       = models.TextField(blank=True)
-    created_at                  = models.DateTimeField(auto_now_add=True)
-    updated_at                  = models.DateTimeField(auto_now=True)
+    # ── Timestamps ──────────────────────────────────────────────────────────────
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['department', 'name']
 
     def __str__(self):
         return f"{self.name} ({self.employee_id})"
+
+    # ── Calculated properties ──────────────────────────────────────────────────
+    @property
+    def age(self):
+        if not self.date_of_birth:
+            return None
+        from datetime import date
+        today = date.today()
+        return today.year - self.date_of_birth.year - (
+            (today.month, today.day) < (self.date_of_birth.month, self.date_of_birth.day)
+        )
+
+    @property
+    def tenure_years(self):
+        if not self.date_of_joining:
+            return None
+        from datetime import date
+        today = date.today()
+        return today.year - self.date_of_joining.year - (
+            (today.month, today.day) < (self.date_of_joining.month, self.date_of_joining.day)
+        )
 
     # ── Score & Grade ──────────────────────────────────────────────────────────
     @property
