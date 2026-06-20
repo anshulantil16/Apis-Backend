@@ -54,6 +54,7 @@ def serialize_emp(e):
         'self_score': float(e.self_score) if e.self_score is not None else None,
         'manager_score': float(e.manager_score) if e.manager_score is not None else None,
         'hod_score': float(e.hod_score) if e.hod_score is not None else None,
+        'management_score': float(e.management_score) if e.management_score is not None else None,
         'fy_2223_grade': e.fy_2223_grade,
         'fy_2324_grade': e.fy_2324_grade,
         'fy_2425_grade': e.fy_2425_grade,
