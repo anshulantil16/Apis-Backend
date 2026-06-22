@@ -46,6 +46,7 @@ class PMSEmployee(models.Model):
     reporting_manager_id = models.CharField(max_length=50, blank=True)
     hod_name     = models.CharField(max_length=200, blank=True)
     hod_id       = models.CharField(max_length=50, blank=True)
+    span_of_control = models.IntegerField(null=True, blank=True)
 
     # ── CTC History ──────────────────────────────────────────────────────────────
     fy_2223_ctc  = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
