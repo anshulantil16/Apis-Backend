@@ -113,7 +113,7 @@ class EOMVerifyOTPView(APIView):
         token.is_used = True
         token.save()
 
-        # Detect roles based on user_type
+        # Detect roles based on user_type and flags
         detected_roles = []
         user_type = emp.user_type.lower()
 
@@ -123,8 +123,8 @@ class EOMVerifyOTPView(APIView):
         # HOD: if user_type contains 'hod' OR someone lists them as their HOD ID
         elif 'hod' in user_type:
             detected_roles.append('hod')
-        # Panel: if user_type contains 'panel'
-        if 'panel' in user_type:
+        # Panel: if is_panel_member flag is True OR user_type contains 'panel'
+        if emp.is_panel_member or 'panel' in user_type:
             detected_roles.append('panel')
         # HR: if user_type is 'hr'
         if user_type == 'hr':
