@@ -16,7 +16,7 @@ from .views.hr_views import (
     CycleListCreateView, CycleUpdateView,
     HRFinalizeReviewView, OrgOverviewView,
     LeaderboardView, AllGoalCardsView, AllReviewsView,
-    ResetDatabaseView,
+    ReopenFormView, ResetDatabaseView,
 )
 from .views.progress_views import (
     GoalProgressView, EmployeeProgressReportView,
@@ -64,6 +64,7 @@ urlpatterns = [
     path('cycles/', CycleListCreateView.as_view()),
     path('cycles/<int:cycle_id>/', CycleUpdateView.as_view()),
     path('reviews/<int:review_id>/hr-finalize/', HRFinalizeReviewView.as_view()),
+    path('goal-cards/<int:gc_id>/reopen/', ReopenFormView.as_view()),
     path('org/overview/', OrgOverviewView.as_view()),
     path('org/analytics/', OrgAnalyticsView.as_view()),
     path('leaderboard/', LeaderboardView.as_view()),
