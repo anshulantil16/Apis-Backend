@@ -188,6 +188,43 @@ class EOMCycleUpdateView(APIView):
         return Response(s.errors, status=400)
 
 
+class EOMPanelMembersView(APIView):
+    """POST /api/eom/cycles/<cycle_id>/panel-members/ — Set panel members for this cycle"""
+
+    def post(self, request, cycle_id):
+        try:
+            cycle = EOMCycle.objects.get(id=cycle_id)
+        except EOMCycle.DoesNotExist:
+            return Response({'error': 'Cycle not found.'}, status=404)
+
+        panel_member_ids = request.data.get('panel_members', [])
+        if not panel_member_ids:
+            return Response({'error': 'No panel members provided.'}, status=400)
+
+        try:
+            # Clear existing panel members for this cycle
+            EOMEmployee.objects.filter(is_panel_member=True).update(is_panel_member=False)
+
+            # Set new panel members
+            for emp_id in panel_member_ids:
+                emp = EOMEmployee.objects.get(employee_id=emp_id)
+                emp.is_panel_member = True
+                emp.save()
+
+            panel_emps = EOMEmployee.objects.filter(employee_id__in=panel_member_ids)
+            return Response({
+                'message': f'Panel members set successfully for {cycle.name}',
+                'panel_members': [
+                    {'employee_id': e.employee_id, 'name': e.name}
+                    for e in panel_emps
+                ]
+            })
+        except EOMEmployee.DoesNotExist:
+            return Response({'error': 'One or more employees not found.'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+
 # ── Nominations ──────────────────────────────────────────────────────────────
 
 class EOMAllNominationsView(APIView):
