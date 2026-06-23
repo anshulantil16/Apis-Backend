@@ -357,47 +357,8 @@ class PMSImportView(APIView):
                     if val is None or str(val).strip() == '': return False
                     return str(val).lower().strip() in ('y', 'yes', 'true', '1')
 
-                def parse_date(val):
-                    if val is None or str(val).strip() == '': return None
-                    try:
-                        from datetime import datetime, date
-                        # If already a date object, return it
-                        if isinstance(val, date) and not isinstance(val, datetime):
-                            return val
-                        # If it's a datetime object, extract date
-                        if isinstance(val, datetime):
-                            return val.date()
-                        # Parse string dates - try multiple formats
-                        if isinstance(val, str):
-                            val_str = val.strip()
-                            for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', '%Y/%m/%d', '%d/%m/%Y'):
-                                try:
-                                    return datetime.strptime(val_str, fmt).date()
-                                except:
-                                    continue
-                        return None
-                    except Exception as e:
-                        return None
-
-                try:
-                    dob = parse_date(data.get('date_of_birth'))
-                except Exception as dob_err:
-                    return Response({
-                        'error': 'File format error',
-                        'detail': f'Error parsing date_of_birth: {str(dob_err)}',
-                        'row': row_idx,
-                        'value': data.get('date_of_birth')
-                    }, status=400)
-
-                try:
-                    doj = parse_date(data.get('date_of_joining'))
-                except Exception as doj_err:
-                    return Response({
-                        'error': 'File format error',
-                        'detail': f'Error parsing date_of_joining: {str(doj_err)}',
-                        'row': row_idx,
-                        'value': data.get('date_of_joining')
-                    }, status=400)
+                dob_val = data.get('date_of_birth')
+                doj_val = data.get('date_of_joining')
 
                 obj, was_created = PMSEmployee.objects.update_or_create(
                     employee_id=emp_id,
@@ -419,8 +380,8 @@ class PMSImportView(APIView):
                         'level': str(data.get('level') or '').strip(),
                         'gender': str(data.get('gender') or '').strip(),
                         'qualification': str(data.get('qualification') or '').strip(),
-                        'date_of_birth': dob,
-                        'date_of_joining': doj,
+                        'date_of_birth': dob_val if dob_val and str(dob_val).strip() else None,
+                        'date_of_joining': doj_val if doj_val and str(doj_val).strip() else None,
                         'reporting_manager': str(data.get('reporting_manager') or '').strip(),
                         'reporting_manager_id': str(data.get('reporting_manager_id') or '').strip(),
                         'hod_name': str(data.get('hod_name') or '').strip(),
