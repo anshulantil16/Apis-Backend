@@ -359,6 +359,11 @@ class PMSImportView(APIView):
                 if not any(row):
                     continue
                 data = {field: row[ci] for field, ci in col_map.items() if ci < len(row)}
+                if row_idx == 2:  # Log first data row for debugging
+                    import sys
+                    print(f"DEBUG ROW 2: col_map keys={list(col_map.keys())}", file=sys.stderr)
+                    print(f"DEBUG ROW 2: date_of_birth in data={('date_of_birth' in data)}, value={data.get('date_of_birth')}", file=sys.stderr)
+                    print(f"DEBUG ROW 2: date_of_joining in data={('date_of_joining' in data)}, value={data.get('date_of_joining')}", file=sys.stderr)
                 emp_id = str(data.get('employee_id') or '').strip()
                 name   = str(data.get('name') or '').strip()
                 if not emp_id or not name:
