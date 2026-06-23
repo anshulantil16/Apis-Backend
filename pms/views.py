@@ -218,20 +218,19 @@ class PMSImportView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'error': 'No file provided.'}, status=400)
         try:
-            file = request.FILES.get('file')
-            if not file:
-                return Response({'error': 'No file provided.'}, status=400)
-            try:
-                wb = openpyxl.load_workbook(file, data_only=True)
-                ws = wb.active
-            except Exception as e:
-                return Response({'error': f'Cannot read file: {str(e)}'}, status=400)
+            wb = openpyxl.load_workbook(file, data_only=True)
+            ws = wb.active
+        except Exception as e:
+            return Response({'error': f'Cannot read file: {str(e)}'}, status=400)
 
         HEADER_ALIASES = {
-            'sr no': 'sr_no', 'sr. no': 'sr_no', 'sno': 'sr_no',
-            'employee id': 'employee_id', 'emp id': 'employee_id', 'empid': 'employee_id', 'er no': 'employee_id', 'employee id *': 'employee_id',
-            'employee name': 'name', 'name': 'name', 'employee name *': 'name',
+        'sr no': 'sr_no', 'sr. no': 'sr_no', 'sno': 'sr_no',
+        'employee id': 'employee_id', 'emp id': 'employee_id', 'empid': 'employee_id', 'er no': 'employee_id', 'employee id *': 'employee_id',
+        'employee name': 'name', 'name': 'name', 'employee name *': 'name',
             'designation': 'designation', 'current designation': 'designation',
             'new designation': 'new_designation', 're-designation': 'new_designation', 're designation': 'new_designation', 'redesignation': 'new_designation',
             'type': 'new_designation_type', 'new designation type': 'new_designation_type', 'new employee type': 'new_designation_type',
@@ -414,19 +413,12 @@ class PMSImportView(APIView):
             created += was_created
             updated += not was_created
 
-            employees = list(PMSEmployee.objects.all())
-            return Response({
-                'message': f'✅ Import complete! {created} new employees added, {updated} updated.',
-                'created': created, 'updated': updated, 'errors': errors,
-                'total': len(employees), 'summary': build_summary(employees),
-            })
-        except Exception as e:
-            import traceback
-            return Response({
-                'error': 'Import failed',
-                'detail': str(e),
-                'traceback': traceback.format_exc()
-            }, status=500)
+        employees = list(PMSEmployee.objects.all())
+        return Response({
+            'message': f'✅ Import complete! {created} new employees added, {updated} updated.',
+            'created': created, 'updated': updated, 'errors': errors,
+            'total': len(employees), 'summary': build_summary(employees),
+        })
 
 
 class PMSEmployeeUpdateView(APIView):
