@@ -335,26 +335,32 @@ class PMSImportView(APIView):
             errors = []
 
             def format_date(val):
-                if val is None or str(val).strip() == '':
+                if val is None:
                     return None
                 from datetime import datetime, date
+
+                val_str = str(val).strip()
+                if not val_str or val_str.lower() in ('none', 'null', 'nan', '00:00:00'):
+                    return None
+
                 # If it's a date/datetime object from Excel
                 if isinstance(val, date) and not isinstance(val, datetime):
                     return val.isoformat()
                 if isinstance(val, datetime):
                     return val.date().isoformat()
+
                 # If it's a string, try to parse various date formats
-                val_str = str(val).strip().strip('"').strip("'")  # Remove surrounding quotes
-                if not val_str or val_str == '00:00:00':
-                    return None
+                val_str = val_str.strip('"').strip("'")  # Remove surrounding quotes
+
                 # Try parsing DD/MM/YYYY format first (most common in India)
                 for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%Y/%m/%d', '%d/%m/%y', '%d-%m-%y']:
                     try:
                         parsed_date = datetime.strptime(val_str, fmt).date()
                         return parsed_date.isoformat()
-                    except ValueError:
+                    except (ValueError, TypeError):
                         continue
-                # If no format matched, return None instead of invalid string
+
+                # If no format matched, return None
                 return None
 
             for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
