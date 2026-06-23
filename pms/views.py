@@ -360,12 +360,23 @@ class PMSImportView(APIView):
                 def parse_date(val):
                     if val is None or str(val).strip() == '': return None
                     try:
-                        from datetime import datetime
+                        from datetime import datetime, date
+                        # If already a date object, return it
+                        if isinstance(val, date) and not isinstance(val, datetime):
+                            return val
+                        # If it's a datetime object, extract date
+                        if isinstance(val, datetime):
+                            return val.date()
+                        # Parse string dates - try multiple formats
                         if isinstance(val, str):
-                            return datetime.strptime(val, '%Y-%m-%d').date()
-                        else:
-                            return val.date() if hasattr(val, 'date') else val
-                    except:
+                            val_str = val.strip()
+                            for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', '%Y/%m/%d', '%d/%m/%Y'):
+                                try:
+                                    return datetime.strptime(val_str, fmt).date()
+                                except:
+                                    continue
+                        return None
+                    except Exception as e:
                         return None
 
                 obj, was_created = PMSEmployee.objects.update_or_create(
