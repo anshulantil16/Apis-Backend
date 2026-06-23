@@ -340,26 +340,21 @@ class PMSImportView(APIView):
                 from datetime import datetime, date
                 # If it's a date/datetime object from Excel
                 if isinstance(val, date) and not isinstance(val, datetime):
-                    print(f"[format_date] Converting date object to ISO: {val} -> {val.isoformat()}")
                     return val.isoformat()
                 if isinstance(val, datetime):
-                    iso = val.date().isoformat()
-                    print(f"[format_date] Converting datetime object to ISO: {val} -> {iso}")
-                    return iso
+                    return val.date().isoformat()
                 # If it's a string, try to parse various date formats
-                val_str = str(val).strip()
-                print(f"[format_date] Parsing string: '{val_str}'")
+                val_str = str(val).strip().strip('"').strip("'")  # Remove surrounding quotes
+                if not val_str:
+                    return None
                 # Try parsing DD/MM/YYYY format first (most common in India)
-                for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%Y/%m/%d']:
+                for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%Y/%m/%d', '%d/%m/%y', '%d-%m-%y']:
                     try:
                         parsed_date = datetime.strptime(val_str, fmt).date()
-                        result = parsed_date.isoformat()
-                        print(f"[format_date] SUCCESS with format {fmt}: '{val_str}' -> '{result}'")
-                        return result
+                        return parsed_date.isoformat()
                     except ValueError:
                         continue
                 # If no format matched, return as-is and let Django validate
-                print(f"[format_date] NO FORMAT MATCHED for '{val_str}', returning as-is")
                 return val_str
 
             for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
