@@ -334,6 +334,27 @@ class PMSImportView(APIView):
             created = updated = 0
             errors = []
 
+            def format_date(val):
+                if val is None or str(val).strip() == '':
+                    return None
+                from datetime import datetime, date
+                # If it's a date/datetime object from Excel
+                if isinstance(val, date) and not isinstance(val, datetime):
+                    return val.isoformat()
+                if isinstance(val, datetime):
+                    return val.date().isoformat()
+                # If it's a string, try to parse various date formats
+                val_str = str(val).strip()
+                # Try parsing DD/MM/YYYY format first (most common in India)
+                for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%Y/%m/%d']:
+                    try:
+                        parsed_date = datetime.strptime(val_str, fmt).date()
+                        return parsed_date.isoformat()
+                    except ValueError:
+                        continue
+                # If no format matched, return as-is and let Django validate
+                return val_str
+
             for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
                 if not any(row):
                     continue
@@ -359,31 +380,6 @@ class PMSImportView(APIView):
 
                 dob_val = data.get('date_of_birth')
                 doj_val = data.get('date_of_joining')
-
-                def format_date(val):
-                    if val is None or str(val).strip() == '':
-                        return None
-                    from datetime import datetime, date
-                    # If it's a date/datetime object from Excel
-                    if isinstance(val, date) and not isinstance(val, datetime):
-                        return val.isoformat()
-                    if isinstance(val, datetime):
-                        return val.date().isoformat()
-                    # If it's a string, try to parse various date formats
-                    val_str = str(val).strip()
-                    print(f"DEBUG: Trying to parse date string: '{val_str}'")
-                    # Try parsing DD/MM/YYYY format first (most common in India)
-                    for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%Y/%m/%d']:
-                        try:
-                            parsed_date = datetime.strptime(val_str, fmt).date()
-                            print(f"DEBUG: Successfully parsed '{val_str}' as {parsed_date.isoformat()}")
-                            return parsed_date.isoformat()
-                        except ValueError as e:
-                            print(f"DEBUG: Failed format {fmt}: {e}")
-                            continue
-                    # If no format matched, return as-is and let Django validate
-                    print(f"DEBUG: No format matched for '{val_str}', returning as-is")
-                    return val_str
 
                 dob_val = format_date(dob_val)
                 doj_val = format_date(doj_val)
