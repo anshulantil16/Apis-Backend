@@ -299,22 +299,31 @@ class PMSImportView(APIView):
         header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
         col_map = {}
         unmapped_headers = []
+        header_mapping_debug = {}
+
         for ci, cell in enumerate(header_row):
             if cell is None:
                 continue
-            key = str(cell).strip().lower().replace('*', '').strip()
+            raw_header = str(cell).strip()
+            key = raw_header.lower().replace('*', '').strip()
             field = HEADER_ALIASES.get(key)
+            header_mapping_debug[raw_header] = {'normalized': key, 'mapped_to': field, 'col_index': ci}
             if field:
                 col_map[field] = ci
             else:
-                unmapped_headers.append((ci, str(cell)))
+                unmapped_headers.append((ci, raw_header))
 
         if not col_map.get('employee_id') or not col_map.get('name'):
             return Response({
                 'error': 'File format error',
                 'detail': 'Missing required columns: Employee ID * and Employee Name *',
                 'found_headers': [h for _, h in unmapped_headers[:10]],
-                'mapped_fields': list(col_map.keys())
+                'mapped_fields': list(col_map.keys()),
+                'debug': {
+                    'total_columns': len(header_row),
+                    'header_mapping_sample': {k: v for k, v in list(header_mapping_debug.items())[:5]},
+                    'unmapped_count': len(unmapped_headers)
+                }
             }, status=400)
 
         created = updated = 0
