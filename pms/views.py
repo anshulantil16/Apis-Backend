@@ -339,18 +339,16 @@ class PMSImportView(APIView):
                     return None
                 from datetime import datetime, date
 
-                val_str = str(val).strip()
-                if not val_str or val_str.lower() in ('none', 'null', 'nan', '00:00:00'):
-                    return None
-
                 # If it's a date/datetime object from Excel
                 if isinstance(val, date) and not isinstance(val, datetime):
                     return val.isoformat()
                 if isinstance(val, datetime):
                     return val.date().isoformat()
 
-                # If it's a string, try to parse various date formats
-                val_str = val_str.strip('"').strip("'")  # Remove surrounding quotes
+                # Convert to string and check for empty/invalid values
+                val_str = str(val).strip().strip('"').strip("'")
+                if not val_str or val_str.lower() in ('none', 'null', 'nan', '00:00:00'):
+                    return None
 
                 # Try parsing DD/MM/YYYY format first (most common in India)
                 for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%Y/%m/%d', '%d/%m/%y', '%d-%m-%y']:
@@ -360,7 +358,7 @@ class PMSImportView(APIView):
                     except (ValueError, TypeError):
                         continue
 
-                # If no format matched, return None
+                # If no format matched, return None (don't pass invalid date strings)
                 return None
 
             for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
