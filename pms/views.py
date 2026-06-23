@@ -228,7 +228,7 @@ class PMSImportView(APIView):
             except Exception as e:
                 return Response({'error': f'Cannot read file: {str(e)}'}, status=400)
 
-        HEADER_ALIASES = {
+            HEADER_ALIASES = {
             'sr no': 'sr_no',
             'employee id': 'employee_id', 'employee id *': 'employee_id',
             'employee name': 'name', 'employee name *': 'name',
@@ -299,132 +299,132 @@ class PMSImportView(APIView):
             'management score': 'management_score',
             'manager remarks': 'manager_remarks',
             'hod remarks': 'hod_remarks',
-        }
+            }
 
-        header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
-        col_map = {}
-        unmapped_headers = []
-        header_mapping_debug = {}
+            header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+            col_map = {}
+            unmapped_headers = []
+            header_mapping_debug = {}
 
-        for ci, cell in enumerate(header_row):
-            if cell is None:
-                continue
-            raw_header = str(cell).strip()
-            key = raw_header.lower().replace('*', '').strip()
-            field = HEADER_ALIASES.get(key)
-            header_mapping_debug[raw_header] = {'normalized': key, 'mapped_to': field, 'col_index': ci}
-            if field:
-                col_map[field] = ci
-            else:
-                unmapped_headers.append((ci, raw_header))
+            for ci, cell in enumerate(header_row):
+                if cell is None:
+                    continue
+                raw_header = str(cell).strip()
+                key = raw_header.lower().replace('*', '').strip()
+                field = HEADER_ALIASES.get(key)
+                header_mapping_debug[raw_header] = {'normalized': key, 'mapped_to': field, 'col_index': ci}
+                if field:
+                    col_map[field] = ci
+                else:
+                    unmapped_headers.append((ci, raw_header))
 
-        if not col_map.get('employee_id') or not col_map.get('name'):
-            return Response({
-                'error': 'File format error',
-                'detail': 'Missing required columns: Employee ID * and Employee Name *',
-                'found_headers': [h for _, h in unmapped_headers[:10]],
-                'mapped_fields': list(col_map.keys()),
-                'debug': {
-                    'total_columns': len(header_row),
-                    'header_mapping_sample': {k: v for k, v in list(header_mapping_debug.items())[:5]},
-                    'unmapped_count': len(unmapped_headers)
-                }
-            }, status=400)
+            if not col_map.get('employee_id') or not col_map.get('name'):
+                return Response({
+                    'error': 'File format error',
+                    'detail': 'Missing required columns: Employee ID * and Employee Name *',
+                    'found_headers': [h for _, h in unmapped_headers[:10]],
+                    'mapped_fields': list(col_map.keys()),
+                    'debug': {
+                        'total_columns': len(header_row),
+                        'header_mapping_sample': {k: v for k, v in list(header_mapping_debug.items())[:5]},
+                        'unmapped_count': len(unmapped_headers)
+                    }
+                }, status=400)
 
-        created = updated = 0
-        errors = []
+            created = updated = 0
+            errors = []
 
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            if not any(row):
-                continue
-            data = {field: row[ci] for field, ci in col_map.items() if ci < len(row)}
-            emp_id = str(data.get('employee_id') or '').strip()
-            name   = str(data.get('name') or '').strip()
-            if not emp_id or not name:
-                errors.append(f'Row {row_idx}: Missing Employee ID or Name — skipped')
-                continue
+            for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                if not any(row):
+                    continue
+                data = {field: row[ci] for field, ci in col_map.items() if ci < len(row)}
+                emp_id = str(data.get('employee_id') or '').strip()
+                name   = str(data.get('name') or '').strip()
+                if not emp_id or not name:
+                    errors.append(f'Row {row_idx}: Missing Employee ID or Name — skipped')
+                    continue
 
-            def sf(val, default=None):
-                if val is None or str(val).strip() == '': return default
-                try: return round(float(str(val).replace(',', '')), 2)
-                except: return default
+                def sf(val, default=None):
+                    if val is None or str(val).strip() == '': return default
+                    try: return round(float(str(val).replace(',', '')), 2)
+                    except: return default
 
-            def ss(val):
-                v = sf(val)
-                return None if v is None else max(0.0, min(100.0, v))
+                def ss(val):
+                    v = sf(val)
+                    return None if v is None else max(0.0, min(100.0, v))
 
-            def parse_bool(val):
-                if val is None or str(val).strip() == '': return False
-                return str(val).lower().strip() in ('y', 'yes', 'true', '1')
+                def parse_bool(val):
+                    if val is None or str(val).strip() == '': return False
+                    return str(val).lower().strip() in ('y', 'yes', 'true', '1')
 
-            def parse_date(val):
-                if val is None or str(val).strip() == '': return None
-                try:
-                    from datetime import datetime
-                    if isinstance(val, str):
-                        return datetime.strptime(val, '%Y-%m-%d').date()
-                    else:
-                        return val.date() if hasattr(val, 'date') else val
-                except:
-                    return None
+                def parse_date(val):
+                    if val is None or str(val).strip() == '': return None
+                    try:
+                        from datetime import datetime
+                        if isinstance(val, str):
+                            return datetime.strptime(val, '%Y-%m-%d').date()
+                        else:
+                            return val.date() if hasattr(val, 'date') else val
+                    except:
+                        return None
 
-            obj, was_created = PMSEmployee.objects.update_or_create(
-                employee_id=emp_id,
-                defaults={
-                    'name': name,
-                    'designation': str(data.get('designation') or '').strip(),
-                    'new_designation': str(data.get('new_designation') or '').strip(),
-                    'new_designation_type': str(data.get('new_designation_type') or '').strip(),
-                    'department': str(data.get('department') or '').strip(),
-                    'location': str(data.get('location') or '').strip(),
-                    'new_operational_location': str(data.get('new_operational_location') or '').strip(),
-                    'sub_category': str(data.get('sub_category') or '').strip(),
-                    'cost_centre': str(data.get('cost_centre') or '').strip(),
-                    'category': str(data.get('category') or '').strip(),
-                    'hq_location': str(data.get('hq_location') or '').strip(),
-                    'payroll_location': str(data.get('payroll_location') or '').strip(),
-                    'cadre': str(data.get('cadre') or '').strip(),
-                    'band': str(data.get('band') or '').strip().upper()[:5],
-                    'level': str(data.get('level') or '').strip(),
-                    'gender': str(data.get('gender') or '').strip(),
-                    'qualification': str(data.get('qualification') or '').strip(),
-                    'date_of_birth': parse_date(data.get('date_of_birth')),
-                    'date_of_joining': parse_date(data.get('date_of_joining')),
-                    'reporting_manager': str(data.get('reporting_manager') or '').strip(),
-                    'reporting_manager_id': str(data.get('reporting_manager_id') or '').strip(),
-                    'hod_name': str(data.get('hod_name') or '').strip(),
-                    'hod_id': str(data.get('hod_id') or '').strip(),
-                    'span_of_control': int(data.get('span_of_control')) if data.get('span_of_control') else None,
-                    'fiscal_year': str(data.get('fiscal_year') or '2025-26').strip(),
-                    'fy_2223_ctc': sf(data.get('fy_2223_ctc')) * 12 if sf(data.get('fy_2223_ctc')) else None,
-                    'fy_2324_ctc': sf(data.get('fy_2324_ctc')) * 12 if sf(data.get('fy_2324_ctc')) else None,
-                    'fy_2425_ctc': sf(data.get('fy_2425_ctc')) * 12 if sf(data.get('fy_2425_ctc')) else None,
-                    'current_ctc': (sf(data.get('current_ctc'), 0) or 0) * 12,
-                    'fy_2223_growth_pct': sf(data.get('fy_2223_growth_pct')),
-                    'fy_2324_growth_pct': sf(data.get('fy_2324_growth_pct')),
-                    'fy_2425_growth_pct': sf(data.get('fy_2425_growth_pct')),
-                    'self_score': ss(data.get('self_score')),
-                    'manager_score': ss(data.get('manager_score')),
-                    'hod_score': ss(data.get('hod_score')),
-                    'fy_2223_grade': str(data.get('fy_2223_grade') or '').strip(),
-                    'fy_2324_grade': str(data.get('fy_2324_grade') or '').strip(),
-                    'fy_2425_grade': str(data.get('fy_2425_grade') or '').strip(),
-                    'last_promotion_year': int(data.get('last_promotion_year')) if data.get('last_promotion_year') else None,
-                    'management_score': ss(data.get('management_score')),
-                    'promoted': parse_bool(data.get('promoted')),
-                    'promotion_pct': sf(data.get('promotion_pct'), 0) or 0,
-                    'redesignation': parse_bool(data.get('redesignation')),
-                    'on_time_reward': parse_bool(data.get('on_time_reward')),
-                    'reward_amount': sf(data.get('reward_amount'), 0) or 0,
-                    'management_discretion_pct': sf(data.get('management_discretion_pct'), 0) or 0,
-                    'salary_correction': sf(data.get('salary_correction'), 0) or 0,
-                    'promotion_readiness': str(data.get('promotion_readiness') or '').strip(),
-                    'manager_remarks': str(data.get('manager_remarks') or '').strip(),
-                    'hod_remarks': str(data.get('hod_remarks') or '').strip(),
-                }
-            )
-            created += was_created
-            updated += not was_created
+                obj, was_created = PMSEmployee.objects.update_or_create(
+                    employee_id=emp_id,
+                    defaults={
+                        'name': name,
+                        'designation': str(data.get('designation') or '').strip(),
+                        'new_designation': str(data.get('new_designation') or '').strip(),
+                        'new_designation_type': str(data.get('new_designation_type') or '').strip(),
+                        'department': str(data.get('department') or '').strip(),
+                        'location': str(data.get('location') or '').strip(),
+                        'new_operational_location': str(data.get('new_operational_location') or '').strip(),
+                        'sub_category': str(data.get('sub_category') or '').strip(),
+                        'cost_centre': str(data.get('cost_centre') or '').strip(),
+                        'category': str(data.get('category') or '').strip(),
+                        'hq_location': str(data.get('hq_location') or '').strip(),
+                        'payroll_location': str(data.get('payroll_location') or '').strip(),
+                        'cadre': str(data.get('cadre') or '').strip(),
+                        'band': str(data.get('band') or '').strip().upper()[:5],
+                        'level': str(data.get('level') or '').strip(),
+                        'gender': str(data.get('gender') or '').strip(),
+                        'qualification': str(data.get('qualification') or '').strip(),
+                        'date_of_birth': parse_date(data.get('date_of_birth')),
+                        'date_of_joining': parse_date(data.get('date_of_joining')),
+                        'reporting_manager': str(data.get('reporting_manager') or '').strip(),
+                        'reporting_manager_id': str(data.get('reporting_manager_id') or '').strip(),
+                        'hod_name': str(data.get('hod_name') or '').strip(),
+                        'hod_id': str(data.get('hod_id') or '').strip(),
+                        'span_of_control': int(data.get('span_of_control')) if data.get('span_of_control') else None,
+                        'fiscal_year': str(data.get('fiscal_year') or '2025-26').strip(),
+                        'fy_2223_ctc': sf(data.get('fy_2223_ctc')) * 12 if sf(data.get('fy_2223_ctc')) else None,
+                        'fy_2324_ctc': sf(data.get('fy_2324_ctc')) * 12 if sf(data.get('fy_2324_ctc')) else None,
+                        'fy_2425_ctc': sf(data.get('fy_2425_ctc')) * 12 if sf(data.get('fy_2425_ctc')) else None,
+                        'current_ctc': (sf(data.get('current_ctc'), 0) or 0) * 12,
+                        'fy_2223_growth_pct': sf(data.get('fy_2223_growth_pct')),
+                        'fy_2324_growth_pct': sf(data.get('fy_2324_growth_pct')),
+                        'fy_2425_growth_pct': sf(data.get('fy_2425_growth_pct')),
+                        'self_score': ss(data.get('self_score')),
+                        'manager_score': ss(data.get('manager_score')),
+                        'hod_score': ss(data.get('hod_score')),
+                        'fy_2223_grade': str(data.get('fy_2223_grade') or '').strip(),
+                        'fy_2324_grade': str(data.get('fy_2324_grade') or '').strip(),
+                        'fy_2425_grade': str(data.get('fy_2425_grade') or '').strip(),
+                        'last_promotion_year': int(data.get('last_promotion_year')) if data.get('last_promotion_year') else None,
+                        'management_score': ss(data.get('management_score')),
+                        'promoted': parse_bool(data.get('promoted')),
+                        'promotion_pct': sf(data.get('promotion_pct'), 0) or 0,
+                        'redesignation': parse_bool(data.get('redesignation')),
+                        'on_time_reward': parse_bool(data.get('on_time_reward')),
+                        'reward_amount': sf(data.get('reward_amount'), 0) or 0,
+                        'management_discretion_pct': sf(data.get('management_discretion_pct'), 0) or 0,
+                        'salary_correction': sf(data.get('salary_correction'), 0) or 0,
+                        'promotion_readiness': str(data.get('promotion_readiness') or '').strip(),
+                        'manager_remarks': str(data.get('manager_remarks') or '').strip(),
+                        'hod_remarks': str(data.get('hod_remarks') or '').strip(),
+                    }
+                )
+                created += was_created
+                updated += not was_created
 
             employees = list(PMSEmployee.objects.all())
             return Response({
