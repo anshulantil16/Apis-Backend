@@ -360,16 +360,18 @@ class PMSImportView(APIView):
                 dob_val = data.get('date_of_birth')
                 doj_val = data.get('date_of_joining')
 
-                # Convert date values to strings to avoid fromisoformat errors
-                if dob_val and str(dob_val).strip():
-                    dob_val = str(dob_val).strip()
-                else:
-                    dob_val = None
+                def format_date(val):
+                    if val is None or str(val).strip() == '':
+                        return None
+                    from datetime import datetime, date
+                    if isinstance(val, date) and not isinstance(val, datetime):
+                        return val.isoformat()
+                    if isinstance(val, datetime):
+                        return val.date().isoformat()
+                    return str(val).strip()
 
-                if doj_val and str(doj_val).strip():
-                    doj_val = str(doj_val).strip()
-                else:
-                    doj_val = None
+                dob_val = format_date(dob_val)
+                doj_val = format_date(doj_val)
 
                 obj, was_created = PMSEmployee.objects.update_or_create(
                     employee_id=emp_id,
