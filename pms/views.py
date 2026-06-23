@@ -465,22 +465,72 @@ class PMSTemplateView(APIView):
         ws.title = 'PMS Import'
 
         headers = [
-            'SR NO', 'Employee ID *', 'Employee Name *', 'Designation', 'New Designation',
-            'Designation Type', 'Department', 'New Department', 'New Function', 'Zone', 'Sub Zone',
-            'Cost Centre', 'Category', 'HQ', 'Payroll Location', 'Cadre', 'Grade', 'Gender',
-            'Qualification', 'DOB', 'Age', 'DOJ', 'Tenure in APIS as on 31st Mar-2026',
-            'Reporting Manager', 'Reporting ID', 'HOD Name', 'HOD ID',
-            'Span of Control',
-            'Current CTC - 31-Mar-26 *', 'Current Variable Pay 31-Mar-26', 'Last Promotion (YR)', 'Years Not Promoted Before 2022',
-            'FY 22-23 (CTC)', 'Increment 22-23', 'FY 23-24 (CTC)', 'Increment 23-24', 'FY 24-25 (CTC)', 'Increment 24-25',
-            'FY 22-23 (%)', 'FY 23-24 (%)', 'FY 24-25 (%)',
-            'FY 25-26 (Current CTC)',
-            'Self Score', 'Manager Score', 'HOD Score', 'Score Range', 'Final Score Range',
-            'Rating', 'Performance', 'Promotion (Y/N)', 'Level', 'Promotion Readiness',
-            'Salary Correction Level', 'Management Discretion', 'One Time Reward', 'Redesignation',
-            'Revised CTC', 'Increment %', 'Promotion %', 'Total Hike %', 'Total Salary Increment',
-            'CTC Fixed', 'Variable', 'FY 26-27 Total CTC',
-            'Manager Remarks', 'HOD Remarks',
+            'SR NO',  # 1
+            'Employee ID *',  # 2
+            'Employee Name *',  # 3
+            'Designation',  # 4
+            'New Designation',  # 5
+            'Designation Type',  # 6
+            'Department',  # 7
+            'New Department',  # 8
+            'New Function',  # 9
+            'Zone',  # 10
+            'Sub Zone',  # 11
+            'Cost Centre',  # 12
+            'Category',  # 13
+            'HQ',  # 14
+            'Payroll Location',  # 15
+            'Cadre',  # 16
+            'Grade',  # 17
+            'Gender',  # 18
+            'Qualification',  # 19
+            'DOB',  # 20
+            'Age',  # 21
+            'DOJ',  # 22
+            'Tenure in APIS as on 31st Mar-2026',  # 23
+            'Reporting Manager',  # 24
+            'Reporting ID',  # 25
+            'HOD Name',  # 26
+            'HOD ID',  # 27
+            'Span of Control',  # 28 - NEW
+            'Current CTC - 31-Mar-26 *',  # 29
+            'Current Variable Pay 31-Mar-26',  # 30
+            'Last Promotion (YR)',  # 31
+            'Years Not Promoted Before 2022',  # 32
+            'FY 22-23 (CTC)',  # 33
+            'Increment 22-23',  # 34
+            'FY 23-24 (CTC)',  # 35
+            'Increment 23-24',  # 36
+            'FY 24-25 (CTC)',  # 37
+            'Increment 24-25',  # 38
+            'FY 22-23 (%)',  # 39 - NEW
+            'FY 23-24 (%)',  # 40 - NEW
+            'FY 24-25 (%)',  # 41 - NEW
+            'FY 25-26 (Current CTC)',  # 42
+            'Self Score',  # 43
+            'Manager Score',  # 44
+            'HOD Score',  # 45
+            'Score Range',  # 46
+            'Final Score Range',  # 47
+            'Rating',  # 48
+            'Performance',  # 49
+            'Promotion (Y/N)',  # 50
+            'Level',  # 51
+            'Promotion Readiness',  # 52
+            'Salary Correction Level',  # 53
+            'Management Discretion',  # 54
+            'One Time Reward',  # 55
+            'Redesignation',  # 56
+            'Revised CTC',  # 57
+            'Increment %',  # 58
+            'Promotion %',  # 59
+            'Total Hike %',  # 60
+            'Total Salary Increment',  # 61
+            'CTC Fixed',  # 62
+            'Variable',  # 63
+            'FY 26-27 Total CTC',  # 64
+            'Manager Remarks',  # 65
+            'HOD Remarks',  # 66
         ]
 
         hf = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
@@ -495,54 +545,9 @@ class PMSTemplateView(APIView):
             c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
         samples = [
-            # EMP001: Monthly 50000, Annual 600000, Grade A (10% increment), Promoted (8%), Mgmt 5% = 23% total
-            [1, 'EMP001', 'Rahul Sharma', 'Sales Manager', 'Sr Sales Manager', 'STAT',
-             'Sales', 'Sales-New', 'Direct Sales', 'Zone A', 'Sub Zone 1', 'CC001', 'CAT01', 'HQ Mumbai', 'Mumbai',
-             'M1', 'A', 'Male', 'MBA', '1985-05-15', 38, '2015-06-01', 9,
-             'Rajesh Kumar', 'MGR001', 'Priya Singh', 'HOD001',
-             5,
-             50000, 8000, 2024, 0,
-             600000, 50000, 620000, 51667, 640000, 53333,
-             3.5, 3.2, 3.1,
-             660000,
-             82, 85, 88, '80-90', '85-95',
-             85, 'High', 'Yes', 'L2', '1_year',
-             'Normal', 10, 'Yes', 'No',
-             660000, 10, 8, 5, 81180,
-             660000, 25000, 811800,
-             'Strong leader', 'Exceeded targets'],
-            # EMP002: Monthly 40000, Annual 480000, Grade A+ (12% increment), Promoted (8%), Mgmt 10% = 30% total
-            [2, 'EMP002', 'Priya Singh', 'Sr Executive', '', 'MANAGER',
-             'Marketing', 'Marketing-New', 'Digital Marketing', 'Zone B', 'Sub Zone 2', 'CC002', 'CAT01', 'HQ Delhi', 'Delhi',
-             'O1', 'A+', 'Female', 'B.Tech', '1992-08-22', 31, '2018-03-15', 7,
-             'Ramesh Gupta', 'MGR002', 'Amit Kumar', 'HOD002',
-             8,
-             40000, 6000, 2022, 2,
-             450000, 40000, 480000, 42667, 510000, 45333,
-             4.0, 3.8, 3.5,
-             540000,
-             88, 92, 90, '85-95', '90-100',
-             92, 'Excellent', 'Yes', 'L1', 'ready_now',
-             'High', 12, 'Yes', 'Yes',
-             540000, 12, 8, 10, 168480,
-             540000, 35000, 702000,
-             'Exceptional performer', 'Ready for next level'],
-            # EMP003: Monthly 25000, Annual 300000, Grade B (5% increment), Not promoted (0%), Mgmt 0% = 5% total
-            [3, 'EMP003', 'Amit Kumar', 'Associate', '', '',
-             'Operations', 'Operations-New', 'Process Ops', 'Zone C', 'Sub Zone 3', 'CC003', 'CAT02', 'HQ Chennai', 'Chennai',
-             'W1', 'B', 'Male', 'B.Sc', '1998-12-10', 25, '2022-01-10', 2,
-             'Vikram Singh', 'MGR003', 'Deepak Nair', 'HOD003',
-             3,
-             25000, 2500, None, 2,
-             280000, 23333, 300000, 25000, 320000, 26667,
-             2.8, 2.5, 2.2,
-             340000,
-             65, 68, 70, '60-70', '65-75',
-             68, 'Average', 'No', 'L3', 'not_ready',
-             'Normal', 5, 'No', 'No',
-             340000, 5, 0, 0, 17000,
-             340000, 0, 357000,
-             'Meets expectations', 'Needs development'],
+            [1, 'EMP001', 'Rahul Sharma', 'Sales Manager', 'Sr Sales Manager', 'STAT', 'Sales', 'Sales-New', 'Direct Sales', 'Zone A', 'Sub Zone 1', 'CC001', 'CAT01', 'HQ Mumbai', 'Mumbai', 'M1', 'A', 'Male', 'MBA', '1985-05-15', 38, '2015-06-01', 9, 'Rajesh Kumar', 'MGR001', 'Priya Singh', 'HOD001', 5, 50000, 8000, 2024, 0, 600000, 50000, 620000, 51667, 640000, 53333, 3.5, 3.2, 3.1, 660000, 82, 85, 88, '80-90', '85-95', 85, 'High', 'Yes', 'L2', '1_year', 'Normal', 10, 'Yes', 'No', 660000, 10, 8, 5, 81180, 660000, 25000, 811800, 'Strong leader', 'Exceeded targets'],
+            [2, 'EMP002', 'Priya Singh', 'Sr Executive', '', 'MANAGER', 'Marketing', 'Marketing-New', 'Digital Marketing', 'Zone B', 'Sub Zone 2', 'CC002', 'CAT01', 'HQ Delhi', 'Delhi', 'O1', 'A+', 'Female', 'B.Tech', '1992-08-22', 31, '2018-03-15', 7, 'Ramesh Gupta', 'MGR002', 'Amit Kumar', 'HOD002', 8, 40000, 6000, 2022, 2, 450000, 40000, 480000, 42667, 510000, 45333, 4.0, 3.8, 3.5, 540000, 88, 92, 90, '85-95', '90-100', 92, 'Excellent', 'Yes', 'L1', 'ready_now', 'High', 12, 'Yes', 'Yes', 540000, 12, 8, 10, 168480, 540000, 35000, 702000, 'Exceptional performer', 'Ready for next level'],
+            [3, 'EMP003', 'Amit Kumar', 'Associate', '', '', 'Operations', 'Operations-New', 'Process Ops', 'Zone C', 'Sub Zone 3', 'CC003', 'CAT02', 'HQ Chennai', 'Chennai', 'W1', 'B', 'Male', 'B.Sc', '1998-12-10', 25, '2022-01-10', 2, 'Vikram Singh', 'MGR003', 'Deepak Nair', 'HOD003', 3, 25000, 2500, None, 2, 280000, 23333, 300000, 25000, 320000, 26667, 2.8, 2.5, 2.2, 340000, 65, 68, 70, '60-70', '65-75', 68, 'Average', 'No', 'L3', 'not_ready', 'Normal', 5, 'No', 'No', 340000, 5, 0, 0, 17000, 340000, 0, 357000, 'Meets expectations', 'Needs development'],
         ]
 
         for ri, row in enumerate(samples, 2):
