@@ -360,6 +360,17 @@ class PMSImportView(APIView):
                 dob_val = data.get('date_of_birth')
                 doj_val = data.get('date_of_joining')
 
+                # Convert date values to strings to avoid fromisoformat errors
+                if dob_val and str(dob_val).strip():
+                    dob_val = str(dob_val).strip()
+                else:
+                    dob_val = None
+
+                if doj_val and str(doj_val).strip():
+                    doj_val = str(doj_val).strip()
+                else:
+                    doj_val = None
+
                 obj, was_created = PMSEmployee.objects.update_or_create(
                     employee_id=emp_id,
                     defaults={
@@ -380,8 +391,8 @@ class PMSImportView(APIView):
                         'level': str(data.get('level') or '').strip(),
                         'gender': str(data.get('gender') or '').strip(),
                         'qualification': str(data.get('qualification') or '').strip(),
-                        'date_of_birth': dob_val if dob_val and str(dob_val).strip() else None,
-                        'date_of_joining': doj_val if doj_val and str(doj_val).strip() else None,
+                        'date_of_birth': dob_val,
+                        'date_of_joining': doj_val,
                         'reporting_manager': str(data.get('reporting_manager') or '').strip(),
                         'reporting_manager_id': str(data.get('reporting_manager_id') or '').strip(),
                         'hod_name': str(data.get('hod_name') or '').strip(),
