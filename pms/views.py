@@ -379,6 +379,26 @@ class PMSImportView(APIView):
                     except Exception as e:
                         return None
 
+                try:
+                    dob = parse_date(data.get('date_of_birth'))
+                except Exception as dob_err:
+                    return Response({
+                        'error': 'File format error',
+                        'detail': f'Error parsing date_of_birth: {str(dob_err)}',
+                        'row': row_idx,
+                        'value': data.get('date_of_birth')
+                    }, status=400)
+
+                try:
+                    doj = parse_date(data.get('date_of_joining'))
+                except Exception as doj_err:
+                    return Response({
+                        'error': 'File format error',
+                        'detail': f'Error parsing date_of_joining: {str(doj_err)}',
+                        'row': row_idx,
+                        'value': data.get('date_of_joining')
+                    }, status=400)
+
                 obj, was_created = PMSEmployee.objects.update_or_create(
                     employee_id=emp_id,
                     defaults={
@@ -399,8 +419,8 @@ class PMSImportView(APIView):
                         'level': str(data.get('level') or '').strip(),
                         'gender': str(data.get('gender') or '').strip(),
                         'qualification': str(data.get('qualification') or '').strip(),
-                        'date_of_birth': parse_date(data.get('date_of_birth')),
-                        'date_of_joining': parse_date(data.get('date_of_joining')),
+                        'date_of_birth': dob,
+                        'date_of_joining': doj,
                         'reporting_manager': str(data.get('reporting_manager') or '').strip(),
                         'reporting_manager_id': str(data.get('reporting_manager_id') or '').strip(),
                         'hod_name': str(data.get('hod_name') or '').strip(),
