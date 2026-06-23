@@ -383,6 +383,19 @@ class PMSImportView(APIView):
                 dob_val = format_date(data.get('date_of_birth'))
                 doj_val = format_date(data.get('date_of_joining'))
 
+                # Safety check: ensure dates are strings or None
+                from datetime import date, datetime
+                if dob_val is not None and not isinstance(dob_val, str):
+                    if isinstance(dob_val, datetime):
+                        dob_val = dob_val.date().isoformat()
+                    elif isinstance(dob_val, date):
+                        dob_val = dob_val.isoformat()
+                if doj_val is not None and not isinstance(doj_val, str):
+                    if isinstance(doj_val, datetime):
+                        doj_val = doj_val.date().isoformat()
+                    elif isinstance(doj_val, date):
+                        doj_val = doj_val.isoformat()
+
                 obj, was_created = PMSEmployee.objects.update_or_create(
                     employee_id=emp_id,
                     defaults={
