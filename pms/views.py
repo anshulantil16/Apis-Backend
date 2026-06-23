@@ -345,7 +345,7 @@ class PMSImportView(APIView):
                     return val.date().isoformat()
                 # If it's a string, try to parse various date formats
                 val_str = str(val).strip().strip('"').strip("'")  # Remove surrounding quotes
-                if not val_str:
+                if not val_str or val_str == '00:00:00':
                     return None
                 # Try parsing DD/MM/YYYY format first (most common in India)
                 for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%Y/%m/%d', '%d/%m/%y', '%d-%m-%y']:
@@ -354,8 +354,8 @@ class PMSImportView(APIView):
                         return parsed_date.isoformat()
                     except ValueError:
                         continue
-                # If no format matched, return as-is and let Django validate
-                return val_str
+                # If no format matched, return None instead of invalid string
+                return None
 
             for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
                 if not any(row):
