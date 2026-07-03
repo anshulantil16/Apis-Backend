@@ -7,7 +7,7 @@ from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
-from .models import PMSEmployee, PMSAuditLog, GRADE_META
+from .models import PMSEmployee, PMSAuditLog, OfferLetter, GRADE_META
 
 GRADE_ORDER = ['A+', 'A', 'B+', 'B', 'C', 'D']
 
@@ -742,3 +742,355 @@ class PMSLoginView(APIView):
                 return Response({'error': 'Invalid OTP'}, status=400)
 
         return Response({'error': 'Invalid action'}, status=400)
+
+
+class OfferLetterTemplateView(APIView):
+    """Generate Excel template for Offer Letter upload."""
+
+    def get(self, request):
+        from django.http import HttpResponse
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from datetime import datetime
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Offer Letters'
+
+        headers = [
+            'SR NO',
+            'Employee ID *',
+            'Employee Name *',
+            'Email *',
+            'Current Designation',
+            'New Designation',
+            'Current CTC *',
+            'New CTC *',
+            'Increment %',
+            'Promotion %',
+            'Performance Rating',
+            'Grade Label',
+            'Effective Date *',
+            'Remarks',
+        ]
+
+        # Styling
+        hf = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
+        hf_yellow = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+        border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+
+        for ci, h in enumerate(headers, 1):
+            c = ws.cell(row=1, column=ci, value=h)
+            is_required = '*' in h
+            c.fill = hf if is_required else hf_yellow
+            c.font = Font(color='FFFFFF' if is_required else '000000', bold=True, size=10)
+            c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            c.border = border
+
+        # Sample data
+        samples = [
+            [1, 'EMP001', 'Rahul Sharma', 'rahul.sharma@apis.com', 'Sales Manager', 'Senior Sales Manager', 600000, 660000, 10, 0, 'A', 'Outstanding', '2026-07-01', 'Excellent performer'],
+            [2, 'EMP002', 'Priya Singh', 'priya.singh@apis.com', 'Executive', 'Senior Executive', 450000, 540000, 12, 8, 'A+', 'Exceptional', '2026-07-01', 'Ready for promotion'],
+            [3, 'EMP003', 'Amit Kumar', 'amit.kumar@apis.com', 'Associate', 'Associate', 280000, 340000, 5, 0, 'B', 'Meets Target', '2026-07-01', ''],
+        ]
+
+        for ri, row in enumerate(samples, 2):
+            for ci, val in enumerate(row, 1):
+                c = ws.cell(row=ri, column=ci, value=val)
+                c.border = border
+                if ci == 13:  # Effective Date column
+                    c.number_format = 'yyyy-mm-dd'
+
+        # Instructions sheet
+        ws2 = wb.create_sheet('Instructions')
+        ws2.column_dimensions['A'].width = 100
+
+        instructions = [
+            ['OFFER LETTER UPLOAD - INSTRUCTIONS'],
+            [''],
+            ['1. REQUIRED FIELDS:'],
+            ['   • Employee ID: Must match existing employee in PMS'],
+            ['   • Employee Name: Full name of the employee'],
+            ['   • Email: Valid email address for letter delivery'],
+            ['   • Current CTC: Annual CTC (in ₹)'],
+            ['   • New CTC: Revised annual CTC (in ₹)'],
+            ['   • Effective Date: Date from which new CTC is effective (format: YYYY-MM-DD)'],
+            [''],
+            ['2. OPTIONAL FIELDS:'],
+            ['   • Increment %: Performance increment percentage'],
+            ['   • Promotion %: Promotion benefit percentage'],
+            ['   • Performance Rating: A+, A, B+, B, C, D'],
+            ['   • Grade Label: Exceptional, Outstanding, etc.'],
+            ['   • New Designation: If employee is promoted/redesignated'],
+            ['   • Remarks: Any additional notes'],
+            [''],
+            ['3. LETTER GENERATION:'],
+            ['   • System will automatically generate PDF letters'],
+            ['   • Letters will be sent to employee emails'],
+            ['   • Each letter will contain CTC breakdown and effective date'],
+            [''],
+            ['4. PERFORMANCE RATINGS:'],
+            ['   • A+ = Exceptional (12-15% increment, 10% promotion)'],
+            ['   • A  = Outstanding (10-12% increment, 8% promotion)'],
+            ['   • B+ = Exceeds Target (7-10% increment, 6% promotion)'],
+            ['   • B  = Meets Target (4-7% increment, 4% promotion)'],
+            ['   • C  = Near Target (0-4% increment, 0% promotion)'],
+            ['   • D  = Needs Improvement (2% increment, 0% promotion)'],
+            [''],
+            ['5. TIPS:'],
+            ['   • Download the template below and fill in employee data'],
+            ['   • Use YYYY-MM-DD format for dates (e.g., 2026-07-01)'],
+            ['   • Ensure email addresses are valid'],
+            ['   • Review calculations before uploading'],
+            ['   • Do NOT modify header row'],
+        ]
+
+        for ri, row in enumerate(instructions, 1):
+            for ci, val in enumerate(row, 1):
+                c = ws2.cell(row=ri, column=ci, value=val)
+                if ri == 1:
+                    c.font = Font(bold=True, size=14, color='2E75B6')
+                elif val.startswith('   •'):
+                    c.font = Font(size=10, color='333333')
+
+        # Set column widths
+        for ws_sheet in [ws, ws2]:
+            ws_sheet.column_dimensions['A'].width = 12
+            for i in range(2, 15):
+                ws_sheet.column_dimensions[openpyxl.utils.get_column_letter(i)].width = 18
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        resp = HttpResponse(buf.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        resp['Content-Disposition'] = 'attachment; filename="OfferLetter_Template.xlsx"'
+        return resp
+
+
+class OfferLetterUploadView(APIView):
+    """Process Excel file with offer letter data and generate PDFs."""
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request):
+        from .offer_letter import generate_offer_letter_pdf, send_offer_letter_email
+        from datetime import datetime
+
+        try:
+            file = request.FILES.get('file')
+            send_emails = request.data.get('send_emails', 'false').lower() == 'true'
+
+            if not file:
+                return Response({'error': 'No file provided.'}, status=400)
+
+            try:
+                wb = openpyxl.load_workbook(file, data_only=True)
+                ws = wb.active
+            except Exception as e:
+                return Response({'error': f'Cannot read file: {str(e)}'}, status=400)
+
+            # Parse headers
+            header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+            HEADER_MAP = {
+                'sr no': 'sr_no',
+                'employee id': 'employee_id', 'employee id *': 'employee_id',
+                'employee name': 'name', 'employee name *': 'name',
+                'email': 'email', 'email *': 'email',
+                'current designation': 'current_designation',
+                'new designation': 'new_designation',
+                'current ctc': 'current_ctc', 'current ctc *': 'current_ctc',
+                'new ctc': 'new_ctc', 'new ctc *': 'new_ctc',
+                'increment %': 'increment_pct',
+                'promotion %': 'promotion_pct',
+                'performance rating': 'performance_rating',
+                'grade label': 'grade_label',
+                'effective date': 'effective_date', 'effective date *': 'effective_date',
+                'remarks': 'remarks',
+            }
+
+            col_map = {}
+            for ci, cell in enumerate(header_row):
+                if cell is None:
+                    continue
+                key = str(cell).strip().lower().replace('*', '').strip()
+                field = HEADER_MAP.get(key)
+                if field:
+                    col_map[field] = ci
+
+            # Validate required columns
+            if not all(f in col_map for f in ['employee_id', 'name', 'email', 'current_ctc', 'new_ctc', 'effective_date']):
+                return Response({
+                    'error': 'Missing required columns',
+                    'required': ['Employee ID', 'Employee Name', 'Email', 'Current CTC', 'New CTC', 'Effective Date'],
+                    'mapped': list(col_map.keys()),
+                }, status=400)
+
+            created = 0
+            errors = []
+            results = []
+
+            def get_val(row, field, default=None):
+                if field not in col_map:
+                    return default
+                ci = col_map[field]
+                return row[ci] if ci < len(row) else default
+
+            def sf(val, default=None):
+                if val is None or str(val).strip() == '':
+                    return default
+                try:
+                    return float(str(val).replace(',', ''))
+                except:
+                    return default
+
+            def format_date(val):
+                if val is None:
+                    return None
+                from datetime import datetime, date
+
+                if isinstance(val, date) and not isinstance(val, datetime):
+                    return val
+                if isinstance(val, datetime):
+                    return val.date()
+
+                val_str = str(val).strip()
+                for fmt in ['%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y']:
+                    try:
+                        return datetime.strptime(val_str, fmt).date()
+                    except:
+                        continue
+                return None
+
+            for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                if not any(row):
+                    continue
+
+                emp_id = str(get_val(row, 'employee_id') or '').strip()
+                name = str(get_val(row, 'name') or '').strip()
+                email = str(get_val(row, 'email') or '').strip().lower()
+
+                if not emp_id or not name or not email:
+                    errors.append(f'Row {row_idx}: Missing Employee ID, Name, or Email')
+                    continue
+
+                try:
+                    emp = PMSEmployee.objects.get(employee_id=emp_id)
+                except PMSEmployee.DoesNotExist:
+                    errors.append(f'Row {row_idx}: Employee {emp_id} not found in PMS')
+                    continue
+
+                current_ctc = sf(get_val(row, 'current_ctc'))
+                new_ctc = sf(get_val(row, 'new_ctc'))
+                effective_date = format_date(get_val(row, 'effective_date'))
+
+                if not all([current_ctc, new_ctc, effective_date]):
+                    errors.append(f'Row {row_idx}: Invalid CTC or date values')
+                    continue
+
+                increment_pct = sf(get_val(row, 'increment_pct'), 0)
+                promotion_pct = sf(get_val(row, 'promotion_pct'), 0)
+                performance_rating = str(get_val(row, 'performance_rating') or '').strip()
+                grade_label = str(get_val(row, 'grade_label') or '').strip()
+                current_designation = str(get_val(row, 'current_designation') or emp.designation or '').strip()
+                new_designation = str(get_val(row, 'new_designation') or '').strip()
+
+                try:
+                    # Generate PDF
+                    pdf_buffer = generate_offer_letter_pdf(
+                        employee=emp,
+                        current_ctc=current_ctc,
+                        new_ctc=new_ctc,
+                        increment_pct=increment_pct,
+                        promotion_pct=promotion_pct,
+                        effective_date=effective_date,
+                        old_designation=current_designation,
+                        new_designation=new_designation,
+                        performance_rating=performance_rating,
+                        grade_label=grade_label,
+                    )
+
+                    # Determine letter type
+                    letter_type = 'increment'
+                    if new_designation and new_designation != current_designation:
+                        letter_type = 'promotion' if promotion_pct > 0 else 'redesignation'
+                    if increment_pct > 0 and promotion_pct > 0:
+                        letter_type = 'combined'
+
+                    # Create OfferLetter record
+                    offer = OfferLetter.objects.create(
+                        employee=emp,
+                        letter_type=letter_type,
+                        current_ctc=current_ctc,
+                        new_ctc=new_ctc,
+                        increment_pct=increment_pct,
+                        promotion_pct=promotion_pct,
+                        effective_date=effective_date,
+                        old_designation=current_designation,
+                        new_designation=new_designation,
+                        performance_rating=performance_rating,
+                        grade_label=grade_label,
+                        email_address=email,
+                        status='pending',
+                    )
+
+                    # Save PDF
+                    from django.core.files.base import ContentFile
+                    pdf_filename = f'offer_letters/{emp_id}_{effective_date.strftime("%Y%m%d")}.pdf'
+                    offer.pdf_file.save(pdf_filename, ContentFile(pdf_buffer.getvalue()))
+                    offer.save()
+
+                    # Send email if requested
+                    if send_emails:
+                        try:
+                            send_offer_letter_email(email, name, pdf_buffer, effective_date)
+                            offer.email_sent = True
+                            offer.email_sent_at = datetime.now()
+                            offer.status = 'sent'
+                            offer.save()
+                            results.append({
+                                'employee_id': emp_id,
+                                'name': name,
+                                'status': 'sent',
+                                'message': 'Letter generated and sent'
+                            })
+                        except Exception as e:
+                            offer.status = 'failed'
+                            offer.save()
+                            errors.append(f'Row {row_idx} ({name}): Failed to send email - {str(e)}')
+                            results.append({
+                                'employee_id': emp_id,
+                                'name': name,
+                                'status': 'generated_no_email',
+                                'message': f'Letter generated but email failed: {str(e)}'
+                            })
+                    else:
+                        results.append({
+                            'employee_id': emp_id,
+                            'name': name,
+                            'status': 'pending',
+                            'message': 'Letter generated (email not sent)'
+                        })
+
+                    created += 1
+
+                except Exception as e:
+                    errors.append(f'Row {row_idx}: {str(e)}')
+
+            return Response({
+                'message': f'✅ {created} offer letters generated!',
+                'created': created,
+                'errors': errors,
+                'results': results,
+                'note': f'{"Emails sent to all employees" if send_emails else "Emails not sent - set send_emails=true to send"}',
+            })
+
+        except Exception as e:
+            import traceback
+            return Response({
+                'error': 'Processing failed',
+                'detail': str(e),
+                'traceback': traceback.format_exc()
+            }, status=400)

@@ -200,6 +200,54 @@ class PMSEmployee(models.Model):
         )
 
 
+class OfferLetter(models.Model):
+    """Tracks generated offer/appraisal letters for employees."""
+    LETTER_TYPE_CHOICES = [
+        ('increment', 'Increment Letter'),
+        ('promotion', 'Promotion Letter'),
+        ('redesignation', 'Redesignation Letter'),
+        ('combined', 'Combined Promotion & Increment Letter'),
+    ]
+
+    employee    = models.ForeignKey(PMSEmployee, on_delete=models.CASCADE, related_name='offer_letters')
+    letter_type = models.CharField(max_length=20, choices=LETTER_TYPE_CHOICES, default='increment')
+
+    # Letter content details
+    current_ctc = models.DecimalField(max_digits=14, decimal_places=2)
+    new_ctc     = models.DecimalField(max_digits=14, decimal_places=2)
+    increment_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    promotion_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    effective_date = models.DateField()
+
+    # Promotion details (if applicable)
+    old_designation = models.CharField(max_length=200, blank=True)
+    new_designation = models.CharField(max_length=200, blank=True)
+
+    # Performance info
+    performance_rating = models.CharField(max_length=10, blank=True)  # A+, A, B+, B, C, D
+    grade_label = models.CharField(max_length=100, blank=True)  # Exceptional, Outstanding, etc.
+
+    # PDF & Email tracking
+    pdf_file    = models.FileField(upload_to='offer_letters/', null=True, blank=True)
+    email_sent  = models.BooleanField(default=False)
+    email_sent_at = models.DateTimeField(null=True, blank=True)
+    email_address = models.EmailField(blank=True)
+
+    # Status
+    status      = models.CharField(max_length=20, default='pending',
+                                   choices=[('pending', 'Pending'), ('sent', 'Sent'), ('failed', 'Failed')])
+
+    # Audit
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.employee.name} - {self.letter_type.title()}"
+
+
 class PMSAuditLog(models.Model):
     """Tracks every change made to an employee record."""
     employee    = models.ForeignKey(PMSEmployee, on_delete=models.CASCADE, related_name='audit_logs')
