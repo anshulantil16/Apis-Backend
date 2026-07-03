@@ -36,7 +36,8 @@ def process_offer_letter(offer_letter_id, send_email=False):
             try:
                 send_offer_letter_email(offer.email_address, emp.name, pdf_buffer, offer.effective_date)
                 offer.email_sent = True
-                offer.email_sent_at = datetime.now()
+                from django.utils import timezone
+                offer.email_sent_at = timezone.now()
                 offer.status = 'sent'
                 offer.save()
                 return {'status': 'sent', 'message': 'Letter generated and sent'}
