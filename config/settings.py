@@ -180,14 +180,24 @@ EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.getenv('EMAIL_HOST_USER', '')
 
-# Celery Configuration
-CELERY_BROKER_URL = 'redis://:@localhost:6379/0'
-CELERY_RESULT_BACKEND = 'redis://:@localhost:6379/0'
+# Celery Configuration — use SQLAlchemy broker to avoid Redis fork issues with gunicorn
+db_engine = os.getenv('DB_ENGINE', 'django.db.backends.mysql')
+db_user = os.getenv('DB_USER', 'root')
+db_password = os.getenv('DB_PASSWORD', '')
+db_host = os.getenv('DB_HOST', 'localhost')
+db_port = os.getenv('DB_PORT', '3306')
+db_name = os.getenv('DB_NAME', 'apis_db')
+
+if 'mysql' in db_engine:
+    CELERY_BROKER_URL = f'sqla+mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
+    CELERY_RESULT_BACKEND = f'db+mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
+else:
+    CELERY_BROKER_URL = 'redis://localhost:6379/0'
+    CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
-CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
-CELERY_BROKER_POOL_LIMIT = None
-CELERY_TASK_ACKS_LATE = True
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60
