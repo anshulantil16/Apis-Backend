@@ -1024,7 +1024,7 @@ class OfferLetterUploadView(APIView):
 
                     # Queue async task
                     from .tasks import process_offer_letter
-                    process_offer_letter.delay(offer.id, send_email=send_emails)
+                    process_offer_letter.apply_async(args=(offer.id,), kwargs={'send_email': send_emails})
 
                     results.append({
                         'employee_id': emp_id,
