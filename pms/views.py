@@ -1038,7 +1038,7 @@ class OfferLetterUploadView(APIView):
 
                     # Save PDF
                     from django.core.files.base import ContentFile
-                    pdf_filename = f'offer_letters/{emp_id}_{effective_date.strftime("%Y%m%d")}.pdf'
+                    pdf_filename = f'{emp_id}_{effective_date.strftime("%Y%m%d")}.pdf'
                     offer.pdf_file.save(pdf_filename, ContentFile(pdf_buffer.getvalue()))
                     offer.save()
 
