@@ -998,20 +998,6 @@ class OfferLetterUploadView(APIView):
                 new_designation = str(get_val(row, 'new_designation') or '').strip()
 
                 try:
-                    # Generate PDF
-                    pdf_buffer = generate_offer_letter_pdf(
-                        employee=emp,
-                        current_ctc=current_ctc,
-                        new_ctc=new_ctc,
-                        increment_pct=increment_pct,
-                        promotion_pct=promotion_pct,
-                        effective_date=effective_date,
-                        old_designation=current_designation,
-                        new_designation=new_designation,
-                        performance_rating=performance_rating,
-                        grade_label=grade_label,
-                    )
-
                     # Determine letter type
                     letter_type = 'increment'
                     if new_designation and new_designation != current_designation:
@@ -1033,46 +1019,19 @@ class OfferLetterUploadView(APIView):
                         performance_rating=performance_rating,
                         grade_label=grade_label,
                         email_address=email,
-                        status='pending',
+                        status='queued',
                     )
 
-                    # Save PDF
-                    from django.core.files.base import ContentFile
-                    pdf_filename = f'{emp_id}_{effective_date.strftime("%Y%m%d")}.pdf'
-                    offer.pdf_file.save(pdf_filename, ContentFile(pdf_buffer.getvalue()))
-                    offer.save()
+                    # Queue async task
+                    from .tasks import process_offer_letter
+                    process_offer_letter.delay(offer.id, send_email=send_emails)
 
-                    # Send email if requested
-                    if send_emails:
-                        try:
-                            send_offer_letter_email(email, name, pdf_buffer, effective_date)
-                            offer.email_sent = True
-                            offer.email_sent_at = datetime.now()
-                            offer.status = 'sent'
-                            offer.save()
-                            results.append({
-                                'employee_id': emp_id,
-                                'name': name,
-                                'status': 'sent',
-                                'message': 'Letter generated and sent'
-                            })
-                        except Exception as e:
-                            offer.status = 'failed'
-                            offer.save()
-                            errors.append(f'Row {row_idx} ({name}): Failed to send email - {str(e)}')
-                            results.append({
-                                'employee_id': emp_id,
-                                'name': name,
-                                'status': 'generated_no_email',
-                                'message': f'Letter generated but email failed: {str(e)}'
-                            })
-                    else:
-                        results.append({
-                            'employee_id': emp_id,
-                            'name': name,
-                            'status': 'pending',
-                            'message': 'Letter generated (email not sent)'
-                        })
+                    results.append({
+                        'employee_id': emp_id,
+                        'name': name,
+                        'status': 'queued',
+                        'message': 'Letter queued for generation'
+                    })
 
                     created += 1
 
