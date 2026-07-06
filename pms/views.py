@@ -1104,7 +1104,7 @@ class OfferLetterApprovalView(APIView):
         approval.save()
 
         return Response({
-            'message': f'✅ Letter {new_status}!',
+            'message': f'Letter {new_status}',
             'status': new_status,
             'accepted_at': approval.accepted_at,
         })
