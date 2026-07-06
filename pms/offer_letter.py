@@ -174,6 +174,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
 
 def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective_date):
     """Send offer letter PDF via email."""
+    from django.conf import settings
 
     subject = f"Your CTC Revision Letter - Effective {effective_date.strftime('%d %B, %Y')}"
 
@@ -191,7 +192,7 @@ APIS INDIA - Human Resources Team
     email = EmailMessage(
         subject=subject,
         body=body,
-        from_email='hr@apisindia.com',
+        from_email=settings.EMAIL_HOST_USER,
         to=[employee_email],
     )
 
