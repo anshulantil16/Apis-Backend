@@ -248,6 +248,35 @@ class OfferLetter(models.Model):
         return f"{self.employee.name} - {self.letter_type.title()}"
 
 
+class OfferLetterApproval(models.Model):
+    """Tracks employee acceptance/rejection of offer letters."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected'),
+        ('under_review', 'Under Review'),
+    ]
+
+    offer_letter = models.OneToOneField(OfferLetter, on_delete=models.CASCADE, related_name='approval')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+
+    # Employee response
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    comments = models.TextField(blank=True)
+
+    # Audit
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.offer_letter.employee.name} - {self.status}"
+
+
 class PMSAuditLog(models.Model):
     """Tracks every change made to an employee record."""
     employee    = models.ForeignKey(PMSEmployee, on_delete=models.CASCADE, related_name='audit_logs')
