@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (PMSListView, PMSImportView, PMSEmployeeUpdateView, PMSTemplateView,
-                    PMSExportView, PMSLoginView, OfferLetterTemplateView, OfferLetterUploadView)
+                    PMSExportView, PMSLoginView, OfferLetterTemplateView, OfferLetterUploadView,
+                    OfferLetterApprovalView, OfferLetterStatusView, OfferLetterApprovalListView)
 
 urlpatterns = [
     path('login/',                      PMSLoginView.as_view()),
@@ -11,4 +12,7 @@ urlpatterns = [
     path('export/',                     PMSExportView.as_view()),
     path('offer-letter/template/',      OfferLetterTemplateView.as_view()),
     path('offer-letter/upload/',        OfferLetterUploadView.as_view()),
+    path('offer-letter/<int:offer_letter_id>/approve/',  OfferLetterApprovalView.as_view()),
+    path('offer-letter/<int:offer_letter_id>/status/',   OfferLetterStatusView.as_view()),
+    path('offer-letter/approvals/',     OfferLetterApprovalListView.as_view()),
 ]

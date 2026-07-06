@@ -7,7 +7,7 @@ from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
-from .models import PMSEmployee, PMSAuditLog, OfferLetter, GRADE_META
+from .models import PMSEmployee, PMSAuditLog, OfferLetter, OfferLetterApproval, GRADE_META
 
 GRADE_ORDER = ['A+', 'A', 'B+', 'B', 'C', 'D']
 
@@ -1067,3 +1067,125 @@ class OfferLetterUploadView(APIView):
                 'detail': str(e),
                 'traceback': traceback.format_exc()
             }, status=400)
+
+
+class OfferLetterApprovalView(APIView):
+    """Handle employee approval/acceptance of offer letters."""
+
+    def post(self, request, offer_letter_id):
+        from .models import OfferLetterApproval
+        from django.utils import timezone
+
+        action = request.data.get('action', 'accept')  # accept, reject, under_review
+        comments = request.data.get('comments', '').strip()
+
+        try:
+            offer = OfferLetter.objects.get(id=offer_letter_id)
+        except OfferLetter.DoesNotExist:
+            return Response({'error': 'Offer letter not found'}, status=404)
+
+        # Get or create approval record
+        approval, created = OfferLetterApproval.objects.get_or_create(offer_letter=offer)
+
+        # Map action to status
+        status_map = {
+            'accept': 'accepted',
+            'reject': 'rejected',
+            'review': 'under_review',
+        }
+        new_status = status_map.get(action, 'pending')
+
+        # Update approval
+        approval.status = new_status
+        approval.comments = comments
+        approval.accepted_at = timezone.now() if new_status == 'accepted' else (approval.accepted_at if new_status != 'rejected' else None)
+        approval.ip_address = self.get_client_ip(request)
+        approval.user_agent = request.META.get('HTTP_USER_AGENT', '')[:500]
+        approval.save()
+
+        return Response({
+            'message': f'✅ Letter {new_status}!',
+            'status': new_status,
+            'accepted_at': approval.accepted_at,
+        })
+
+    def get_client_ip(self, request):
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0]
+        else:
+            ip = request.META.get('REMOTE_ADDR')
+        return ip
+
+
+class OfferLetterStatusView(APIView):
+    """Get approval status for an offer letter."""
+
+    def get(self, request, offer_letter_id):
+        from .models import OfferLetterApproval
+
+        try:
+            offer = OfferLetter.objects.get(id=offer_letter_id)
+        except OfferLetter.DoesNotExist:
+            return Response({'error': 'Offer letter not found'}, status=404)
+
+        try:
+            approval = OfferLetterApproval.objects.get(offer_letter=offer)
+            return Response({
+                'offer_letter_id': offer.id,
+                'employee_id': offer.employee.employee_id,
+                'employee_name': offer.employee.name,
+                'approval_status': approval.status,
+                'accepted_at': approval.accepted_at,
+                'comments': approval.comments,
+                'created_at': approval.created_at,
+                'updated_at': approval.updated_at,
+            })
+        except OfferLetterApproval.DoesNotExist:
+            return Response({
+                'offer_letter_id': offer.id,
+                'employee_id': offer.employee.employee_id,
+                'employee_name': offer.employee.name,
+                'approval_status': 'pending',
+                'accepted_at': None,
+                'comments': '',
+            })
+
+
+class OfferLetterApprovalListView(APIView):
+    """Get approval status for all offer letters."""
+
+    def get(self, request):
+        from .models import OfferLetterApproval
+
+        offers = OfferLetter.objects.all().prefetch_related('approval')
+
+        data = []
+        for offer in offers:
+            approval = offer.approval if hasattr(offer, 'approval') else None
+            data.append({
+                'offer_letter_id': offer.id,
+                'employee_id': offer.employee.employee_id,
+                'employee_name': offer.employee.name,
+                'letter_type': offer.letter_type,
+                'effective_date': offer.effective_date,
+                'approval_status': approval.status if approval else 'pending',
+                'accepted_at': approval.accepted_at if approval else None,
+                'email_sent': offer.email_sent,
+                'email_sent_at': offer.email_sent_at,
+            })
+
+        # Summary stats
+        total = len(data)
+        accepted = sum(1 for d in data if d['approval_status'] == 'accepted')
+        rejected = sum(1 for d in data if d['approval_status'] == 'rejected')
+        pending = sum(1 for d in data if d['approval_status'] == 'pending')
+
+        return Response({
+            'total': total,
+            'accepted': accepted,
+            'rejected': rejected,
+            'pending': pending,
+            'acceptance_rate': f"{(accepted/total*100):.1f}%" if total > 0 else "0%",
+            'letters': data,
+        })

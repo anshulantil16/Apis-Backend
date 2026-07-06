@@ -223,21 +223,57 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         return buffer
 
 
-def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective_date):
-    """Send offer letter PDF via email."""
+def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective_date, offer_letter_id=None):
+    """Send offer letter PDF via email with approval buttons."""
     from django.conf import settings
+    from django.urls import reverse
+    from django.core.signing import TimestampSigner
+    import json
 
-    subject = f"Your CTC Revision Letter - Effective {effective_date.strftime('%d %B, %Y')}"
+    subject = f"Your CTC Revision Letter - Action Required - Effective {effective_date.strftime('%d %B, %Y')}"
+
+    # Generate signed URLs for approval actions (valid for 30 days)
+    signer = TimestampSigner(salt='offer_letter_approval')
+
+    approval_token = None
+    approval_url = ''
+    reject_url = ''
+
+    if offer_letter_id:
+        token_data = json.dumps({'offer_letter_id': offer_letter_id, 'action': 'approve'})
+        approval_token = signer.sign(token_data)
+
+        base_url = settings.ALLOWED_HOSTS[0] if settings.ALLOWED_HOSTS else 'http://103.205.66.45'
+        if not base_url.startswith('http'):
+            base_url = f'http://{base_url}'
+
+        approval_url = f"{base_url}/api/pms/offer-letter/{offer_letter_id}/approve/?action=accept"
+        reject_url = f"{base_url}/api/pms/offer-letter/{offer_letter_id}/approve/?action=reject"
 
     body = f"""
-Dear {employee_name},
+<html>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+<div style="max-width: 600px; margin: 0 auto; background-color: #f9f9f9; padding: 20px; border-radius: 8px;">
+    <p>Dear <b>{employee_name}</b>,</p>
 
-Please find attached your CTC Revision Letter. This letter contains details of your revised compensation package.
+    <p>Please find attached your <b>CTC Revision Letter</b>. This letter contains details of your revised compensation package effective from <b>{effective_date.strftime('%d %B, %Y')}</b>.</p>
 
-If you have any questions or concerns, please reach out to the HR department.
+    <p style="background-color: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; border-radius: 4px;">
+        <b>⚠️ Action Required:</b> Please review the attached letter and confirm your acceptance or rejection within 3 business days.
+    </p>
 
-Best Regards,
-APIS INDIA - Human Resources Team
+    <div style="margin: 20px 0; text-align: center;">
+        <a href="{approval_url}" style="display: inline-block; margin-right: 10px; padding: 12px 30px; background-color: #28a745; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">✓ Accept</a>
+        <a href="{reject_url}" style="display: inline-block; padding: 12px 30px; background-color: #dc3545; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">✗ Reject</a>
+    </div>
+
+    <p style="color: #666; font-size: 12px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd;">
+        If you have any questions or concerns, please reach out to the HR department.<br>
+        <b>APIS INDIA - Human Resources Team</b>
+    </p>
+</div>
+</body>
+</html>
     """
 
     email = EmailMessage(
@@ -246,6 +282,8 @@ APIS INDIA - Human Resources Team
         from_email=settings.EMAIL_HOST_USER,
         to=[employee_email],
     )
+
+    email.content_subtype = 'html'  # Mark as HTML email
 
     email.attach(f'CTC_Letter_{employee_name.replace(" ", "_")}.pdf',
                 pdf_buffer.read(),

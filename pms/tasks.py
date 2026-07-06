@@ -41,7 +41,7 @@ def process_offer_letter(offer_letter_id, send_email=False):
         # Send email if requested
         if send_email:
             try:
-                send_offer_letter_email(offer.email_address, emp.name, pdf_buffer, offer.effective_date)
+                send_offer_letter_email(offer.email_address, emp.name, pdf_buffer, offer.effective_date, offer_letter_id=offer.id)
                 offer.email_sent = True
                 from django.utils import timezone
                 offer.email_sent_at = timezone.now()
