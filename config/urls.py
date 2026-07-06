@@ -28,6 +28,7 @@ urlpatterns = [
     path('api/appraisal/',   include('appraisal.urls')),
     path('api/eom/',         include('eom.urls')),
     path('api/pms/',         include('pms.urls')),
+    path('api/territory/',   include('territory_mgmt.urls')),
     # Always serve media files (works in both DEBUG and production mode)
     re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
 ]
