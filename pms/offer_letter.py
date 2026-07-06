@@ -8,7 +8,7 @@ from reportlab.lib.units import inch
 from reportlab.lib.colors import HexColor
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib import colors
-import pikepdf
+from pypdf import PdfWriter, PdfReader
 
 
 def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, promotion_pct,
@@ -178,25 +178,23 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     doc.build(story)
     buffer.seek(0)
 
-    # Add password protection using Employee ID with pikepdf
+    # Add password protection using Employee ID with pypdf
     password = emp_id or 'EMPLOYEE'
     try:
         # Read the generated PDF
-        pdf = pikepdf.open(buffer)
+        reader = PdfReader(buffer)
+        writer = PdfWriter()
 
-        # Create new buffer for encrypted PDF
+        # Copy all pages
+        for page in reader.pages:
+            writer.add_page(page)
+
+        # Encrypt with employee ID as password
+        writer.encrypt(user_password=password, owner_password='APIS_ADMIN')
+
+        # Write encrypted PDF to new buffer
         encrypted_buffer = io.BytesIO()
-
-        # Save with encryption
-        pdf.save(
-            encrypted_buffer,
-            encryption=pikepdf.Encryption(
-                owner=b'APIS_ADMIN',
-                user=password.encode('utf-8'),
-                R=4
-            )
-        )
-
+        writer.write(encrypted_buffer)
         encrypted_buffer.seek(0)
         return encrypted_buffer
     except Exception as e:
