@@ -243,9 +243,16 @@ def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective
         token_data = json.dumps({'offer_letter_id': offer_letter_id, 'action': 'approve'})
         approval_token = signer.sign(token_data)
 
-        base_url = settings.ALLOWED_HOSTS[0] if settings.ALLOWED_HOSTS else 'http://103.205.66.45'
-        if not base_url.startswith('http'):
-            base_url = f'http://{base_url}'
+        # Get base URL from settings, defaulting to QA server
+        base_url = 'http://103.205.66.45:8080'  # Default to QA
+        if settings.ALLOWED_HOSTS:
+            for host in settings.ALLOWED_HOSTS:
+                if host and host != '*':
+                    if host.startswith('http'):
+                        base_url = host
+                    else:
+                        base_url = f'http://{host}:8080' if '8080' not in host else f'http://{host}'
+                    break
 
         approval_url = f"{base_url}/api/pms/offer-letter/{offer_letter_id}/approve/?action=accept"
         reject_url = f"{base_url}/api/pms/offer-letter/{offer_letter_id}/approve/?action=reject"
