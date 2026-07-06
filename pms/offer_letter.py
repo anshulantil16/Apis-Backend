@@ -181,20 +181,28 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     # Add password protection using Employee ID with pikepdf
     password = emp_id or 'EMPLOYEE'
     try:
+        # Read the generated PDF
         pdf = pikepdf.open(buffer)
-        # Encrypt: user_password required to open, owner_password for admin
+
+        # Create new buffer for encrypted PDF
+        encrypted_buffer = io.BytesIO()
+
+        # Save with encryption
         pdf.save(
-            buffer,
+            encrypted_buffer,
             encryption=pikepdf.Encryption(
                 owner=b'APIS_ADMIN',
                 user=password.encode('utf-8'),
-                R=4  # PDF encryption level 4
+                R=4
             )
         )
-        buffer.seek(0)
-        return buffer
+
+        encrypted_buffer.seek(0)
+        return encrypted_buffer
     except Exception as e:
-        # If encryption fails, return unencrypted PDF
+        # If encryption fails, log error and return unencrypted PDF
+        import logging
+        logging.error(f"PDF encryption failed: {str(e)}")
         buffer.seek(0)
         return buffer
 
