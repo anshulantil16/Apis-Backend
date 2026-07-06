@@ -180,10 +180,12 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
 
     # Add password protection using Employee ID with qpdf command
     password = emp_id or 'EMPLOYEE'
-    try:
-        import subprocess
-        import tempfile
+    import subprocess
+    import tempfile
+    import os
+    import logging
 
+    try:
         # Save unencrypted PDF to temp file
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
             tmp.write(buffer.read())
@@ -191,11 +193,17 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
 
         # Encrypt using qpdf command
         encrypted_path = tmp_path.replace('.pdf', '_encrypted.pdf')
-        subprocess.run([
+        result = subprocess.run([
             'qpdf',
             '--encrypt', password, 'APIS_ADMIN', '256',
             '--', tmp_path, encrypted_path
-        ], check=True, capture_output=True)
+        ], capture_output=True, text=True)
+
+        if result.returncode != 0:
+            logging.error(f"qpdf failed: {result.stderr}")
+            os.unlink(tmp_path)
+            buffer.seek(0)
+            return buffer
 
         # Read encrypted PDF into buffer
         with open(encrypted_path, 'rb') as f:
@@ -203,15 +211,14 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         encrypted_buffer.seek(0)
 
         # Cleanup temp files
-        import os
         os.unlink(tmp_path)
         os.unlink(encrypted_path)
 
+        logging.info(f"PDF encrypted successfully for {emp_id}")
         return encrypted_buffer
     except Exception as e:
         # If encryption fails, log error and return unencrypted PDF
-        import logging
-        logging.error(f"PDF encryption failed: {str(e)}")
+        logging.error(f"PDF encryption exception: {str(e)}", exc_info=True)
         buffer.seek(0)
         return buffer
 
