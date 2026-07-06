@@ -761,6 +761,7 @@ class OfferLetterTemplateView(APIView):
             'Employee ID *',
             'Employee Name *',
             'Email *',
+            'Department',
             'Current Designation',
             'New Designation',
             'Current CTC *',
@@ -793,9 +794,9 @@ class OfferLetterTemplateView(APIView):
 
         # Sample data
         samples = [
-            [1, 'EMP001', 'Rahul Sharma', 'rahul.sharma@apis.com', 'Sales Manager', 'Senior Sales Manager', 600000, 660000, 10, 0, 'A', 'Outstanding', '2026-07-01', 'Excellent performer'],
-            [2, 'EMP002', 'Priya Singh', 'priya.singh@apis.com', 'Executive', 'Senior Executive', 450000, 540000, 12, 8, 'A+', 'Exceptional', '2026-07-01', 'Ready for promotion'],
-            [3, 'EMP003', 'Amit Kumar', 'amit.kumar@apis.com', 'Associate', 'Associate', 280000, 340000, 5, 0, 'B', 'Meets Target', '2026-07-01', ''],
+            [1, 'EMP001', 'Rahul Sharma', 'rahul.sharma@apis.com', 'Sales', 'Sales Manager', 'Senior Sales Manager', 600000, 660000, 10, 0, 'A', 'Outstanding', '2026-07-01', 'Excellent performer'],
+            [2, 'EMP002', 'Priya Singh', 'priya.singh@apis.com', 'Operations', 'Executive', 'Senior Executive', 450000, 540000, 12, 8, 'A+', 'Exceptional', '2026-07-01', 'Ready for promotion'],
+            [3, 'EMP003', 'Amit Kumar', 'amit.kumar@apis.com', 'IT', 'Associate', 'Associate', 280000, 340000, 5, 0, 'B', 'Meets Target', '2026-07-01', ''],
         ]
 
         for ri, row in enumerate(samples, 2):
@@ -812,8 +813,8 @@ class OfferLetterTemplateView(APIView):
         instructions = [
             ['OFFER LETTER UPLOAD - INSTRUCTIONS'],
             [''],
-            ['1. REQUIRED FIELDS:'],
-            ['   • Employee ID: Must match existing employee in PMS'],
+            ['1. REQUIRED FIELDS (marked with *):'],
+            ['   • Employee ID: Unique employee identifier'],
             ['   • Employee Name: Full name of the employee'],
             ['   • Email: Valid email address for letter delivery'],
             ['   • Current CTC: Annual CTC (in ₹)'],
@@ -821,12 +822,14 @@ class OfferLetterTemplateView(APIView):
             ['   • Effective Date: Date from which new CTC is effective (format: YYYY-MM-DD)'],
             [''],
             ['2. OPTIONAL FIELDS:'],
-            ['   • Increment %: Performance increment percentage'],
-            ['   • Promotion %: Promotion benefit percentage'],
-            ['   • Performance Rating: A+, A, B+, B, C, D'],
-            ['   • Grade Label: Exceptional, Outstanding, etc.'],
+            ['   • Department: Employee\'s department/team'],
+            ['   • Current Designation: Employee\'s current job title'],
             ['   • New Designation: If employee is promoted/redesignated'],
-            ['   • Remarks: Any additional notes'],
+            ['   • Increment %: Performance increment percentage (0-100)'],
+            ['   • Promotion %: Promotion benefit percentage (0-100)'],
+            ['   • Performance Rating: A+, A, B+, B, C, D'],
+            ['   • Grade Label: Exceptional, Outstanding, Meets Target, etc.'],
+            ['   • Remarks: Any additional notes or comments'],
             [''],
             ['3. LETTER GENERATION:'],
             ['   • System will automatically generate PDF letters'],
@@ -976,12 +979,6 @@ class OfferLetterUploadView(APIView):
                     errors.append(f'Row {row_idx}: Missing Employee ID, Name, or Email')
                     continue
 
-                try:
-                    emp = PMSEmployee.objects.get(employee_id=emp_id)
-                except PMSEmployee.DoesNotExist:
-                    errors.append(f'Row {row_idx}: Employee {emp_id} not found in PMS')
-                    continue
-
                 current_ctc = sf(get_val(row, 'current_ctc'))
                 new_ctc = sf(get_val(row, 'new_ctc'))
                 effective_date = format_date(get_val(row, 'effective_date'))
@@ -994,10 +991,18 @@ class OfferLetterUploadView(APIView):
                 promotion_pct = sf(get_val(row, 'promotion_pct'), 0)
                 performance_rating = str(get_val(row, 'performance_rating') or '').strip()
                 grade_label = str(get_val(row, 'grade_label') or '').strip()
-                current_designation = str(get_val(row, 'current_designation') or emp.designation or '').strip()
+                current_designation = str(get_val(row, 'current_designation') or '').strip()
                 new_designation = str(get_val(row, 'new_designation') or '').strip()
+                department = str(get_val(row, 'department') or '').strip()
 
                 try:
+                    # Try to find employee in PMS, but don't require it
+                    emp = None
+                    try:
+                        emp = PMSEmployee.objects.get(employee_id=emp_id)
+                    except PMSEmployee.DoesNotExist:
+                        pass
+
                     # Determine letter type
                     letter_type = 'increment'
                     if new_designation and new_designation != current_designation:
@@ -1005,7 +1010,7 @@ class OfferLetterUploadView(APIView):
                     if increment_pct > 0 and promotion_pct > 0:
                         letter_type = 'combined'
 
-                    # Create OfferLetter record
+                    # Create OfferLetter record (emp can be None for standalone employees)
                     offer = OfferLetter.objects.create(
                         employee=emp,
                         letter_type=letter_type,
@@ -1021,6 +1026,15 @@ class OfferLetterUploadView(APIView):
                         email_address=email,
                         status='queued',
                     )
+
+                    # Store extra fields as JSON for standalone employees
+                    if not emp:
+                        from django.core.cache import cache
+                        cache.set(f'offer_letter_{offer.id}_data', {
+                            'emp_id': emp_id,
+                            'name': name,
+                            'department': department,
+                        }, 3600)
 
                     # Queue async task
                     from .tasks import process_offer_letter

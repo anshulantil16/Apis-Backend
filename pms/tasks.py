@@ -8,8 +8,12 @@ from datetime import datetime
 def process_offer_letter(offer_letter_id, send_email=False):
     """Process a single offer letter: generate PDF and optionally send email."""
     try:
+        from django.core.cache import cache
         offer = OfferLetter.objects.get(id=offer_letter_id)
         emp = offer.employee
+
+        # Get extra data for standalone employees (non-PMS)
+        extra_data = cache.get(f'offer_letter_{offer_letter_id}_data', {})
 
         # Generate PDF
         pdf_buffer = generate_offer_letter_pdf(
@@ -23,6 +27,9 @@ def process_offer_letter(offer_letter_id, send_email=False):
             new_designation=offer.new_designation,
             performance_rating=offer.performance_rating,
             grade_label=offer.grade_label,
+            employee_id=extra_data.get('emp_id'),
+            employee_name=extra_data.get('name'),
+            department=extra_data.get('department'),
         )
 
         # Save PDF

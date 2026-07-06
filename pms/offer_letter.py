@@ -12,8 +12,9 @@ from reportlab.lib import colors
 
 def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, promotion_pct,
                                effective_date, old_designation=None, new_designation=None,
-                               performance_rating=None, grade_label=None):
-    """Generate a professional offer letter PDF."""
+                               performance_rating=None, grade_label=None, employee_id=None,
+                               employee_name=None, department=None):
+    """Generate a professional offer letter PDF. Works with both PMS employees and standalone data."""
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter,
@@ -22,6 +23,12 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
 
     story = []
     styles = getSampleStyleSheet()
+
+    # Use provided data if employee object is None
+    emp_name = employee_name or (employee.name if employee else 'Employee')
+    emp_id = employee_id or (employee.employee_id if employee else 'N/A')
+    emp_dept = department or (employee.department if employee else 'N/A')
+    emp_desig = old_designation or (employee.designation if employee else 'N/A')
 
     # Custom styles
     title_style = ParagraphStyle(
@@ -65,15 +72,15 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
 
     # Employee details
     story.append(Paragraph("<b>TO:</b>", heading_style))
-    story.append(Paragraph(f"{employee.name}<br/>"
-                          f"Employee ID: {employee.employee_id}<br/>"
-                          f"Department: {employee.department or 'N/A'}<br/>"
-                          f"Current Designation: {employee.designation or 'N/A'}",
+    story.append(Paragraph(f"{emp_name}<br/>"
+                          f"Employee ID: {emp_id}<br/>"
+                          f"Department: {emp_dept}<br/>"
+                          f"Current Designation: {emp_desig}",
                           body_style))
     story.append(Spacer(1, 0.2*inch))
 
     # Salutation
-    story.append(Paragraph(f"<b>Dear {employee.name},</b>", body_style))
+    story.append(Paragraph(f"<b>Dear {emp_name},</b>", body_style))
     story.append(Spacer(1, 0.15*inch))
 
     # Main content
