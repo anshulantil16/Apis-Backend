@@ -8,6 +8,7 @@ from reportlab.lib.units import inch
 from reportlab.lib.colors import HexColor
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib import colors
+from PyPDF2 import PdfWriter, PdfReader
 
 
 def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, promotion_pct,
@@ -176,7 +177,27 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     # Build PDF
     doc.build(story)
     buffer.seek(0)
-    return buffer
+
+    # Add password protection using Employee ID
+    password = emp_id or 'EMPLOYEE'
+    try:
+        reader = PdfReader(buffer)
+        writer = PdfWriter()
+
+        for page in reader.pages:
+            writer.add_page(page)
+
+        # Encrypt with employee ID as password (user password)
+        writer.encrypt(user_password=password, owner_password='APIS_ADMIN', permissions_flag=-1)
+
+        # Write to new buffer
+        protected_buffer = io.BytesIO()
+        writer.write(protected_buffer)
+        protected_buffer.seek(0)
+        return protected_buffer
+    except Exception as e:
+        # If encryption fails, return unencrypted PDF
+        return buffer
 
 
 def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective_date):
