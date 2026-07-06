@@ -104,11 +104,59 @@ class TerritoryUploadView(APIView):
                 except Exception as e:
                     errors.append(f'Row {row_idx}: {str(e)}')
 
+            # Get all data for dashboard
+            all_records = OrganizationData.objects.all()
+            data = [{
+                'id': r.id,
+                'sno': r.sno,
+                'code': r.code,
+                'name': r.name,
+                'designation': r.designation,
+                'hq': r.hq,
+                'state': r.state,
+                'zone': r.zone,
+                'rm': r.rm,
+            } for r in all_records]
+
+            # Get filter options
+            filter_options = {
+                'designations': sorted(set(d['designation'] for d in data if d['designation'])),
+                'states': sorted(set(d['state'] for d in data if d['state'])),
+                'zones': sorted(set(d['zone'] for d in data if d['zone'])),
+                'rms': sorted(set(d['rm'] for d in data if d['rm'])),
+            }
+
+            # Aggregations
+            summary = {
+                'total_employees': len(data),
+                'unique_designations': len(set(d['designation'] for d in data if d['designation'])),
+                'unique_zones': len(set(d['zone'] for d in data if d['zone'])),
+                'unique_states': len(set(d['state'] for d in data if d['state'])),
+            }
+
+            breakdown = {
+                'by_rm': {},
+                'by_designation': {},
+                'by_zone': {},
+                'by_state': {},
+            }
+
+            for d in data:
+                breakdown['by_rm'][d['rm']] = breakdown['by_rm'].get(d['rm'], 0) + 1
+                breakdown['by_designation'][d['designation']] = breakdown['by_designation'].get(d['designation'], 0) + 1
+                breakdown['by_zone'][d['zone']] = breakdown['by_zone'].get(d['zone'], 0) + 1
+                breakdown['by_state'][d['state']] = breakdown['by_state'].get(d['state'], 0) + 1
+
             return Response({
                 'message': f'Successfully uploaded {created} records',
                 'created': created,
                 'batch_id': batch_id,
                 'errors': errors,
+                'summary': summary,
+                'breakdown': breakdown,
+                'filter_options': filter_options,
+                'data': data,
+                'record_count': len(data),
             })
 
         except Exception as e:
