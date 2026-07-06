@@ -178,24 +178,35 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     doc.build(story)
     buffer.seek(0)
 
-    # Add password protection using Employee ID with pypdf
+    # Add password protection using Employee ID with qpdf command
     password = emp_id or 'EMPLOYEE'
     try:
-        # Read the generated PDF
-        reader = PdfReader(buffer)
-        writer = PdfWriter()
+        import subprocess
+        import tempfile
 
-        # Copy all pages
-        for page in reader.pages:
-            writer.add_page(page)
+        # Save unencrypted PDF to temp file
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+            tmp.write(buffer.read())
+            tmp_path = tmp.name
 
-        # Encrypt with employee ID as password
-        writer.encrypt(user_password=password, owner_password='APIS_ADMIN')
+        # Encrypt using qpdf command
+        encrypted_path = tmp_path.replace('.pdf', '_encrypted.pdf')
+        subprocess.run([
+            'qpdf',
+            '--encrypt', password, 'APIS_ADMIN', '256',
+            '--', tmp_path, encrypted_path
+        ], check=True, capture_output=True)
 
-        # Write encrypted PDF to new buffer
-        encrypted_buffer = io.BytesIO()
-        writer.write(encrypted_buffer)
+        # Read encrypted PDF into buffer
+        with open(encrypted_path, 'rb') as f:
+            encrypted_buffer = io.BytesIO(f.read())
         encrypted_buffer.seek(0)
+
+        # Cleanup temp files
+        import os
+        os.unlink(tmp_path)
+        os.unlink(encrypted_path)
+
         return encrypted_buffer
     except Exception as e:
         # If encryption fails, log error and return unencrypted PDF
