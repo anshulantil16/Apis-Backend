@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     PMSListView, PMSImportView, PMSEmployeeUpdateView, PMSTemplateView,
     PMSExportView, PMSSettingsView, OfferLetterTemplateView,
+    OfferLetterUploadView, OfferLetterPDFView,
 )
 
 urlpatterns = [
@@ -12,4 +13,6 @@ urlpatterns = [
     path('export/',                 PMSExportView.as_view()),
     path('settings/',               PMSSettingsView.as_view()),
     path('offer-letter/template/',  OfferLetterTemplateView.as_view()),
+    path('offer-letter/upload/',    OfferLetterUploadView.as_view()),
+    path('offer-letter/<int:offer_letter_id>/pdf/', OfferLetterPDFView.as_view()),
 ]

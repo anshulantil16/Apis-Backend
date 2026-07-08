@@ -4,7 +4,7 @@ import openpyxl
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
-from .models import PMSEmployee, PMSAuditLog, PMSSettings, GRADE_META
+from .models import PMSEmployee, PMSAuditLog, PMSSettings, OfferLetter, GRADE_META
 
 
 def _apply_global_mgmt(employees):
@@ -714,3 +714,156 @@ class OfferLetterTemplateView(APIView):
         resp = HttpResponse(buf.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         resp['Content-Disposition'] = 'attachment; filename="OfferLetter_Template.xlsx"'
         return resp
+
+
+class OfferLetterUploadView(APIView):
+    """Generate offer-letter PDFs synchronously from an uploaded Excel file.
+    Preview mode: PDFs are generated and stored, but emails are NOT sent."""
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request):
+        from .offer_letter import generate_offer_letter_pdf
+        from datetime import datetime, date
+        from django.core.files.base import ContentFile
+
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'error': 'No file provided.'}, status=400)
+        try:
+            wb = openpyxl.load_workbook(file, data_only=True)
+            ws = wb.active
+        except Exception as e:
+            return Response({'error': f'Cannot read file: {str(e)}'}, status=400)
+
+        HEADER_MAP = {
+            'sr no': 'sr_no', 'employee id': 'employee_id', 'employee name': 'name',
+            'email': 'email', 'department': 'department',
+            'current designation': 'current_designation', 'new designation': 'new_designation',
+            'current ctc': 'current_ctc', 'new ctc': 'new_ctc',
+            'increment %': 'increment_pct', 'promotion %': 'promotion_pct',
+            'performance rating': 'performance_rating', 'grade label': 'grade_label',
+            'effective date': 'effective_date', 'remarks': 'remarks',
+        }
+        header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+        col_map = {}
+        for ci, cell in enumerate(header_row):
+            if cell is None:
+                continue
+            key = str(cell).strip().lower().replace('*', '').strip()
+            if key in HEADER_MAP:
+                col_map[HEADER_MAP[key]] = ci
+
+        required = ['employee_id', 'name', 'email', 'current_ctc', 'new_ctc', 'effective_date']
+        if not all(f in col_map for f in required):
+            return Response({'error': 'Missing required columns',
+                             'required': ['Employee ID', 'Employee Name', 'Email', 'Current CTC', 'New CTC', 'Effective Date'],
+                             'mapped': list(col_map.keys())}, status=400)
+
+        def get_val(row, field, default=None):
+            if field not in col_map:
+                return default
+            ci = col_map[field]
+            return row[ci] if ci < len(row) else default
+
+        def sf(val, default=0):
+            if val is None or str(val).strip() == '':
+                return default
+            try:
+                return float(str(val).replace(',', ''))
+            except Exception:
+                return default
+
+        def format_date(val):
+            if val is None or str(val).strip() == '':
+                return None
+            if isinstance(val, datetime):
+                return val.date()
+            if isinstance(val, date):
+                return val
+            for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
+                try:
+                    return datetime.strptime(str(val).strip(), fmt).date()
+                except Exception:
+                    pass
+            return None
+
+        created = 0
+        errors = []
+        results = []
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if not any(row):
+                continue
+            emp_id = str(get_val(row, 'employee_id') or '').strip()
+            name = str(get_val(row, 'name') or '').strip()
+            email = str(get_val(row, 'email') or '').strip()
+            if not emp_id or not name:
+                continue
+            try:
+                emp = PMSEmployee.objects.filter(employee_id=emp_id).first()
+                if emp is None:
+                    errors.append(f'Row {row_idx}: Employee {emp_id} not found in PMS — import the employee first')
+                    results.append({'employee_id': emp_id, 'name': name, 'status': 'failed',
+                                    'message': 'Employee not found in PMS'})
+                    continue
+
+                current_ctc = sf(get_val(row, 'current_ctc'))
+                new_ctc = sf(get_val(row, 'new_ctc'))
+                increment_pct = sf(get_val(row, 'increment_pct'))
+                promotion_pct = sf(get_val(row, 'promotion_pct'))
+                current_designation = str(get_val(row, 'current_designation') or '').strip()
+                new_designation = str(get_val(row, 'new_designation') or '').strip()
+                performance_rating = str(get_val(row, 'performance_rating') or '').strip()
+                grade_label = str(get_val(row, 'grade_label') or '').strip()
+                department = str(get_val(row, 'department') or emp.department or '').strip()
+                effective_date = format_date(get_val(row, 'effective_date')) or date.today()
+
+                letter_type = 'increment'
+                if new_designation and new_designation != current_designation:
+                    letter_type = 'promotion' if promotion_pct > 0 else 'redesignation'
+                if increment_pct > 0 and promotion_pct > 0:
+                    letter_type = 'combined'
+
+                offer = OfferLetter.objects.create(
+                    employee=emp, letter_type=letter_type,
+                    current_ctc=current_ctc, new_ctc=new_ctc,
+                    increment_pct=increment_pct, promotion_pct=promotion_pct,
+                    effective_date=effective_date,
+                    old_designation=current_designation, new_designation=new_designation,
+                    performance_rating=performance_rating, grade_label=grade_label,
+                    email_address=email, department=department, status='pending',
+                )
+
+                pdf_buf = generate_offer_letter_pdf(
+                    emp, current_ctc, new_ctc, increment_pct, promotion_pct, effective_date,
+                    old_designation=current_designation, new_designation=new_designation,
+                    performance_rating=performance_rating, grade_label=grade_label,
+                    employee_id=emp_id, employee_name=name, department=department,
+                )
+                offer.pdf_file.save(f'offer_{emp_id}_{offer.id}.pdf', ContentFile(pdf_buf.read()), save=True)
+
+                results.append({'employee_id': emp_id, 'name': name, 'status': 'generated',
+                                'message': 'Letter generated (preview — not emailed)',
+                                'pdf_url': f'/api/pms/offer-letter/{offer.id}/pdf/'})
+                created += 1
+            except Exception as e:
+                errors.append(f'Row {row_idx}: {str(e)}')
+                results.append({'employee_id': emp_id, 'name': name, 'status': 'failed', 'message': str(e)})
+
+        return Response({
+            'message': f'✅ {created} offer letter(s) generated (preview mode — emails not sent).',
+            'created': created, 'errors': errors, 'results': results,
+        })
+
+
+class OfferLetterPDFView(APIView):
+    """Download/view a generated offer-letter PDF."""
+    def get(self, request, offer_letter_id):
+        from django.http import FileResponse
+        try:
+            offer = OfferLetter.objects.get(id=offer_letter_id)
+        except OfferLetter.DoesNotExist:
+            return Response({'error': 'Not found'}, status=404)
+        if not offer.pdf_file:
+            return Response({'error': 'No PDF generated for this letter'}, status=404)
+        return FileResponse(offer.pdf_file.open('rb'), content_type='application/pdf',
+                            filename=f'OfferLetter_{offer.employee.employee_id}.pdf')
