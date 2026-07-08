@@ -177,85 +177,14 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     # Build PDF
     doc.build(story)
     buffer.seek(0)
-
-    # Add password protection using Employee ID with qpdf command
-    password = emp_id or 'EMPLOYEE'
-    import subprocess
-    import tempfile
-    import os
-    import logging
-
-    try:
-        # Save unencrypted PDF to temp file
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
-            tmp.write(buffer.read())
-            tmp_path = tmp.name
-
-        # Encrypt using qpdf command
-        encrypted_path = tmp_path.replace('.pdf', '_encrypted.pdf')
-        result = subprocess.run([
-            'qpdf',
-            '--encrypt', password, 'APIS_ADMIN', '256',
-            '--', tmp_path, encrypted_path
-        ], capture_output=True, text=True)
-
-        if result.returncode != 0:
-            logging.error(f"qpdf failed: {result.stderr}")
-            os.unlink(tmp_path)
-            buffer.seek(0)
-            return buffer
-
-        # Read encrypted PDF into buffer
-        with open(encrypted_path, 'rb') as f:
-            encrypted_buffer = io.BytesIO(f.read())
-        encrypted_buffer.seek(0)
-
-        # Cleanup temp files
-        os.unlink(tmp_path)
-        os.unlink(encrypted_path)
-
-        logging.info(f"PDF encrypted successfully for {emp_id}")
-        return encrypted_buffer
-    except Exception as e:
-        # If encryption fails, log error and return unencrypted PDF
-        logging.error(f"PDF encryption exception: {str(e)}", exc_info=True)
-        buffer.seek(0)
-        return buffer
+    return buffer
 
 
 def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective_date, offer_letter_id=None):
-    """Send offer letter PDF via email with approval buttons."""
+    """Send offer letter PDF via email."""
     from django.conf import settings
-    from django.urls import reverse
-    from django.core.signing import TimestampSigner
-    import json
 
-    subject = f"Your CTC Revision Letter - Action Required - Effective {effective_date.strftime('%d %B, %Y')}"
-
-    # Generate signed URLs for approval actions (valid for 30 days)
-    signer = TimestampSigner(salt='offer_letter_approval')
-
-    approval_token = None
-    approval_url = ''
-    reject_url = ''
-
-    if offer_letter_id:
-        token_data = json.dumps({'offer_letter_id': offer_letter_id, 'action': 'approve'})
-        approval_token = signer.sign(token_data)
-
-        # Get base URL from settings, defaulting to QA server
-        base_url = 'http://103.205.66.45:8080'  # Default to QA
-        if settings.ALLOWED_HOSTS:
-            for host in settings.ALLOWED_HOSTS:
-                if host and host != '*':
-                    if host.startswith('http'):
-                        base_url = host
-                    else:
-                        base_url = f'http://{host}:8080' if '8080' not in host else f'http://{host}'
-                    break
-
-        approval_url = f"{base_url}/api/pms/offer-letter/{offer_letter_id}/approve/?action=accept"
-        reject_url = f"{base_url}/api/pms/offer-letter/{offer_letter_id}/approve/?action=reject"
+    subject = f"Your CTC Revision Letter - Effective {effective_date.strftime('%d %B, %Y')}"
 
     body = f"""
 <html>
@@ -265,17 +194,10 @@ def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective
 
     <p>Please find attached your <b>CTC Revision Letter</b>. This letter contains details of your revised compensation package effective from <b>{effective_date.strftime('%d %B, %Y')}</b>.</p>
 
-    <p style="background-color: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; border-radius: 4px;">
-        <b>⚠️ Action Required:</b> Please review the attached letter and confirm your acceptance or rejection within 3 business days.
-    </p>
-
-    <div style="margin: 20px 0; text-align: center;">
-        <a href="{approval_url}" style="display: inline-block; margin-right: 10px; padding: 12px 30px; background-color: #28a745; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">✓ Accept</a>
-        <a href="{reject_url}" style="display: inline-block; padding: 12px 30px; background-color: #dc3545; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">✗ Reject</a>
-    </div>
+    <p>Please review the attached letter carefully.</p>
 
     <p style="color: #666; font-size: 12px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd;">
-        If you have any questions or concerns, please reach out to the HR department.<br>
+        If you have any questions, please reach out to the HR department.<br>
         <b>APIS INDIA - Human Resources Team</b>
     </p>
 </div>
@@ -290,8 +212,9 @@ def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective
         to=[employee_email],
     )
 
-    email.content_subtype = 'html'  # Mark as HTML email
+    email.content_subtype = 'html'
 
+    pdf_buffer.seek(0)
     email.attach(f'CTC_Letter_{employee_name.replace(" ", "_")}.pdf',
                 pdf_buffer.read(),
                 'application/pdf')

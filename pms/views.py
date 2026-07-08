@@ -7,7 +7,7 @@ from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
-from .models import PMSEmployee, PMSAuditLog, OfferLetter, OfferLetterApproval, GRADE_META
+from .models import PMSEmployee, PMSAuditLog, OfferLetter, OfferLetterApproval, OfferLetterSendLog, OrganizationStructure, GRADE_META
 
 GRADE_ORDER = ['A+', 'A', 'B+', 'B', 'C', 'D']
 
@@ -52,7 +52,7 @@ def serialize_emp(e):
         'fy_2223_growth_pct': float(e.fy_2223_growth_pct) if e.fy_2223_growth_pct else None,
         'fy_2324_growth_pct': float(e.fy_2324_growth_pct) if e.fy_2324_growth_pct else None,
         'fy_2425_growth_pct': float(e.fy_2425_growth_pct) if e.fy_2425_growth_pct else None,
-        'self_score': float(e.self_score) if e.self_score is not None else None,
+        'emp_score': float(e.emp_score) if e.emp_score is not None else None,
         'manager_score': float(e.manager_score) if e.manager_score is not None else None,
         'hod_score': float(e.hod_score) if e.hod_score is not None else None,
         'management_score': float(e.management_score) if e.management_score is not None else None,
@@ -272,13 +272,14 @@ class PMSImportView(APIView):
             'increment 24-25': 'fy_2425_increment',
             'fy 24-25 (%)': 'fy_2425_growth_pct',
             'fy 25-26 (current ctc)': 'current_ctc',
-            'self score': 'self_score',
+            'emp score': 'emp_score', 'employee score': 'emp_score', 'self score': 'emp_score',
             'manager score': 'manager_score',
             'hod score': 'hod_score',
             'score range': 'score_range',
             'final score range': 'final_score_range',
             'rating': 'rating',
             'performance': 'performance',
+            'management score': 'management_score',
             'promotion (y/n)': 'promoted',
             'promotion rediness': 'promotion_readiness',
             'promotion readiness': 'promotion_readiness',
@@ -422,7 +423,7 @@ class PMSImportView(APIView):
                         'fy_2223_growth_pct': sf(data.get('fy_2223_growth_pct')),
                         'fy_2324_growth_pct': sf(data.get('fy_2324_growth_pct')),
                         'fy_2425_growth_pct': sf(data.get('fy_2425_growth_pct')),
-                        'self_score': ss(data.get('self_score')),
+                        'emp_score': ss(data.get('emp_score') or data.get('self_score')),
                         'manager_score': ss(data.get('manager_score')),
                         'hod_score': ss(data.get('hod_score')),
                         'fy_2223_grade': str(data.get('fy_2223_grade') or '').strip(),
@@ -473,10 +474,10 @@ class PMSEmployeeUpdateView(APIView):
         logs = []
 
         fields_to_update = [
-            'manager_score', 'hod_score', 'management_score', 'override_increment_pct',
+            'emp_score', 'manager_score', 'hod_score', 'management_score', 'override_increment_pct',
             'override_grade', 'promoted', 'promotion_pct', 'management_discretion_pct',
             'on_time_reward', 'reward_amount', 'promotion_readiness', 'notes',
-            'salary_correction', 'redesignation', 'self_score',
+            'salary_correction', 'redesignation',
         ]
 
         for field in fields_to_update:
@@ -484,7 +485,7 @@ class PMSEmployeeUpdateView(APIView):
                 old_val = getattr(emp, field)
                 if field in ('promoted', 'redesignation', 'on_time_reward'):
                     new_val = bool(d[field])
-                elif field in ('manager_score', 'hod_score', 'management_score', 'self_score'):
+                elif field in ('emp_score', 'manager_score', 'hod_score', 'management_score'):
                     v = d[field]
                     new_val = float(v) if v not in (None, '', 'null') else None
                     if new_val is not None:
@@ -559,30 +560,31 @@ class PMSTemplateView(APIView):
             'FY 23-24 (%)',  # 40 - NEW
             'FY 24-25 (%)',  # 41 - NEW
             'FY 25-26 (Current CTC)',  # 42
-            'Self Score',  # 43
+            'EMP Score',  # 43
             'Manager Score',  # 44
             'HOD Score',  # 45
-            'Score Range',  # 46
-            'Final Score Range',  # 47
-            'Rating',  # 48
-            'Performance',  # 49
-            'Promotion (Y/N)',  # 50
-            'Level',  # 51
-            'Promotion Readiness',  # 52
-            'Salary Correction Level',  # 53
-            'Management Discretion',  # 54
-            'One Time Reward',  # 55
-            'Redesignation',  # 56
-            'Revised CTC',  # 57
-            'Increment %',  # 58
-            'Promotion %',  # 59
-            'Total Hike %',  # 60
-            'Total Salary Increment',  # 61
-            'CTC Fixed',  # 62
-            'Variable',  # 63
-            'FY 26-27 Total CTC',  # 64
-            'Manager Remarks',  # 65
-            'HOD Remarks',  # 66
+            'Management Score',  # 46
+            'Score Range',  # 47
+            'Final Score Range',  # 48
+            'Rating',  # 49
+            'Performance',  # 50
+            'Promotion (Y/N)',  # 51
+            'Level',  # 52
+            'Promotion Readiness',  # 53
+            'Salary Correction Level',  # 54
+            'Management Discretion',  # 55
+            'One Time Reward',  # 56
+            'Redesignation',  # 57
+            'Revised CTC',  # 58
+            'Increment %',  # 59
+            'Promotion %',  # 60
+            'Total Hike %',  # 61
+            'Total Salary Increment',  # 62
+            'CTC Fixed',  # 63
+            'Variable',  # 64
+            'FY 26-27 Total CTC',  # 65
+            'Manager Remarks',  # 66
+            'HOD Remarks',  # 67
         ]
 
         hf = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
@@ -597,9 +599,9 @@ class PMSTemplateView(APIView):
             c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
         samples = [
-            [1, 'EMP001', 'Rahul Sharma', 'Sales Manager', 'Sr Sales Manager', 'STAT', 'Sales', 'Sales-New', 'Direct Sales', 'Zone A', 'Sub Zone 1', 'CC001', 'CAT01', 'HQ Mumbai', 'Mumbai', 'M1', 'A', 'Male', 'MBA', '1985-05-15', 38, '2015-06-01', 9, 'Rajesh Kumar', 'MGR001', 'Priya Singh', 'HOD001', 5, 50000, 8000, 2024, 0, 600000, 50000, 620000, 51667, 640000, 53333, 3.5, 3.2, 3.1, 660000, 82, 85, 88, '80-90', '85-95', 85, 'High', 'Yes', 'L2', '1_year', 'Normal', 10, 'Yes', 'No', 660000, 10, 8, 5, 81180, 660000, 25000, 811800, 'Strong leader', 'Exceeded targets'],
-            [2, 'EMP002', 'Priya Singh', 'Sr Executive', '', 'MANAGER', 'Marketing', 'Marketing-New', 'Digital Marketing', 'Zone B', 'Sub Zone 2', 'CC002', 'CAT01', 'HQ Delhi', 'Delhi', 'O1', 'A+', 'Female', 'B.Tech', '1992-08-22', 31, '2018-03-15', 7, 'Ramesh Gupta', 'MGR002', 'Amit Kumar', 'HOD002', 8, 40000, 6000, 2022, 2, 450000, 40000, 480000, 42667, 510000, 45333, 4.0, 3.8, 3.5, 540000, 88, 92, 90, '85-95', '90-100', 92, 'Excellent', 'Yes', 'L1', 'ready_now', 'High', 12, 'Yes', 'Yes', 540000, 12, 8, 10, 168480, 540000, 35000, 702000, 'Exceptional performer', 'Ready for next level'],
-            [3, 'EMP003', 'Amit Kumar', 'Associate', '', '', 'Operations', 'Operations-New', 'Process Ops', 'Zone C', 'Sub Zone 3', 'CC003', 'CAT02', 'HQ Chennai', 'Chennai', 'W1', 'B', 'Male', 'B.Sc', '1998-12-10', 25, '2022-01-10', 2, 'Vikram Singh', 'MGR003', 'Deepak Nair', 'HOD003', 3, 25000, 2500, None, 2, 280000, 23333, 300000, 25000, 320000, 26667, 2.8, 2.5, 2.2, 340000, 65, 68, 70, '60-70', '65-75', 68, 'Average', 'No', 'L3', 'not_ready', 'Normal', 5, 'No', 'No', 340000, 5, 0, 0, 17000, 340000, 0, 357000, 'Meets expectations', 'Needs development'],
+            [1, 'EMP001', 'Rahul Sharma', 'Sales Manager', 'Sr Sales Manager', 'STAT', 'Sales', 'Sales-New', 'Direct Sales', 'Zone A', 'Sub Zone 1', 'CC001', 'CAT01', 'HQ Mumbai', 'Mumbai', 'M1', 'A', 'Male', 'MBA', '1985-05-15', 38, '2015-06-01', 9, 'Rajesh Kumar', 'MGR001', 'Priya Singh', 'HOD001', 5, 50000, 8000, 2024, 0, 600000, 50000, 620000, 51667, 640000, 53333, 3.5, 3.2, 3.1, 660000, 82, 85, 88, 85, '80-90', '85-95', 85, 'High', 'Yes', 'L2', '1_year', 'Normal', 10, 'Yes', 'No', 660000, 10, 8, 5, 81180, 660000, 25000, 811800, 'Strong leader', 'Exceeded targets'],
+            [2, 'EMP002', 'Priya Singh', 'Sr Executive', '', 'MANAGER', 'Marketing', 'Marketing-New', 'Digital Marketing', 'Zone B', 'Sub Zone 2', 'CC002', 'CAT01', 'HQ Delhi', 'Delhi', 'O1', 'A+', 'Female', 'B.Tech', '1992-08-22', 31, '2018-03-15', 7, 'Ramesh Gupta', 'MGR002', 'Amit Kumar', 'HOD002', 8, 40000, 6000, 2022, 2, 450000, 40000, 480000, 42667, 510000, 45333, 4.0, 3.8, 3.5, 540000, 88, 92, 90, 88, '85-95', '90-100', 92, 'Excellent', 'Yes', 'L1', 'ready_now', 'High', 12, 'Yes', 'Yes', 540000, 12, 8, 10, 168480, 540000, 35000, 702000, 'Exceptional performer', 'Ready for next level'],
+            [3, 'EMP003', 'Amit Kumar', 'Associate', '', '', 'Operations', 'Operations-New', 'Process Ops', 'Zone C', 'Sub Zone 3', 'CC003', 'CAT02', 'HQ Chennai', 'Chennai', 'W1', 'B', 'Male', 'B.Sc', '1998-12-10', 25, '2022-01-10', 2, 'Vikram Singh', 'MGR003', 'Deepak Nair', 'HOD003', 3, 25000, 2500, None, 2, 280000, 23333, 300000, 25000, 320000, 26667, 2.8, 2.5, 2.2, 340000, 65, 68, 70, 68, '60-70', '65-75', 68, 'Average', 'No', 'L3', 'not_ready', 'Normal', 5, 'No', 'No', 340000, 5, 0, 0, 17000, 340000, 0, 357000, 'Meets expectations', 'Needs development'],
         ]
 
         for ri, row in enumerate(samples, 2):
@@ -646,7 +648,7 @@ class PMSExportView(APIView):
 
         headers = [
             'Emp ID', 'Name', 'Designation', 'Department', 'Band', 'Location',
-            'Current CTC', 'Mgr Score', 'HOD Score', 'Mgt Score', 'Final Score',
+            'Current CTC', 'EMP Score', 'Mgr Score', 'HOD Score', 'Mgt Score', 'Final Score',
             'Grade', 'Label', 'Increment %', 'Increment Amt', 'Promotion %',
             'Promotion Amt', 'Mgmt Discretion %', 'Mgmt Discretion Amt',
             'New CTC', 'New CTC (Monthly)', 'Promoted', 'Redesignation', 'Reward',
@@ -664,6 +666,7 @@ class PMSExportView(APIView):
             for ci, val in enumerate([
                 e.employee_id, e.name, e.designation, e.department, e.band, e.location,
                 float(e.current_ctc),
+                float(e.emp_score) if e.emp_score else '',
                 float(e.manager_score) if e.manager_score else '',
                 float(e.hod_score) if e.hod_score else '',
                 float(e.management_score) if e.management_score else '',
@@ -1072,12 +1075,25 @@ class OfferLetterUploadView(APIView):
 class OfferLetterApprovalView(APIView):
     """Handle employee approval/acceptance of offer letters."""
 
+    def get(self, request, offer_letter_id):
+        from .models import OfferLetterApproval
+        from django.utils import timezone
+
+        action = request.query_params.get('action', 'accept')
+        return self._process_approval(request, offer_letter_id, action)
+
     def post(self, request, offer_letter_id):
         from .models import OfferLetterApproval
         from django.utils import timezone
 
-        action = request.data.get('action', 'accept')  # accept, reject, under_review
-        comments = request.data.get('comments', '').strip()
+        action = request.data.get('action', 'accept')
+        return self._process_approval(request, offer_letter_id, action)
+
+    def _process_approval(self, request, offer_letter_id, action):
+        from .models import OfferLetterApproval
+        from django.utils import timezone
+
+        comments = request.data.get('comments', '').strip() if hasattr(request, 'data') else ''
 
         try:
             offer = OfferLetter.objects.get(id=offer_letter_id)
@@ -1188,4 +1204,266 @@ class OfferLetterApprovalListView(APIView):
             'pending': pending,
             'acceptance_rate': f"{(accepted/total*100):.1f}%" if total > 0 else "0%",
             'letters': data,
+        })
+
+
+class OfferLetterSendActivityView(APIView):
+    """View activity log of all offer letter sends, filterable by department and batch."""
+
+    def get(self, request):
+        from django.db.models import Q
+
+        department = request.query_params.get('department')
+        batch_id = request.query_params.get('batch_id')
+        status = request.query_params.get('status')
+
+        logs = OfferLetterSendLog.objects.all()
+
+        if department:
+            logs = logs.filter(department__icontains=department)
+        if batch_id:
+            logs = logs.filter(batch_id=batch_id)
+        if status:
+            logs = logs.filter(status=status)
+
+        data = []
+        for log in logs:
+            data.append({
+                'id': log.id,
+                'batch_id': log.batch_id,
+                'department': log.department,
+                'employee_id': log.employee_id,
+                'employee_name': log.employee_name,
+                'email_address': log.email_address,
+                'status': log.status,
+                'sent_at': log.sent_at,
+                'error_message': log.error_message,
+                'created_at': log.created_at,
+                'updated_at': log.updated_at,
+            })
+
+        # Summary by department
+        departments = {}
+        for log in logs:
+            dept = log.department
+            if dept not in departments:
+                departments[dept] = {'total': 0, 'sent': 0, 'failed': 0, 'pending': 0}
+            departments[dept]['total'] += 1
+            if log.status == 'sent':
+                departments[dept]['sent'] += 1
+            elif log.status == 'failed':
+                departments[dept]['failed'] += 1
+            else:
+                departments[dept]['pending'] += 1
+
+        return Response({
+            'total_records': len(data),
+            'department_summary': departments,
+            'logs': data,
+        })
+
+
+class OrgStructureTemplateView(APIView):
+    """Download Excel template for organization structure upload."""
+
+    def get(self, request):
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from django.http import FileResponse
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Organization Data'
+
+        # Header row
+        headers = ['S.NO', 'Code', 'Name', 'Designation', 'HQ', 'STATE', 'ZONE', 'RM']
+        ws.append(headers)
+
+        # Format header
+        header_fill = PatternFill(start_color='366092', end_color='366092', fill_type='solid')
+        header_font = Font(bold=True, color='FFFFFF', size=11)
+
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+
+        # Sample data
+        sample_data = [
+            [1, 'EMP001', 'Rahul Sharma', 'Manager', 'Delhi', 'Delhi', 'North', 'Rajesh Kumar'],
+            [2, 'EMP002', 'Priya Singh', 'Executive', 'Mumbai', 'Maharashtra', 'West', 'Amit Patel'],
+            [3, 'EMP003', 'Amit Kumar', 'Coordinator', 'Bangalore', 'Karnataka', 'South', 'Sanjay Reddy'],
+        ]
+
+        for row in sample_data:
+            ws.append(row)
+
+        # Column widths
+        ws.column_dimensions['A'].width = 8
+        ws.column_dimensions['B'].width = 12
+        ws.column_dimensions['C'].width = 20
+        ws.column_dimensions['D'].width = 18
+        ws.column_dimensions['E'].width = 15
+        ws.column_dimensions['F'].width = 15
+        ws.column_dimensions['G'].width = 12
+        ws.column_dimensions['H'].width = 18
+
+        # Save
+        file_path = '/tmp/org_structure_template.xlsx'
+        wb.save(file_path)
+
+        response = FileResponse(open(file_path, 'rb'), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = 'attachment; filename="org_structure_template.xlsx"'
+        return response
+
+
+class OrgStructureUploadView(APIView):
+    """Upload organization structure data from Excel."""
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request):
+        import uuid
+        from django.utils import timezone
+
+        if 'file' not in request.FILES:
+            return Response({'error': 'No file provided'}, status=400)
+
+        file = request.FILES['file']
+        batch_id = str(uuid.uuid4())[:8]
+
+        try:
+            wb = openpyxl.load_workbook(file)
+            ws = wb.active
+
+            created = 0
+            errors = []
+
+            for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                try:
+                    sno, code, name, designation, hq, state, zone, rm = row[:8]
+
+                    if not code or not name:
+                        continue
+
+                    OrganizationStructure.objects.update_or_create(
+                        code=str(code).strip(),
+                        defaults={
+                            'sno': int(sno) if sno else row_idx,
+                            'name': str(name).strip(),
+                            'designation': str(designation).strip() if designation else '',
+                            'hq': str(hq).strip() if hq else '',
+                            'state': str(state).strip() if state else '',
+                            'zone': str(zone).strip() if zone else '',
+                            'rm': str(rm).strip() if rm else '',
+                            'batch_id': batch_id,
+                            'updated_at': timezone.now(),
+                        }
+                    )
+                    created += 1
+
+                except Exception as e:
+                    errors.append(f'Row {row_idx}: {str(e)}')
+
+            return Response({
+                'message': f'Successfully uploaded {created} records',
+                'created': created,
+                'batch_id': batch_id,
+                'errors': errors,
+            })
+
+        except Exception as e:
+            return Response({
+                'error': 'Upload failed',
+                'detail': str(e),
+            }, status=400)
+
+
+class OrgStructureDashboardView(APIView):
+    """Analytics dashboard with multi-filter support."""
+
+    def get(self, request):
+        from django.db.models import Q, Count
+
+        # Get filter params
+        designations = request.query_params.getlist('designation')
+        states = request.query_params.getlist('state')
+        zones = request.query_params.getlist('zone')
+        rms = request.query_params.getlist('rm')
+
+        # Base queryset
+        records = OrganizationStructure.objects.all()
+
+        # Apply filters
+        if designations:
+            records = records.filter(designation__in=designations)
+        if states:
+            records = records.filter(state__in=states)
+        if zones:
+            records = records.filter(zone__in=zones)
+        if rms:
+            records = records.filter(rm__in=rms)
+
+        # Prepare data
+        data = [{
+            'id': r.id,
+            'sno': r.sno,
+            'code': r.code,
+            'name': r.name,
+            'designation': r.designation,
+            'hq': r.hq,
+            'state': r.state,
+            'zone': r.zone,
+            'rm': r.rm,
+        } for r in records]
+
+        # Get all unique values for filters
+        all_records = OrganizationStructure.objects.all()
+        filter_options = {
+            'designations': sorted(set(all_records.values_list('designation', flat=True))),
+            'states': sorted(set(all_records.values_list('state', flat=True))),
+            'zones': sorted(set(all_records.values_list('zone', flat=True))),
+            'rms': sorted(set(all_records.values_list('rm', flat=True))),
+        }
+
+        # Analytics
+        total_employees = len(data)
+        unique_designations = records.values('designation').distinct().count()
+        unique_zones = records.values('zone').distinct().count()
+        unique_states = records.values('state').distinct().count()
+
+        # Count by RM
+        rm_count = {}
+        for r in records:
+            rm_count[r.rm] = rm_count.get(r.rm, 0) + 1
+
+        # Count by Designation
+        designation_count = {}
+        for r in records:
+            designation_count[r.designation] = designation_count.get(r.designation, 0) + 1
+
+        # Count by Zone
+        zone_count = {}
+        for r in records:
+            zone_count[r.zone] = zone_count.get(r.zone, 0) + 1
+
+        # Count by State
+        state_count = {}
+        for r in records:
+            state_count[r.state] = state_count.get(r.state, 0) + 1
+
+        return Response({
+            'summary': {
+                'total_employees': total_employees,
+                'unique_designations': unique_designations,
+                'unique_zones': unique_zones,
+                'unique_states': unique_states,
+            },
+            'breakdown': {
+                'by_rm': rm_count,
+                'by_designation': designation_count,
+                'by_zone': zone_count,
+                'by_state': state_count,
+            },
+            'filter_options': filter_options,
+            'data': data,
+            'record_count': len(data),
         })

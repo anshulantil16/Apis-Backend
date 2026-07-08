@@ -60,7 +60,7 @@ class PMSEmployee(models.Model):
     fy_2425_growth_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
 
     # ── Performance Scores ───────────────────────────────────────────────────────
-    self_score   = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    emp_score    = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     manager_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     hod_score    = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     management_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -127,11 +127,12 @@ class PMSEmployee(models.Model):
     # ── Score & Grade ──────────────────────────────────────────────────────────
     @property
     def final_score(self):
-        """Weighted score: Manager×35% + HOD×35% + Management×30%"""
+        """Weighted score: EMP×25% + Manager×25% + HOD×25% + Management×25%"""
+        e  = float(self.emp_score or 0)
         m  = float(self.manager_score or 0)
         h  = float(self.hod_score or 0)
         mg = float(self.management_score or 0)
-        return round(m * 0.35 + h * 0.35 + mg * 0.30, 2)
+        return round(e * 0.25 + m * 0.25 + h * 0.25 + mg * 0.25, 2)
 
     @property
     def auto_grade(self):
@@ -237,6 +238,10 @@ class OfferLetter(models.Model):
     status      = models.CharField(max_length=20, default='pending',
                                    choices=[('pending', 'Pending'), ('sent', 'Sent'), ('failed', 'Failed')])
 
+    # Department batch tracking
+    batch_id    = models.CharField(max_length=50, blank=True, db_index=True)
+    department  = models.CharField(max_length=200, blank=True, db_index=True)
+
     # Audit
     created_at  = models.DateTimeField(auto_now_add=True)
     updated_at  = models.DateTimeField(auto_now=True)
@@ -277,6 +282,40 @@ class OfferLetterApproval(models.Model):
         return f"{self.offer_letter.employee.name} - {self.status}"
 
 
+class OfferLetterSendLog(models.Model):
+    """Activity log tracking all offer letter sends by department."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('sent', 'Sent'),
+        ('failed', 'Failed'),
+    ]
+
+    offer_letter = models.OneToOneField(OfferLetter, on_delete=models.CASCADE, related_name='send_log')
+    batch_id = models.CharField(max_length=50, db_index=True)
+    department = models.CharField(max_length=200, db_index=True)
+    employee_id = models.CharField(max_length=50)
+    employee_name = models.CharField(max_length=200)
+    email_address = models.EmailField()
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    sent_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['batch_id']),
+            models.Index(fields=['department']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.employee_name} ({self.department}) - {self.status}"
+
+
 class PMSAuditLog(models.Model):
     """Tracks every change made to an employee record."""
     employee    = models.ForeignKey(PMSEmployee, on_delete=models.CASCADE, related_name='audit_logs')
@@ -288,3 +327,33 @@ class PMSAuditLog(models.Model):
 
     class Meta:
         ordering = ['-timestamp']
+
+
+class OrganizationStructure(models.Model):
+    """Territory Management - Employee organization structure by RM, Zone, Designation."""
+
+    sno             = models.IntegerField()
+    code            = models.CharField(max_length=50, unique=True, db_index=True)
+    name            = models.CharField(max_length=200, db_index=True)
+    designation     = models.CharField(max_length=200, db_index=True)
+    hq              = models.CharField(max_length=200, blank=True)
+    state           = models.CharField(max_length=100, db_index=True)
+    zone            = models.CharField(max_length=100, db_index=True)
+    rm              = models.CharField(max_length=200, db_index=True)  # Reporting Manager
+
+    created_at      = models.DateTimeField(auto_now_add=True)
+    updated_at      = models.DateTimeField(auto_now=True)
+    batch_id        = models.CharField(max_length=50, blank=True, db_index=True)  # Track uploads
+
+    class Meta:
+        ordering = ['sno']
+        indexes = [
+            models.Index(fields=['designation']),
+            models.Index(fields=['state']),
+            models.Index(fields=['zone']),
+            models.Index(fields=['rm']),
+            models.Index(fields=['batch_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} - {self.designation}"
