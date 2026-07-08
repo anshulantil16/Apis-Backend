@@ -722,9 +722,12 @@ class OfferLetterUploadView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
-        from .offer_letter import generate_offer_letter_pdf
+        from .offer_letter import generate_offer_letter_pdf, send_offer_letter_email
         from datetime import datetime, date
         from django.core.files.base import ContentFile
+        from django.utils import timezone
+
+        send_emails = str(request.data.get('send_emails', 'false')).lower() == 'true'
 
         file = request.FILES.get('file')
         if not file:
@@ -834,11 +837,29 @@ class OfferLetterUploadView(APIView):
                     performance_rating=performance_rating, grade_label=grade_label,
                     employee_id=emp_id, employee_name=name, department=department,
                 )
-                offer.pdf_file.save(f'offer_{emp_id}_{offer.id}.pdf', ContentFile(pdf_buf.read()), save=True)
+                pdf_bytes = pdf_buf.getvalue()
+                offer.pdf_file.save(f'offer_{emp_id}_{offer.id}.pdf', ContentFile(pdf_bytes), save=True)
 
-                results.append({'employee_id': emp_id, 'name': name, 'status': 'generated',
-                                'message': 'Letter generated (preview — not emailed)',
-                                'pdf_url': f'/api/pms/offer-letter/{offer.id}/pdf/'})
+                status_label = 'generated'
+                msg = 'Letter generated (not emailed)'
+                if send_emails and email:
+                    try:
+                        send_offer_letter_email(email, name, io.BytesIO(pdf_bytes), effective_date, offer.id)
+                        offer.status = 'sent'
+                        offer.email_sent = True
+                        offer.email_sent_at = timezone.now()
+                        offer.save()
+                        status_label = 'sent'
+                        msg = f'Generated and emailed to {email}'
+                    except Exception as ee:
+                        offer.status = 'failed'
+                        offer.save()
+                        msg = f'Generated, but email failed: {ee}'
+                elif send_emails and not email:
+                    msg = 'Generated, but no email address provided'
+
+                results.append({'employee_id': emp_id, 'name': name, 'status': status_label,
+                                'message': msg, 'pdf_url': f'/api/pms/offer-letter/{offer.id}/pdf/'})
                 created += 1
             except Exception as e:
                 errors.append(f'Row {row_idx}: {str(e)}')
