@@ -235,7 +235,11 @@ class OfferLetter(models.Model):
         ('combined', 'Combined Promotion & Increment Letter'),
     ]
 
-    employee       = models.ForeignKey(PMSEmployee, on_delete=models.CASCADE, related_name='offer_letters')
+    # Standalone system — NOT tied to PMS. Employee data comes straight from the
+    # uploaded Excel. The optional FK is kept only for backward compatibility.
+    employee       = models.ForeignKey(PMSEmployee, on_delete=models.SET_NULL, related_name='offer_letters', null=True, blank=True)
+    employee_code  = models.CharField(max_length=50, blank=True)
+    employee_name  = models.CharField(max_length=200, blank=True)
     letter_type    = models.CharField(max_length=20, choices=LETTER_TYPE_CHOICES, default='increment')
     current_ctc    = models.DecimalField(max_digits=14, decimal_places=2)
     new_ctc        = models.DecimalField(max_digits=14, decimal_places=2)
@@ -261,4 +265,5 @@ class OfferLetter(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f"{self.employee.name} - {self.letter_type.title()}"
+        who = self.employee_name or (self.employee.name if self.employee else self.employee_code)
+        return f"{who} - {self.letter_type.title()}"

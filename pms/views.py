@@ -799,13 +799,7 @@ class OfferLetterUploadView(APIView):
             if not emp_id or not name:
                 continue
             try:
-                emp = PMSEmployee.objects.filter(employee_id=emp_id).first()
-                if emp is None:
-                    errors.append(f'Row {row_idx}: Employee {emp_id} not found in PMS — import the employee first')
-                    results.append({'employee_id': emp_id, 'name': name, 'status': 'failed',
-                                    'message': 'Employee not found in PMS'})
-                    continue
-
+                # Standalone system — everything comes from the uploaded file, no PMS lookup.
                 current_ctc = sf(get_val(row, 'current_ctc'))
                 new_ctc = sf(get_val(row, 'new_ctc'))
                 increment_pct = sf(get_val(row, 'increment_pct'))
@@ -814,7 +808,7 @@ class OfferLetterUploadView(APIView):
                 new_designation = str(get_val(row, 'new_designation') or '').strip()
                 performance_rating = str(get_val(row, 'performance_rating') or '').strip()
                 grade_label = str(get_val(row, 'grade_label') or '').strip()
-                department = str(get_val(row, 'department') or emp.department or '').strip()
+                department = str(get_val(row, 'department') or '').strip()
                 effective_date = format_date(get_val(row, 'effective_date')) or date.today()
 
                 letter_type = 'increment'
@@ -824,7 +818,8 @@ class OfferLetterUploadView(APIView):
                     letter_type = 'combined'
 
                 offer = OfferLetter.objects.create(
-                    employee=emp, letter_type=letter_type,
+                    employee=None, employee_code=emp_id, employee_name=name,
+                    letter_type=letter_type,
                     current_ctc=current_ctc, new_ctc=new_ctc,
                     increment_pct=increment_pct, promotion_pct=promotion_pct,
                     effective_date=effective_date,
@@ -834,7 +829,7 @@ class OfferLetterUploadView(APIView):
                 )
 
                 pdf_buf = generate_offer_letter_pdf(
-                    emp, current_ctc, new_ctc, increment_pct, promotion_pct, effective_date,
+                    None, current_ctc, new_ctc, increment_pct, promotion_pct, effective_date,
                     old_designation=current_designation, new_designation=new_designation,
                     performance_rating=performance_rating, grade_label=grade_label,
                     employee_id=emp_id, employee_name=name, department=department,
@@ -865,5 +860,6 @@ class OfferLetterPDFView(APIView):
             return Response({'error': 'Not found'}, status=404)
         if not offer.pdf_file:
             return Response({'error': 'No PDF generated for this letter'}, status=404)
+        code = offer.employee_code or (offer.employee.employee_id if offer.employee else offer.id)
         return FileResponse(offer.pdf_file.open('rb'), content_type='application/pdf',
-                            filename=f'OfferLetter_{offer.employee.employee_id}.pdf')
+                            filename=f'OfferLetter_{code}.pdf')
