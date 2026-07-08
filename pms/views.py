@@ -4,7 +4,17 @@ import openpyxl
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
-from .models import PMSEmployee, PMSAuditLog, GRADE_META
+from .models import PMSEmployee, PMSAuditLog, PMSSettings, GRADE_META
+
+
+def _apply_global_mgmt(employees):
+    """Overlay the company-wide Management Score onto each employee instance (in memory
+    only, not saved) so final_score / grade / increment all use the single value."""
+    mgmt = PMSSettings.get_solo().management_score
+    if mgmt is not None:
+        for e in employees:
+            e.management_score = mgmt
+    return mgmt
 
 GRADE_ORDER = ['A+', 'A', 'B+', 'B', 'C', 'D']
 
@@ -203,6 +213,7 @@ def build_summary(employees):
 class PMSListView(APIView):
     def get(self, request):
         employees = list(PMSEmployee.objects.all())
+        _apply_global_mgmt(employees)
         return Response({'employees': [serialize_emp(e) for e in employees], 'summary': build_summary(employees)})
 
     def delete(self, request):
@@ -418,8 +429,9 @@ class PMSEmployeeUpdateView(APIView):
         simulate = d.get('simulate_only', False)
         logs = []
 
+        # management_score is company-wide (see PMSSettings), not editable per employee.
         fields_to_update = [
-            'manager_score', 'hod_score', 'management_score', 'override_increment_pct',
+            'manager_score', 'hod_score', 'override_increment_pct',
             'override_grade', 'promoted', 'promotion_pct', 'management_discretion_pct',
             'on_time_reward', 'reward_amount', 'promotion_readiness', 'notes',
             'salary_correction', 'redesignation', 'emp_score',
@@ -430,7 +442,7 @@ class PMSEmployeeUpdateView(APIView):
                 old_val = getattr(emp, field)
                 if field in ('promoted', 'redesignation', 'on_time_reward'):
                     new_val = bool(d[field])
-                elif field in ('manager_score', 'hod_score', 'management_score', 'emp_score'):
+                elif field in ('manager_score', 'hod_score', 'emp_score'):
                     v = d[field]
                     new_val = float(v) if v not in (None, '', 'null') else None
                     if new_val is not None:
@@ -450,7 +462,30 @@ class PMSEmployeeUpdateView(APIView):
             for log in logs:
                 PMSAuditLog.objects.create(employee=emp, **log)
 
+        _apply_global_mgmt([emp])
         return Response(serialize_emp(emp))
+
+
+class PMSSettingsView(APIView):
+    """Get / set company-wide PMS settings (currently the single Management Score)."""
+    def get(self, request):
+        s = PMSSettings.get_solo()
+        return Response({
+            'management_score': float(s.management_score) if s.management_score is not None else None,
+        })
+
+    def post(self, request):
+        s = PMSSettings.get_solo()
+        v = request.data.get('management_score')
+        if v in (None, '', 'null'):
+            s.management_score = None
+        else:
+            s.management_score = max(0.0, min(100.0, float(v)))
+        s.save()
+        return Response({
+            'management_score': float(s.management_score) if s.management_score is not None else None,
+            'message': 'Management score updated for all employees.',
+        })
 
 
 class PMSTemplateView(APIView):
@@ -471,7 +506,7 @@ class PMSTemplateView(APIView):
             'Last Promotion (Year)',
             'FY 22-23 CTC', 'FY 23-24 CTC', 'FY 24-25 CTC', 'FY 25-26 Current CTC *',
             'FY 22-23 (%)', 'FY 23-24 (%)', 'FY 24-25 (%)',
-            'EMP Score (0-100)', 'Manager Score (0-100)', 'HOD Score (0-100)', 'Management Score (0-100)',
+            'EMP Score (0-100)', 'Manager Score (0-100)', 'HOD Score (0-100)',
             'FY 22-23 Grade', 'FY 23-24 Grade', 'FY 24-25 Grade',
             'Promotion (Y/N)', 'Promotion %', 'Redesignation', 'Promotion Readiness',
             'One Time Reward', 'Reward Amount', 'Management Discretion %', 'Salary Correction',
@@ -497,7 +532,7 @@ class PMSTemplateView(APIView):
              2024,
              600000, 650000, 700000, 720000,
              8, 7.7, 7.7,
-             82, 85, 88, 86,
+             82, 85, 88,
              'B', 'B+', 'A',
              'Yes', 8, 'No', '1_year',
              'No', 0, 5, 0,
@@ -509,7 +544,7 @@ class PMSTemplateView(APIView):
              2022,
              450000, 480000, 520000, 560000,
              6.7, 8.3, 7.7,
-             88, 92, 90, 91,
+             88, 92, 90,
              'A', 'A', 'A+',
              'Yes', 10, 'Yes', 'ready_now',
              'Yes', 50000, 8, 0,
@@ -521,7 +556,7 @@ class PMSTemplateView(APIView):
              None,
              250000, 280000, 300000, 320000,
              12, 7.1, 7.1,
-             65, 68, 70, 67,
+             65, 68, 70,
              'C', 'B', 'B',
              'No', 0, 'No', 'not_ready',
              'No', 0, 0, 0,
@@ -566,6 +601,7 @@ class PMSExportView(APIView):
         from openpyxl.styles import PatternFill, Font, Alignment
 
         employees = list(PMSEmployee.objects.all())
+        _apply_global_mgmt(employees)
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = 'PMS Results'

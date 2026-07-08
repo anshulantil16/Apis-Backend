@@ -1,5 +1,8 @@
 from django.urls import path
-from .views import PMSListView, PMSImportView, PMSEmployeeUpdateView, PMSTemplateView, PMSExportView
+from .views import (
+    PMSListView, PMSImportView, PMSEmployeeUpdateView, PMSTemplateView,
+    PMSExportView, PMSSettingsView,
+)
 
 urlpatterns = [
     path('employees/',              PMSListView.as_view()),
@@ -7,4 +10,5 @@ urlpatterns = [
     path('employees/<int:emp_id>/', PMSEmployeeUpdateView.as_view()),
     path('template/',               PMSTemplateView.as_view()),
     path('export/',                 PMSExportView.as_view()),
+    path('settings/',               PMSSettingsView.as_view()),
 ]

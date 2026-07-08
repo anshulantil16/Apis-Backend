@@ -207,3 +207,20 @@ class PMSAuditLog(models.Model):
 
     class Meta:
         ordering = ['-timestamp']
+
+
+class PMSSettings(models.Model):
+    """Singleton settings for PMS. Holds the company-wide Management Score that
+    applies equally to every employee (management reviews the whole company as one)."""
+    management_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    updated_at       = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = 'PMS Settings'
+
+    @classmethod
+    def get_solo(cls):
+        obj = cls.objects.first()
+        if obj is None:
+            obj = cls.objects.create()
+        return obj
