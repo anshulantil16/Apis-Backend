@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import (
     PMSListView, PMSImportView, PMSEmployeeUpdateView, PMSTemplateView,
-    PMSExportView, PMSSettingsView,
+    PMSExportView, PMSSettingsView, OfferLetterTemplateView,
 )
 
 urlpatterns = [
@@ -11,4 +11,5 @@ urlpatterns = [
     path('template/',               PMSTemplateView.as_view()),
     path('export/',                 PMSExportView.as_view()),
     path('settings/',               PMSSettingsView.as_view()),
+    path('offer-letter/template/',  OfferLetterTemplateView.as_view()),
 ]

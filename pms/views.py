@@ -659,3 +659,58 @@ class PMSExportView(APIView):
         resp = HttpResponse(buf.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         resp['Content-Disposition'] = 'attachment; filename="PMS_Results_Complete.xlsx"'
         return resp
+
+
+class OfferLetterTemplateView(APIView):
+    """Generate Excel template for Offer Letter upload."""
+
+    def get(self, request):
+        from django.http import HttpResponse
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Offer Letters'
+
+        headers = [
+            'SR NO', 'Employee ID *', 'Employee Name *', 'Email *', 'Department',
+            'Current Designation', 'New Designation', 'Current CTC *', 'New CTC *',
+            'Increment %', 'Promotion %', 'Performance Rating', 'Grade Label',
+            'Effective Date *', 'Remarks',
+        ]
+
+        hf = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
+        hf_yellow = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+        border = Border(left=Side(style='thin'), right=Side(style='thin'),
+                        top=Side(style='thin'), bottom=Side(style='thin'))
+
+        for ci, h in enumerate(headers, 1):
+            c = ws.cell(row=1, column=ci, value=h)
+            is_required = '*' in h
+            c.fill = hf if is_required else hf_yellow
+            c.font = Font(color='FFFFFF' if is_required else '000000', bold=True, size=10)
+            c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            c.border = border
+
+        samples = [
+            [1, 'EMP001', 'Rahul Sharma', 'rahul.sharma@apis.com', 'Sales', 'Sales Manager', 'Senior Sales Manager', 600000, 660000, 10, 0, 'A', 'Outstanding', '2026-07-01', 'Excellent performer'],
+            [2, 'EMP002', 'Priya Singh', 'priya.singh@apis.com', 'Operations', 'Executive', 'Senior Executive', 450000, 540000, 12, 8, 'A+', 'Exceptional', '2026-07-01', 'Ready for promotion'],
+            [3, 'EMP003', 'Amit Kumar', 'amit.kumar@apis.com', 'IT', 'Associate', 'Associate', 280000, 340000, 5, 0, 'B', 'Meets Target', '2026-07-01', ''],
+        ]
+
+        for ri, row in enumerate(samples, 2):
+            for ci, val in enumerate(row, 1):
+                c = ws.cell(row=ri, column=ci, value=val)
+                c.border = border
+                if ci == 14:  # Effective Date column
+                    c.number_format = 'yyyy-mm-dd'
+
+        for i in range(1, len(headers) + 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = 18
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        resp = HttpResponse(buf.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        resp['Content-Disposition'] = 'attachment; filename="OfferLetter_Template.xlsx"'
+        return resp
