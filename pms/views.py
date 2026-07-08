@@ -206,6 +206,15 @@ class PMSListView(APIView):
         return Response({'employees': [serialize_emp(e) for e in employees], 'summary': build_summary(employees)})
 
     def delete(self, request):
+        # `pms_offerletter` is an orphaned table (no Django model) whose non-cascading
+        # FK to pms_pmsemployee blocks employee deletion. Clear those rows first so the
+        # employee delete (which cascades to audit logs) can succeed.
+        from django.db import connection
+        with connection.cursor() as cursor:
+            try:
+                cursor.execute("DELETE FROM pms_offerletter")
+            except Exception:
+                pass
         PMSEmployee.objects.all().delete()
         return Response({'message': 'All PMS data cleared.'})
 
