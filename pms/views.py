@@ -865,8 +865,9 @@ class OfferLetterUploadView(APIView):
                 errors.append(f'Row {row_idx}: {str(e)}')
                 results.append({'employee_id': emp_id, 'name': name, 'status': 'failed', 'message': str(e)})
 
+        summary_mode = 'and emailed to employees' if send_emails else '(emails not sent — preview mode)'
         return Response({
-            'message': f'✅ {created} offer letter(s) generated (preview mode — emails not sent).',
+            'message': f'✅ {created} offer letter(s) generated {summary_mode}.',
             'created': created, 'errors': errors, 'results': results,
         })
 
