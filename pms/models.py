@@ -60,7 +60,7 @@ class PMSEmployee(models.Model):
     fy_2425_growth_pct       = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
 
     # ── Performance Scores ────────────────────────────────────────────────────
-    self_score               = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    emp_score                = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     manager_score            = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     hod_score                = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
 
@@ -106,11 +106,12 @@ class PMSEmployee(models.Model):
     # ── Calculated Properties ─────────────────────────────────────────────────
     @property
     def final_score(self):
-        """Weighted score: Manager×35% + HOD×35% + Management×30%"""
+        """Weighted score: EMP×25% + Manager×25% + HOD×25% + Management×25%"""
+        e  = float(self.emp_score or 0)
         m  = float(self.manager_score or 0)
         h  = float(self.hod_score or 0)
         mg = float(self.management_score or 0)
-        return round(m * 0.35 + h * 0.35 + mg * 0.30, 2)
+        return round(e * 0.25 + m * 0.25 + h * 0.25 + mg * 0.25, 2)
 
     @property
     def auto_grade(self):
