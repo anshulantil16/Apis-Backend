@@ -48,7 +48,7 @@ def serialize_emp(e):
         'fy_2223_growth_pct': float(e.fy_2223_growth_pct) if e.fy_2223_growth_pct else None,
         'fy_2324_growth_pct': float(e.fy_2324_growth_pct) if e.fy_2324_growth_pct else None,
         'fy_2425_growth_pct': float(e.fy_2425_growth_pct) if e.fy_2425_growth_pct else None,
-        'self_score': float(e.self_score) if e.self_score is not None else None,
+        'emp_score': float(e.emp_score) if e.emp_score is not None else None,
         'manager_score': float(e.manager_score) if e.manager_score is not None else None,
         'hod_score': float(e.hod_score) if e.hod_score is not None else None,
         'fy_2223_grade': e.fy_2223_grade,
@@ -258,7 +258,7 @@ class PMSImportView(APIView):
             'fy 22-23 (%)': 'fy_2223_growth_pct', 'fy 22-23 %': 'fy_2223_growth_pct',
             'fy 23-24 (%)': 'fy_2324_growth_pct', 'fy 23-24 %': 'fy_2324_growth_pct',
             'fy 24-25 (%)': 'fy_2425_growth_pct', 'fy 24-25 %': 'fy_2425_growth_pct',
-            'self score': 'self_score',
+            'self score': 'emp_score', 'emp score': 'emp_score', 'emp score (0-100)': 'emp_score',
             'manager score': 'manager_score', 'mgr score': 'manager_score', 'manager score (0-100)': 'manager_score',
             'hod score': 'hod_score', 'hod score (0-100)': 'hod_score',
             'fy 22-23 grade': 'fy_2223_grade',
@@ -366,7 +366,7 @@ class PMSImportView(APIView):
                     'fy_2223_growth_pct': sf(data.get('fy_2223_growth_pct')),
                     'fy_2324_growth_pct': sf(data.get('fy_2324_growth_pct')),
                     'fy_2425_growth_pct': sf(data.get('fy_2425_growth_pct')),
-                    'self_score': ss(data.get('self_score')),
+                    'emp_score': ss(data.get('emp_score')),
                     'manager_score': ss(data.get('manager_score')),
                     'hod_score': ss(data.get('hod_score')),
                     'fy_2223_grade': str(data.get('fy_2223_grade') or '').strip(),
@@ -412,7 +412,7 @@ class PMSEmployeeUpdateView(APIView):
             'manager_score', 'hod_score', 'management_score', 'override_increment_pct',
             'override_grade', 'promoted', 'promotion_pct', 'management_discretion_pct',
             'on_time_reward', 'reward_amount', 'promotion_readiness', 'notes',
-            'salary_correction', 'redesignation', 'self_score',
+            'salary_correction', 'redesignation', 'emp_score',
         ]
 
         for field in fields_to_update:
@@ -420,7 +420,7 @@ class PMSEmployeeUpdateView(APIView):
                 old_val = getattr(emp, field)
                 if field in ('promoted', 'redesignation', 'on_time_reward'):
                     new_val = bool(d[field])
-                elif field in ('manager_score', 'hod_score', 'management_score', 'self_score'):
+                elif field in ('manager_score', 'hod_score', 'management_score', 'emp_score'):
                     v = d[field]
                     new_val = float(v) if v not in (None, '', 'null') else None
                     if new_val is not None:
