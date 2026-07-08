@@ -148,3 +148,40 @@ class EOMNomination(models.Model):
 
     def __str__(self):
         return f"{self.employee.name} — {self.cycle.name}"
+
+
+class EOMActivityLog(models.Model):
+    """Immutable log of every action taken on an EOM nomination."""
+    ACTIONS = [
+        ('nomination_created', 'Nomination Created'),
+        ('nomination_submitted', 'Nomination Submitted by Employee'),
+        ('hod_reviewed', 'HOD Review Completed'),
+        ('hod_approved', 'HOD Approved'),
+        ('hod_rejected', 'HOD Rejected'),
+        ('panel_reviewed', 'Panel Review Completed'),
+        ('panel_approved', 'Panel Approved'),
+        ('panel_rejected', 'Panel Rejected'),
+        ('hr_finalized', 'HR Finalized'),
+        ('winner_declared', 'Winner Declared'),
+        ('panel_member_assigned', 'Panel Member Assigned'),
+        ('panel_member_removed', 'Panel Member Removed'),
+    ]
+
+    nomination = models.ForeignKey(EOMNomination, on_delete=models.CASCADE, related_name='activity_logs', null=True, blank=True)
+    cycle = models.ForeignKey(EOMCycle, on_delete=models.CASCADE, related_name='activity_logs', null=True, blank=True)
+    action = models.CharField(max_length=50, choices=ACTIONS)
+    actor_role = models.CharField(max_length=20)  # employee, hod, panel, hr
+    actor_name = models.CharField(max_length=200)
+    actor_id = models.CharField(max_length=50, blank=True)
+    comments = models.TextField(blank=True)
+    timestamp = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['nomination', '-timestamp']),
+            models.Index(fields=['cycle', '-timestamp']),
+        ]
+
+    def __str__(self):
+        return f"{self.actor_role} {self.action} on {self.timestamp}"

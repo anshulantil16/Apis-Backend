@@ -41,13 +41,10 @@ class EOMEmployeeImportView(APIView):
             'employee_id':     ['employee_id', 'emp_id', 'emp_code'],
             'name':            ['name', 'employee_name'],
             'email':           ['email', 'email_id'],
-            'designation':     ['designation', 'role'],
-            'department':      ['department', 'dept'],
-            'zone':            ['zone', 'location', 'unit', 'zone_/_location', 'zone___location'],
-            'hod_id':          ['hod_id', 'hod'],
-            'user_type':       ['user_type', 'type', 'role_type'],
-            'is_panel_member': ['is_panel_member', 'panel_member', 'is_panel', 'panel'],
-            'is_hr':           ['is_hr', 'hr_access', 'is_admin'],
+            'designation':     ['designation', 'role', 'job_title'],
+            'department':      ['department', 'dept', 'team'],
+            'zone':            ['zone', 'location', 'unit', 'zone_/_location', 'zone___location', 'region'],
+            'hod_id':          ['hod_id', 'hod', 'hod_employee_id'],
         }
 
         def get_col(df, aliases):
@@ -71,32 +68,7 @@ class EOMEmployeeImportView(APIView):
             if not name:
                 errors.append(f'Row {i+2}: Missing name for {emp_id}'); continue
 
-            raw_type = val('user_type').lower().strip()
-
-            # Parse flexible user type: "employee", "hod", "panel", "hr", "hod+panel", etc.
-            is_hod = 'hod' in raw_type or 'head' in raw_type
-            is_panel = 'panel' in raw_type
-            is_hr_flag = 'hr' in raw_type or 'admin' in raw_type
-
-            # Determine primary user_type
-            if is_hr_flag:
-                user_type = 'hr'
-            elif is_hod and is_panel:
-                user_type = 'hod+panel'
-            elif is_hod:
-                user_type = 'hod'
-            elif is_panel:
-                user_type = 'panel'
-            else:
-                user_type = 'employee'
-
-            def is_yes(field):
-                col = get_col(df, COLUMN_MAP[field])
-                if not col:
-                    return False
-                v = str(row[col]).strip().lower()
-                return v in ('yes', 'true', '1', 'y')
-
+            # All employees default to 'employee' type. Admin assigns roles via Manage Employees UI
             _, was_created = EOMEmployee.objects.update_or_create(
                 employee_id=emp_id,
                 defaults={
@@ -106,9 +78,9 @@ class EOMEmployeeImportView(APIView):
                     'department':      val('department'),
                     'zone':            val('zone'),
                     'hod_id':          val('hod_id'),
-                    'user_type':       user_type,
-                    'is_panel_member': is_yes('is_panel_member') or 'panel' in raw_type,
-                    'is_hr':           is_yes('is_hr') or 'hr' in raw_type or 'admin' in raw_type,
+                    'user_type':       'employee',  # Default role - admin assigns via UI
+                    'is_panel_member': False,       # Panel members assigned via UI
+                    'is_hr':           False,       # HR access assigned via UI
                     'is_active':       True,
                 },
             )
@@ -214,6 +186,43 @@ class EOMCycleUpdateView(APIView):
             s.save()
             return Response(s.data)
         return Response(s.errors, status=400)
+
+
+class EOMPanelMembersView(APIView):
+    """POST /api/eom/cycles/<cycle_id>/panel-members/ — Set panel members for this cycle"""
+
+    def post(self, request, cycle_id):
+        try:
+            cycle = EOMCycle.objects.get(id=cycle_id)
+        except EOMCycle.DoesNotExist:
+            return Response({'error': 'Cycle not found.'}, status=404)
+
+        panel_member_ids = request.data.get('panel_members', [])
+        if not panel_member_ids:
+            return Response({'error': 'No panel members provided.'}, status=400)
+
+        try:
+            # Clear existing panel members for this cycle
+            EOMEmployee.objects.filter(is_panel_member=True).update(is_panel_member=False)
+
+            # Set new panel members
+            for emp_id in panel_member_ids:
+                emp = EOMEmployee.objects.get(employee_id=emp_id)
+                emp.is_panel_member = True
+                emp.save()
+
+            panel_emps = EOMEmployee.objects.filter(employee_id__in=panel_member_ids)
+            return Response({
+                'message': f'Panel members set successfully for {cycle.name}',
+                'panel_members': [
+                    {'employee_id': e.employee_id, 'name': e.name}
+                    for e in panel_emps
+                ]
+            })
+        except EOMEmployee.DoesNotExist:
+            return Response({'error': 'One or more employees not found.'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
 
 
 # ── Nominations ──────────────────────────────────────────────────────────────

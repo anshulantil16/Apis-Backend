@@ -377,6 +377,37 @@ class AllReviewsView(APIView):
         return Response(QuarterlyReviewSerializer(qs, many=True).data)
 
 
+class ReopenFormView(APIView):
+    """PATCH /api/performance/goal-cards/<gc_id>/reopen/ — HR admin reopens a submitted form for employee to re-edit."""
+
+    def patch(self, request, gc_id):
+        try:
+            gc = GoalCard.objects.get(id=gc_id)
+        except GoalCard.DoesNotExist:
+            return Response({'error': 'Goal card not found'}, status=404)
+
+        if gc.status not in ['submitted', 'manager_rejected']:
+            return Response({
+                'error': f'Can only reopen forms in "submitted" or "manager_rejected" status. Current status: {gc.status}'
+            }, status=400)
+
+        gc.status = 'draft'
+        gc.save()
+
+        ApprovalLog.objects.create(
+            goal_card=gc,
+            actor_role='hr',
+            actor_name=request.data.get('hr_name', 'HR Admin'),
+            action='reopened',
+            comment=request.data.get('reason', 'Form reopened by admin for employee to re-edit.')
+        )
+
+        return Response({
+            'message': f'Form reopened successfully for {gc.employee.name}. They can now edit and re-submit.',
+            'goal_card': GoalCardSerializer(gc).data
+        })
+
+
 class ResetDatabaseView(APIView):
     """POST /api/performance/org/reset/ — HR resets the entire database (employees, goal cards, cycles, reviews, logs)."""
 
