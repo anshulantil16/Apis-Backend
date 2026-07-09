@@ -450,17 +450,21 @@ class PMSImportView(APIView):
                     'fy_2324_grade': str(data.get('fy_2324_grade') or '').strip(),
                     'fy_2425_grade': str(data.get('fy_2425_grade') or '').strip(),
                     'last_promotion_year': int(data.get('last_promotion_year')) if data.get('last_promotion_year') else None,
-                    'promoted': parse_bool(data.get('promoted')),
-                    'redesignation': parse_bool(data.get('redesignation')),
-                    'sustained_performance': parse_bool(data.get('sustained_performance')),
                     # NOTE: promotion %, management discretion, salary correction and special reward
                     # are NOT imported — they come strictly from the policy table (promotion) or are
                     # entered by management in the UI. Imported values would give wrong salaries.
+                    # promoted / redesignation / sustained_performance are set ONLY on first import
+                    # (below) so re-importing does not wipe management's UI decisions.
                     'promotion_readiness': str(data.get('promotion_readiness') or '').strip(),
                     'manager_remarks': str(data.get('manager_remarks') or '').strip(),
                     'hod_remarks': str(data.get('hod_remarks') or '').strip(),
                 }
             )
+            if was_created:
+                obj.promoted = parse_bool(data.get('promoted'))
+                obj.redesignation = parse_bool(data.get('redesignation'))
+                obj.sustained_performance = parse_bool(data.get('sustained_performance'))
+                obj.save(update_fields=['promoted', 'redesignation', 'sustained_performance'])
             created += was_created
             updated += not was_created
 
