@@ -32,6 +32,14 @@ INCREMENT_MATRIX = {
 }
 
 
+# Cadre/Band-wise SPECIAL REWARD range (₹) per policy. C/D = discretionary (Director/MD).
+SPECIAL_REWARD_RANGE = {
+    'M': (25000, 50000),
+    'O': (15000, 25000),
+    'W': (6000, 15000),
+}
+
+
 def _grade_code(band, cadre):
     """Find the cadre-grade code (e.g. 'M3', 'O5', 'W1', 'C2') from the band/cadre fields."""
     import re
@@ -188,6 +196,16 @@ class PMSEmployee(models.Model):
         return increment_group(self.band, self.cadre)
 
     @property
+    def band_letter(self):
+        code = _grade_code(self.band, self.cadre)
+        return code[0] if code else ''
+
+    @property
+    def special_reward_range(self):
+        """Suggested special-reward ₹ range for this band (None = Director/MD discretion)."""
+        return SPECIAL_REWARD_RANGE.get(self.band_letter)
+
+    @property
     def is_worker(self):
         return self.increment_group == 'worker'
 
@@ -246,11 +264,23 @@ class PMSEmployee(models.Model):
         return round(float(self.current_ctc) * self.sustained_pct / 100, 2)
 
     @property
+    def reward_payout(self):
+        """Special reward ₹ (added only when the On-Time / Special Reward flag is on)."""
+        return float(self.reward_amount) if self.on_time_reward else 0.0
+
+    @property
+    def salary_correction_amount(self):
+        """Flat management/market correction ₹ that management can add without limit."""
+        return float(self.salary_correction or 0)
+
+    @property
     def new_ctc(self):
-        """Revised CTC = current + increment + promotion + mgmt-discretion + sustained (all ₹ amounts)."""
+        """Revised CTC = current + increment + promotion + mgmt-discretion% + sustained
+        + salary/market correction (₹) + special reward (₹). Management can add any amount."""
         cur = float(self.current_ctc)
         return round(cur + self.increment_amount + self.promotion_amount
-                     + self.management_discretion_amount + self.sustained_amount, 2)
+                     + self.management_discretion_amount + self.sustained_amount
+                     + self.salary_correction_amount + self.reward_payout, 2)
 
     @property
     def new_ctc_monthly(self):
@@ -260,7 +290,8 @@ class PMSEmployee(models.Model):
     def total_impact_pct(self):
         cur = float(self.current_ctc) or 0
         total = (self.increment_amount + self.promotion_amount
-                 + self.management_discretion_amount + self.sustained_amount)
+                 + self.management_discretion_amount + self.sustained_amount
+                 + self.salary_correction_amount + self.reward_payout)
         return round(total / cur * 100, 2) if cur else 0.0
 
     @property

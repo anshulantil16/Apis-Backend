@@ -86,6 +86,8 @@ def serialize_emp(e):
         'management_discretion_pct': float(e.management_discretion_pct),
         'management_discretion_amount': e.management_discretion_amount,
         'salary_correction': float(e.salary_correction),
+        'reward_payout': e.reward_payout,
+        'special_reward_range': list(e.special_reward_range) if e.special_reward_range else None,
         'total_impact_pct': e.total_impact_pct,
         'new_ctc': e.new_ctc,
         'new_ctc_monthly': e.new_ctc_monthly,
