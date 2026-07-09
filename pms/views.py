@@ -81,6 +81,7 @@ def serialize_emp(e):
         'effective_increment_pct': e.effective_increment_pct,
         'increment_amount': e.increment_amount,
         'promotion_pct': float(e.promotion_pct),
+        'effective_promotion_pct': e.effective_promotion_pct,
         'promotion_amount': e.promotion_amount,
         'management_discretion_pct': float(e.management_discretion_pct),
         'management_discretion_amount': e.management_discretion_amount,

@@ -221,6 +221,14 @@ class PMSEmployee(models.Model):
         return round(float(self.current_ctc) * pct / 100, 2)
 
     @property
+    def effective_promotion_pct(self):
+        """Promotion increase as % of current CTC (0 if not promoted; derived for workers)."""
+        if not self.promoted:
+            return 0.0
+        cur = float(self.current_ctc) or 0
+        return round(self.promotion_amount / cur * 100, 2) if cur else 0.0
+
+    @property
     def management_discretion_amount(self):
         return round(float(self.current_ctc) * float(self.management_discretion_pct) / 100, 2)
 
