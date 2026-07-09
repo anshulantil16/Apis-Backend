@@ -270,9 +270,23 @@ class PMSEmployee(models.Model):
         return float(self.reward_amount) if self.on_time_reward else 0.0
 
     @property
+    def salary_correction_allowed(self):
+        """Policy notes 1 & 3: correction is intended only for A+/A/B+/B grades and NOT when
+        promoted. This is advisory only — management may still override (shown as a warning)."""
+        return (not self.promoted) and self.effective_grade in ('A+', 'A', 'B+', 'B')
+
+    @property
     def salary_correction_amount(self):
-        """Flat management/market correction ₹ that management can add without limit."""
+        """Flat management/market correction ₹ — always applied (management can give anything)."""
         return float(self.salary_correction or 0)
+
+    @property
+    def merit_eligible(self):
+        """Policy eligibility: joined on/before 01-Oct (prior FY). Informational — management may override."""
+        if not self.date_of_joining:
+            return True
+        from datetime import date
+        return self.date_of_joining <= date(2025, 10, 1)
 
     @property
     def new_ctc(self):
