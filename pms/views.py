@@ -117,6 +117,32 @@ def build_summary(employees):
     rewarded      = sum(1 for e in employees if e.on_time_reward)
     avg_score     = sum(e.final_score for e in employees) / total
 
+    # Component-wise cost of the total hike
+    cost_increment  = round(sum(e.increment_amount for e in employees), 2)
+    cost_promotion  = round(sum(e.promotion_amount for e in employees), 2)
+    cost_sustained  = round(sum(e.sustained_amount for e in employees), 2)
+    cost_correction = round(sum(e.salary_correction_amount for e in employees), 2)
+    cost_reward     = round(sum(e.reward_payout for e in employees), 2)
+    cost_mgmt_disc  = round(sum(e.management_discretion_amount for e in employees), 2)
+    sustained_count = sum(1 for e in employees if e.sustained_performance)
+    worker_count    = sum(1 for e in employees if e.is_worker)
+
+    # Workforce demographics (from imported data)
+    ages    = [e.age for e in employees if e.age]
+    tenures = [e.tenure_years for e in employees if e.tenure_years is not None]
+    avg_age    = round(sum(ages) / len(ages), 1) if ages else None
+    avg_tenure = round(sum(tenures) / len(tenures), 1) if tenures else None
+
+    def _dist(attr):
+        d = {}
+        for e in employees:
+            k = (getattr(e, attr) or 'Unknown')
+            d[k] = d.get(k, 0) + 1
+        return dict(sorted(d.items(), key=lambda x: -x[1]))
+    location_dist = _dist('location')
+    category_dist = _dist('category')
+    cadre_dist    = _dist('band')
+
     grade_dist = {}
     for e in employees:
         g = e.effective_grade
@@ -200,6 +226,19 @@ def build_summary(employees):
         'avg_score': round(avg_score, 2),
         'promoted_count': promoted,
         'reward_count': rewarded,
+        'sustained_count': sustained_count,
+        'worker_count': worker_count,
+        'cost_increment': cost_increment,
+        'cost_promotion': cost_promotion,
+        'cost_sustained': cost_sustained,
+        'cost_correction': cost_correction,
+        'cost_reward': cost_reward,
+        'cost_mgmt_discretion': cost_mgmt_disc,
+        'avg_age': avg_age,
+        'avg_tenure': avg_tenure,
+        'location_distribution': location_dist,
+        'category_distribution': category_dist,
+        'cadre_distribution': cadre_dist,
         'grade_distribution': grade_dist,
         'grade_increment_breakdown': {g: {
             'count': v['count'],
