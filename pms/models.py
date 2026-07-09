@@ -59,7 +59,10 @@ class PMSEmployee(models.Model):
     fy_2324_growth_pct       = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     fy_2425_growth_pct       = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
 
-    # ── Performance Scores ────────────────────────────────────────────────────
+    # ── Performance Score ─────────────────────────────────────────────────────
+    # Single final score is imported directly; the grade is derived from it.
+    final_score_value        = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    # Legacy per-rater scores (kept for backward-compat; no longer used in calc)
     emp_score                = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     manager_score            = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     hod_score                = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -106,12 +109,8 @@ class PMSEmployee(models.Model):
     # ── Calculated Properties ─────────────────────────────────────────────────
     @property
     def final_score(self):
-        """Weighted score: EMP×25% + Manager×25% + HOD×25% + Management×25%"""
-        e  = float(self.emp_score or 0)
-        m  = float(self.manager_score or 0)
-        h  = float(self.hod_score or 0)
-        mg = float(self.management_score or 0)
-        return round(e * 0.25 + m * 0.25 + h * 0.25 + mg * 0.25, 2)
+        """Final score is imported directly (no weighting/formula)."""
+        return round(float(self.final_score_value or 0), 2)
 
     @property
     def auto_grade(self):

@@ -213,7 +213,6 @@ def build_summary(employees):
 class PMSListView(APIView):
     def get(self, request):
         employees = list(PMSEmployee.objects.all())
-        _apply_global_mgmt(employees)
         return Response({'employees': [serialize_emp(e) for e in employees], 'summary': build_summary(employees)})
 
     def delete(self, request):
@@ -281,6 +280,8 @@ class PMSImportView(APIView):
             'fy 22-23 (%)': 'fy_2223_growth_pct', 'fy 22-23 %': 'fy_2223_growth_pct',
             'fy 23-24 (%)': 'fy_2324_growth_pct', 'fy 23-24 %': 'fy_2324_growth_pct',
             'fy 24-25 (%)': 'fy_2425_growth_pct', 'fy 24-25 %': 'fy_2425_growth_pct',
+            'final score': 'final_score_value', 'final score (0-120)': 'final_score_value',
+            'score': 'final_score_value', 'overall score': 'final_score_value', 'total score': 'final_score_value',
             'self score': 'emp_score', 'emp score': 'emp_score', 'emp score (0-100)': 'emp_score',
             'manager score': 'manager_score', 'mgr score': 'manager_score', 'manager score (0-100)': 'manager_score',
             'hod score': 'hod_score', 'hod score (0-100)': 'hod_score',
@@ -390,6 +391,7 @@ class PMSImportView(APIView):
                     'fy_2223_growth_pct': sf(data.get('fy_2223_growth_pct')),
                     'fy_2324_growth_pct': sf(data.get('fy_2324_growth_pct')),
                     'fy_2425_growth_pct': sf(data.get('fy_2425_growth_pct')),
+                    'final_score_value': sf(data.get('final_score_value')),
                     'emp_score': ss(data.get('emp_score')),
                     'manager_score': ss(data.get('manager_score')),
                     'hod_score': ss(data.get('hod_score')),
@@ -432,12 +434,11 @@ class PMSEmployeeUpdateView(APIView):
         simulate = d.get('simulate_only', False)
         logs = []
 
-        # management_score is company-wide (see PMSSettings), not editable per employee.
         fields_to_update = [
-            'manager_score', 'hod_score', 'override_increment_pct',
+            'final_score_value', 'override_increment_pct',
             'override_grade', 'promoted', 'promotion_pct', 'management_discretion_pct',
             'on_time_reward', 'reward_amount', 'promotion_readiness', 'notes',
-            'salary_correction', 'redesignation', 'emp_score',
+            'salary_correction', 'redesignation',
         ]
 
         for field in fields_to_update:
@@ -445,11 +446,11 @@ class PMSEmployeeUpdateView(APIView):
                 old_val = getattr(emp, field)
                 if field in ('promoted', 'redesignation', 'on_time_reward'):
                     new_val = bool(d[field])
-                elif field in ('manager_score', 'hod_score', 'emp_score'):
+                elif field == 'final_score_value':
                     v = d[field]
                     new_val = float(v) if v not in (None, '', 'null') else None
                     if new_val is not None:
-                        new_val = max(0.0, min(100.0, new_val))
+                        new_val = max(0.0, min(120.0, new_val))
                 elif field in ('override_increment_pct', 'promotion_pct', 'management_discretion_pct', 'salary_correction', 'reward_amount'):
                     v = d[field]
                     new_val = float(v) if v not in (None, '', 'null') else (0 if field in ('promotion_pct', 'management_discretion_pct', 'salary_correction', 'reward_amount') else None)
@@ -465,7 +466,6 @@ class PMSEmployeeUpdateView(APIView):
             for log in logs:
                 PMSAuditLog.objects.create(employee=emp, **log)
 
-        _apply_global_mgmt([emp])
         return Response(serialize_emp(emp))
 
 
@@ -510,7 +510,7 @@ class PMSTemplateView(APIView):
             'Last Promotion (YR)', 'Years Not Promoted Before 2022',
             'FY 22-23 (CTC)', 'Increment 22-23', 'FY 23-24 (CTC)', 'Increment 23-24',
             'FY 24-25 (CTC)', 'Increment 24-25', 'FY 22-23 (%)', 'FY 23-24 (%)', 'FY 24-25 (%)',
-            'FY 25-26 (Current CTC)', 'Self Score', 'Manager Score', 'HOD Score',
+            'FY 25-26 (Current CTC)', 'Final Score (0-120) *',
             'Score Range', 'Final Score Range', 'Rating', 'Performance',
             'Promotion (Y/N)', 'Level', 'Promotion Readiness', 'Salary Correction Level',
             'Management Discretion', 'One Time Reward', 'Redesignation', 'Revised CTC',
@@ -539,7 +539,7 @@ class PMSTemplateView(APIView):
              2024, 1,
              600000, 50000, 650000, 50000,
              700000, 20000, 8, 7.7, 7.7,
-             720000, 82, 85, 88,
+             720000, 88,
              '', '', '', '',
              'Yes', 'L2', '1_year', 0,
              5, 'No', 'No', '',
@@ -554,7 +554,7 @@ class PMSTemplateView(APIView):
              2022, 0,
              450000, 30000, 480000, 40000,
              520000, 40000, 6.7, 8.3, 7.7,
-             560000, 88, 92, 90,
+             560000, 96,
              '', '', '', '',
              'Yes', 'L1', 'ready_now', 0,
              8, 'Yes', 'Yes', '',
@@ -569,7 +569,7 @@ class PMSTemplateView(APIView):
              None, 3,
              250000, 30000, 280000, 20000,
              300000, 20000, 12, 7.1, 7.1,
-             320000, 65, 68, 70,
+             320000, 68,
              '', '', '', '',
              'No', 'L3', 'not_ready', 0,
              0, 'No', 'No', '',
@@ -615,14 +615,13 @@ class PMSExportView(APIView):
         from openpyxl.styles import PatternFill, Font, Alignment
 
         employees = list(PMSEmployee.objects.all())
-        _apply_global_mgmt(employees)
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = 'PMS Results'
 
         headers = [
             'Emp ID', 'Name', 'Designation', 'Department', 'Band', 'Location',
-            'Current CTC', 'EMP Score', 'Mgr Score', 'HOD Score', 'Mgt Score', 'Final Score',
+            'Current CTC', 'Final Score',
             'Grade', 'Label', 'Increment %', 'Increment Amt', 'Promotion %',
             'Promotion Amt', 'Mgmt Discretion %', 'Mgmt Discretion Amt',
             'New CTC', 'New CTC (Monthly)', 'Promoted', 'Redesignation', 'Reward',
@@ -640,10 +639,6 @@ class PMSExportView(APIView):
             for ci, val in enumerate([
                 e.employee_id, e.name, e.designation, e.department, e.band, e.location,
                 float(e.current_ctc),
-                float(e.emp_score) if e.emp_score else '',
-                float(e.manager_score) if e.manager_score else '',
-                float(e.hod_score) if e.hod_score else '',
-                float(e.management_score) if e.management_score else '',
                 e.final_score, e.effective_grade, e.grade_config['label'],
                 e.effective_increment_pct, e.increment_amount, float(e.promotion_pct),
                 e.promotion_amount, float(e.management_discretion_pct),
