@@ -7,13 +7,64 @@ from django.utils import timezone
 
 
 GRADE_META = {
-    'A+': {'label': 'Exceptional',       'inc_min': 12, 'inc_max': 15, 'promo_pct': 10, 'color': '#059669'},
-    'A':  {'label': 'Outstanding',        'inc_min': 10, 'inc_max': 12, 'promo_pct': 8,  'color': '#0284c7'},
-    'B+': {'label': 'Exceeds Target',     'inc_min': 7,  'inc_max': 10, 'promo_pct': 6,  'color': '#7c3aed'},
-    'B':  {'label': 'Meets Target',       'inc_min': 4,  'inc_max': 7,  'promo_pct': 4,  'color': '#d97706'},
-    'C':  {'label': 'Near Target',        'inc_min': 0,  'inc_max': 4,  'promo_pct': 0,  'color': '#ea580c'},
-    'D':  {'label': 'Needs Improvement',  'inc_min': 2,  'inc_max': 2,  'promo_pct': 0,  'color': '#dc2626'},
+    'A+': {'label': 'Exceptional',       'inc_min': 12, 'inc_max': 15, 'promo_pct': 5, 'color': '#059669'},
+    'A':  {'label': 'Outstanding',        'inc_min': 10, 'inc_max': 12, 'promo_pct': 4, 'color': '#0284c7'},
+    'B+': {'label': 'Exceeds Target',     'inc_min': 7,  'inc_max': 10, 'promo_pct': 3, 'color': '#7c3aed'},
+    'B':  {'label': 'Meets Target',       'inc_min': 4,  'inc_max': 7,  'promo_pct': 2, 'color': '#d97706'},
+    'C':  {'label': 'Near Target',        'inc_min': 0,  'inc_max': 4,  'promo_pct': 0, 'color': '#ea580c'},
+    'D':  {'label': 'Needs Improvement',  'inc_min': 2,  'inc_max': 2,  'promo_pct': 0, 'color': '#dc2626'},
 }
+
+# ── Merit-Increment matrix per PMS Policy (APIS India, v1 Apr 2026) ────────────
+# Fixed increment by Performance Grade × Cadre-group (no ranges).
+#   staff1 = O1–O5, M1, M2, M3            → Merit Increment %
+#   staff2 = M4, M5, M6, C1, C2, C3       → Merit Increment %
+#   worker = W1–W4                        → FIXED monthly amount (₹), annual = ×12
+#   special= C4, C5, D                    → MD's decision / Director prerogative (no auto %)
+# promo_pct/worker_promo_monthly apply only when the employee is promoted.
+INCREMENT_MATRIX = {
+    'A+': {'staff1': 14, 'staff2': 10, 'worker_monthly': 800, 'worker_promo_monthly': 400, 'promotion_pct': 5},
+    'A':  {'staff1': 12, 'staff2': 9,  'worker_monthly': 600, 'worker_promo_monthly': 300, 'promotion_pct': 4},
+    'B+': {'staff1': 10, 'staff2': 8,  'worker_monthly': 400, 'worker_promo_monthly': 200, 'promotion_pct': 3},
+    'B':  {'staff1': 8,  'staff2': 7,  'worker_monthly': 200, 'worker_promo_monthly': 100, 'promotion_pct': 2},
+    'C':  {'staff1': 4,  'staff2': 3,  'worker_monthly': 100, 'worker_promo_monthly': 0,   'promotion_pct': 0},
+    'D':  {'staff1': 0,  'staff2': 0,  'worker_monthly': 0,   'worker_promo_monthly': 0,   'promotion_pct': 0},
+}
+
+
+def _grade_code(band, cadre):
+    """Find the cadre-grade code (e.g. 'M3', 'O5', 'W1', 'C2') from the band/cadre fields."""
+    import re
+    candidates = [(band or '').strip().upper(), (cadre or '').strip().upper()]
+    for v in candidates:
+        v2 = v.replace(' ', '')
+        if re.match(r'^[WOMCD]\d', v2):
+            return v2
+    for v in candidates:
+        if v and v[0] in 'WOMCD':
+            return v
+    return ''
+
+
+def increment_group(band, cadre):
+    """Return 'worker' | 'staff1' | 'staff2' | 'special' for the merit-increment table."""
+    code = _grade_code(band, cadre)
+    if not code:
+        return 'staff1'
+    letter = code[0]
+    digits = ''.join(ch for ch in code if ch.isdigit())
+    num = int(digits) if digits else 0
+    if letter == 'W':
+        return 'worker'
+    if letter == 'O':
+        return 'staff1'
+    if letter == 'M':
+        return 'staff1' if num <= 3 else 'staff2'
+    if letter == 'C':
+        return 'staff2' if 1 <= num <= 3 else 'special'   # C4, C5 → special
+    if letter == 'D':
+        return 'special'
+    return 'staff1'
 
 
 class PMSEmployee(models.Model):
@@ -131,21 +182,43 @@ class PMSEmployee(models.Model):
         return GRADE_META.get(self.effective_grade, GRADE_META['B'])
 
     @property
-    def effective_increment_pct(self):
-        if self.override_increment_pct is not None:
-            return float(self.override_increment_pct)
-        cfg = self.grade_config
-        return (cfg['inc_min'] + cfg['inc_max']) / 2
+    def increment_group(self):
+        """Which merit-increment column applies: worker / staff1 / staff2 / special."""
+        return increment_group(self.band, self.cadre)
+
+    @property
+    def is_worker(self):
+        return self.increment_group == 'worker'
 
     @property
     def increment_amount(self):
-        return round(float(self.current_ctc) * self.effective_increment_pct / 100, 2)
+        """Annual increment amount (₹). Staff = % of CTC; Workers = fixed monthly ×12."""
+        if self.override_increment_pct is not None:
+            return round(float(self.current_ctc) * float(self.override_increment_pct) / 100, 2)
+        row = INCREMENT_MATRIX.get(self.effective_grade, INCREMENT_MATRIX['D'])
+        grp = self.increment_group
+        if grp == 'worker':
+            return round(row['worker_monthly'] * 12, 2)
+        if grp == 'special':
+            return 0.0   # C4/C5/D — management discretion, no auto increment
+        pct = row['staff2'] if grp == 'staff2' else row['staff1']
+        return round(float(self.current_ctc) * pct / 100, 2)
+
+    @property
+    def effective_increment_pct(self):
+        """Effective increment as % of current CTC (derived from the amount, works for workers too)."""
+        cur = float(self.current_ctc) or 0
+        return round(self.increment_amount / cur * 100, 2) if cur else 0.0
 
     @property
     def promotion_amount(self):
         if not self.promoted:
             return 0
-        return round(float(self.current_ctc) * float(self.promotion_pct) / 100, 2)
+        row = INCREMENT_MATRIX.get(self.effective_grade, INCREMENT_MATRIX['D'])
+        if self.increment_group == 'worker':
+            return round(row['worker_promo_monthly'] * 12, 2)
+        pct = float(self.promotion_pct) if self.promotion_pct else row['promotion_pct']
+        return round(float(self.current_ctc) * pct / 100, 2)
 
     @property
     def management_discretion_amount(self):
@@ -153,13 +226,9 @@ class PMSEmployee(models.Model):
 
     @property
     def new_ctc(self):
-        """Revised CTC = current_ctc × (1 + increment_pct% + promotion_pct% + mgmt_discretion_pct%)"""
-        total_pct = (
-            self.effective_increment_pct
-            + (float(self.promotion_pct) if self.promoted else 0)
-            + float(self.management_discretion_pct)
-        )
-        return round(float(self.current_ctc) * (1 + total_pct / 100), 2)
+        """Revised CTC = current + increment + promotion + management-discretion (all as ₹ amounts)."""
+        cur = float(self.current_ctc)
+        return round(cur + self.increment_amount + self.promotion_amount + self.management_discretion_amount, 2)
 
     @property
     def new_ctc_monthly(self):
@@ -167,12 +236,9 @@ class PMSEmployee(models.Model):
 
     @property
     def total_impact_pct(self):
-        return round(
-            self.effective_increment_pct
-            + (float(self.promotion_pct) if self.promoted else 0)
-            + float(self.management_discretion_pct),
-            2
-        )
+        cur = float(self.current_ctc) or 0
+        total = self.increment_amount + self.promotion_amount + self.management_discretion_amount
+        return round(total / cur * 100, 2) if cur else 0.0
 
     @property
     def age(self):
