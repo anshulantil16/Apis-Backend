@@ -659,49 +659,160 @@ class PMSTemplateView(APIView):
 
 
 class PMSExportView(APIView):
+    """Complete appraisal-finalization workbook: full per-employee detail + org summary."""
     def get(self, request):
         from django.http import HttpResponse
-        from openpyxl.styles import PatternFill, Font, Alignment
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
         employees = list(PMSEmployee.objects.all())
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = 'PMS Results'
+        ws.title = 'Appraisal Sheet'
 
-        headers = [
-            'Emp ID', 'Name', 'Designation', 'Department', 'Band', 'Location',
-            'Current CTC', 'Final Score',
-            'Grade', 'Label', 'Increment %', 'Increment Amt', 'Promotion %',
-            'Promotion Amt', 'Mgmt Discretion %', 'Mgmt Discretion Amt',
-            'New CTC', 'New CTC (Monthly)', 'Promoted', 'Redesignation', 'Reward',
-            'Promotion Readiness', 'Notes'
+        groups = [
+            ('EMPLOYEE & ORGANISATION', 18, '1F4E79'),
+            ('PERFORMANCE', 4, '548235'),
+            ('CTC HISTORY', 4, '7F6000'),
+            ('INCREMENT COMPONENTS', 13, 'C55A11'),
+            ('REVISED CTC', 4, '2E75B6'),
+            ('DECISIONS & REMARKS', 5, '7030A0'),
         ]
+        headers = [
+            'Emp ID', 'Name', 'Gender', 'Designation', 'New Designation',
+            'Cadre', 'Grade', 'Category', 'Department', 'Cost Centre', 'Location', 'HQ',
+            'Reporting Manager', 'HOD Name', 'DOJ', 'Age', 'Tenure (Yrs)', 'Merit Eligible',
+            'Final Score', 'Perf Grade', 'Rating Label', 'Increment Category',
+            'FY 22-23 CTC', 'FY 23-24 CTC', 'FY 24-25 CTC', 'Current CTC',
+            'Merit Increment %', 'Merit Increment Rs',
+            'Promoted', 'Promotion %', 'Promotion Rs',
+            'Sustained', 'Sustained %', 'Sustained Rs',
+            'Salary Correction Rs',
+            'Special Reward', 'Special Reward Rs',
+            'Mgmt Discretion %', 'Mgmt Discretion Rs',
+            'Total Hike %', 'Total Increase Rs', 'New CTC (Annual)', 'New CTC (Monthly)',
+            'Redesignation', 'Promotion Readiness', 'Manager Remarks', 'HOD Remarks', 'Notes',
+        ]
+        thin = Side(style='thin', color='D9D9D9')
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        left_cols = {2, 4, 5, 13, 14, 46, 47, 48}
 
-        hf = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
-        for ci, h in enumerate(headers, 1):
-            c = ws.cell(row=1, column=ci, value=h)
-            c.fill = hf
-            c.font = Font(color='FFFFFF', bold=True)
-            c.alignment = Alignment(horizontal='center')
+        ci = 1
+        for gname, gcount, gcolor in groups:
+            ws.merge_cells(start_row=1, start_column=ci, end_row=1, end_column=ci + gcount - 1)
+            c = ws.cell(row=1, column=ci, value=gname)
+            c.fill = PatternFill(start_color=gcolor, end_color=gcolor, fill_type='solid')
+            c.font = Font(color='FFFFFF', bold=True, size=10)
+            c.alignment = Alignment(horizontal='center', vertical='center')
+            ci += gcount
 
-        for ri, e in enumerate(employees, 2):
-            for ci, val in enumerate([
-                e.employee_id, e.name, e.designation, e.department, e.band, e.location,
-                float(e.current_ctc),
-                e.final_score, e.effective_grade, e.grade_config['label'],
-                e.effective_increment_pct, e.increment_amount, float(e.promotion_pct),
-                e.promotion_amount, float(e.management_discretion_pct),
-                e.management_discretion_amount, e.new_ctc, e.new_ctc_monthly,
-                'Yes' if e.promoted else 'No', 'Yes' if e.redesignation else 'No',
-                'Yes' if e.on_time_reward else 'No', e.promotion_readiness, e.notes,
-            ], 1):
-                ws.cell(row=ri, column=ci, value=val)
+        for i, h in enumerate(headers, 1):
+            c = ws.cell(row=2, column=i, value=h)
+            c.fill = PatternFill(start_color='305496', end_color='305496', fill_type='solid')
+            c.font = Font(color='FFFFFF', bold=True, size=9)
+            c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            c.border = border
+
+        for ri, e in enumerate(employees, 3):
+            row = [
+                e.employee_id, e.name, e.gender, e.designation, e.new_designation,
+                e.cadre, e.band, e.category, e.department, e.cost_centre, e.location, e.hq_location,
+                e.reporting_manager, e.hod_name, str(e.date_of_joining or ''), e.age or '',
+                e.tenure_years if e.tenure_years is not None else '', 'Yes' if e.merit_eligible else 'No',
+                e.final_score, e.effective_grade, e.grade_config['label'], e.increment_group,
+                float(e.fy_2223_ctc or 0), float(e.fy_2324_ctc or 0), float(e.fy_2425_ctc or 0), float(e.current_ctc),
+                e.effective_increment_pct, e.increment_amount,
+                'Yes' if e.promoted else 'No', e.effective_promotion_pct, e.promotion_amount,
+                'Yes' if e.sustained_performance else 'No', e.sustained_pct, e.sustained_amount,
+                e.salary_correction_amount,
+                'Yes' if e.on_time_reward else 'No', e.reward_payout,
+                float(e.management_discretion_pct), e.management_discretion_amount,
+                e.total_impact_pct, round(e.new_ctc - float(e.current_ctc), 2), e.new_ctc, e.new_ctc_monthly,
+                'Yes' if e.redesignation else 'No', e.promotion_readiness, e.manager_remarks, e.hod_remarks, e.notes,
+            ]
+            for ci2, val in enumerate(row, 1):
+                cell = ws.cell(row=ri, column=ci2, value=val)
+                cell.border = border
+                cell.alignment = Alignment(horizontal='left' if ci2 in left_cols else 'center', vertical='center')
+
+        # Totals row
+        last = len(employees) + 3
+        tcell = ws.cell(row=last, column=1, value='TOTAL')
+        tcell.font = Font(bold=True, size=11)
+        totals = {
+            26: sum(float(e.current_ctc) for e in employees),
+            28: sum(e.increment_amount for e in employees),
+            31: sum(e.promotion_amount for e in employees),
+            34: sum(e.sustained_amount for e in employees),
+            35: sum(e.salary_correction_amount for e in employees),
+            37: sum(e.reward_payout for e in employees),
+            39: sum(e.management_discretion_amount for e in employees),
+            41: sum(e.new_ctc - float(e.current_ctc) for e in employees),
+            42: sum(e.new_ctc for e in employees),
+        }
+        for col, v in totals.items():
+            cell = ws.cell(row=last, column=col, value=round(v, 2))
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill(start_color='FCE4D6', end_color='FCE4D6', fill_type='solid')
+            cell.border = border
+
+        ws.freeze_panes = 'C3'
+        colw = ([10, 22, 8, 20, 20, 8, 8, 12, 18, 12, 14, 10, 20, 20, 12, 6, 10, 12] +
+                [11, 10, 16, 16] + [14, 14, 14, 14] +
+                [13, 15, 9, 12, 14, 10, 11, 13, 16, 12, 15, 14, 16] +
+                [11, 15, 16, 16] + [12, 18, 26, 26, 26])
+        for i, w in enumerate(colw[:len(headers)], 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+        ws.row_dimensions[2].height = 40
+
+        # ── Summary sheet ─────────────────────────────────────────────────────
+        ws2 = wb.create_sheet('Summary')
+        ws2.column_dimensions['A'].width = 34
+        ws2.column_dimensions['B'].width = 20
+        ws2.column_dimensions['C'].width = 14
+        total_ctc = sum(float(e.current_ctc) for e in employees)
+        total_new = sum(e.new_ctc for e in employees)
+        pct = lambda v: (v / total_ctc * 100) if total_ctc else 0
+
+        def _row(ws_, r, a, b, c=None, bold=False, fill=None):
+            ca = ws_.cell(row=r, column=1, value=a); cb = ws_.cell(row=r, column=2, value=b)
+            if c is not None:
+                cc = ws_.cell(row=r, column=3, value=c); cc.font = Font(bold=bold)
+            ca.font = Font(bold=bold); cb.font = Font(bold=bold)
+            if fill:
+                for cc2 in (ca, cb): cc2.fill = PatternFill(start_color=fill, end_color=fill, fill_type='solid')
+
+        title = ws2.cell(row=1, column=1, value='APPRAISAL — SALARY IMPACT SUMMARY')
+        title.font = Font(bold=True, size=13, color='1F4E79')
+        _row(ws2, 3, 'Metric', 'Amount (Rs)', '% of Payroll', bold=True, fill='D9E1F2')
+        rows = [
+            ('Total Employees', len(employees), None),
+            ('Current Payroll (Annual)', round(total_ctc, 2), None),
+            ('Merit Increment', round(sum(e.increment_amount for e in employees), 2), round(pct(sum(e.increment_amount for e in employees)), 2)),
+            ('Promotion', round(sum(e.promotion_amount for e in employees), 2), round(pct(sum(e.promotion_amount for e in employees)), 2)),
+            ('Sustained Performance', round(sum(e.sustained_amount for e in employees), 2), round(pct(sum(e.sustained_amount for e in employees)), 2)),
+            ('Salary Correction', round(sum(e.salary_correction_amount for e in employees), 2), round(pct(sum(e.salary_correction_amount for e in employees)), 2)),
+            ('Special Reward', round(sum(e.reward_payout for e in employees), 2), round(pct(sum(e.reward_payout for e in employees)), 2)),
+            ('Management Discretion', round(sum(e.management_discretion_amount for e in employees), 2), round(pct(sum(e.management_discretion_amount for e in employees)), 2)),
+            ('Total Hike', round(total_new - total_ctc, 2), round(pct(total_new - total_ctc), 2)),
+            ('New Payroll (Annual)', round(total_new, 2), None),
+        ]
+        for idx, (a, b, c) in enumerate(rows, 4):
+            _row(ws2, idx, a, b, c, bold=(a in ('Total Hike', 'New Payroll (Annual)')),
+                 fill='FCE4D6' if a in ('Total Hike', 'New Payroll (Annual)') else None)
+
+        r0 = 4 + len(rows) + 2
+        _row(ws2, r0, 'Grade Distribution', 'Count', None, bold=True, fill='D9E1F2')
+        gd = {}
+        for e in employees:
+            gd[e.effective_grade] = gd.get(e.effective_grade, 0) + 1
+        for j, g in enumerate(GRADE_ORDER, r0 + 1):
+            _row(ws2, j, g, gd.get(g, 0), None)
 
         buf = io.BytesIO()
         wb.save(buf)
         buf.seek(0)
         resp = HttpResponse(buf.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        resp['Content-Disposition'] = 'attachment; filename="PMS_Results_Complete.xlsx"'
+        resp['Content-Disposition'] = 'attachment; filename="PMS_Appraisal_Finalization.xlsx"'
         return resp
 
 
