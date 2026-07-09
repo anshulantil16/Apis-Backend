@@ -235,9 +235,10 @@ class PMSEmployee(models.Model):
             return 0
         row = INCREMENT_MATRIX.get(self.effective_grade, INCREMENT_MATRIX['D'])
         if self.increment_group == 'worker':
+            # Worker: fixed promotion amount (₹400/300/200/100/0/0 per month × 12)
             return round(row['worker_promo_monthly'] * 12, 2)
-        pct = float(self.promotion_pct) if self.promotion_pct else row['promotion_pct']
-        return round(float(self.current_ctc) * pct / 100, 2)
+        # Staff: promotion % strictly from the policy table (A+5 / A4 / B+3 / B2 / C0 / D0)
+        return round(float(self.current_ctc) * row['promotion_pct'] / 100, 2)
 
     @property
     def effective_promotion_pct(self):
