@@ -92,6 +92,9 @@ def serialize_emp(e):
         'promoted': e.promoted,
         'redesignation': e.redesignation,
         'on_time_reward': e.on_time_reward,
+        'sustained_performance': e.sustained_performance,
+        'sustained_pct': e.sustained_pct,
+        'sustained_amount': e.sustained_amount,
         'reward_amount': float(e.reward_amount),
         'promotion_readiness': e.promotion_readiness,
         'manager_remarks': e.manager_remarks,
@@ -300,7 +303,8 @@ class PMSImportView(APIView):
             'salary correction': 'salary_correction', 'salary correction level': 'salary_correction',
             'promotion %': 'promotion_pct',
             'management discretion': 'management_discretion_pct', 'management discretion %': 'management_discretion_pct',
-            'one time reward': 'on_time_reward', 'one time reward': 'on_time_reward',
+            'one time reward': 'on_time_reward',
+            'sustained performance': 'sustained_performance', 'sustained': 'sustained_performance',
             'reward amount': 'reward_amount',
             'redesignation': 'redesignation', 're-designation': 'redesignation',
             'revised ctc': 'revised_ctc',
@@ -407,6 +411,7 @@ class PMSImportView(APIView):
                     'promotion_pct': sf(data.get('promotion_pct'), 0) or 0,
                     'redesignation': parse_bool(data.get('redesignation')),
                     'on_time_reward': parse_bool(data.get('on_time_reward')),
+                    'sustained_performance': parse_bool(data.get('sustained_performance')),
                     'reward_amount': sf(data.get('reward_amount'), 0) or 0,
                     'management_discretion_pct': sf(data.get('management_discretion_pct'), 0) or 0,
                     'salary_correction': sf(data.get('salary_correction'), 0) or 0,
@@ -441,13 +446,13 @@ class PMSEmployeeUpdateView(APIView):
             'final_score_value', 'override_increment_pct',
             'override_grade', 'promoted', 'promotion_pct', 'management_discretion_pct',
             'on_time_reward', 'reward_amount', 'promotion_readiness', 'notes',
-            'salary_correction', 'redesignation',
+            'salary_correction', 'redesignation', 'sustained_performance',
         ]
 
         for field in fields_to_update:
             if field in d:
                 old_val = getattr(emp, field)
-                if field in ('promoted', 'redesignation', 'on_time_reward'):
+                if field in ('promoted', 'redesignation', 'on_time_reward', 'sustained_performance'):
                     new_val = bool(d[field])
                 elif field == 'final_score_value':
                     v = d[field]

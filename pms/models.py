@@ -23,12 +23,12 @@ GRADE_META = {
 #   special= C4, C5, D                    → MD's decision / Director prerogative (no auto %)
 # promo_pct/worker_promo_monthly apply only when the employee is promoted.
 INCREMENT_MATRIX = {
-    'A+': {'staff1': 14, 'staff2': 10, 'worker_monthly': 800, 'worker_promo_monthly': 400, 'promotion_pct': 5},
-    'A':  {'staff1': 12, 'staff2': 9,  'worker_monthly': 600, 'worker_promo_monthly': 300, 'promotion_pct': 4},
-    'B+': {'staff1': 10, 'staff2': 8,  'worker_monthly': 400, 'worker_promo_monthly': 200, 'promotion_pct': 3},
-    'B':  {'staff1': 8,  'staff2': 7,  'worker_monthly': 200, 'worker_promo_monthly': 100, 'promotion_pct': 2},
-    'C':  {'staff1': 4,  'staff2': 3,  'worker_monthly': 100, 'worker_promo_monthly': 0,   'promotion_pct': 0},
-    'D':  {'staff1': 0,  'staff2': 0,  'worker_monthly': 0,   'worker_promo_monthly': 0,   'promotion_pct': 0},
+    'A+': {'staff1': 14, 'staff2': 10, 'worker_monthly': 800, 'worker_promo_monthly': 400, 'promotion_pct': 5, 'sustained_pct': 1.0},
+    'A':  {'staff1': 12, 'staff2': 9,  'worker_monthly': 600, 'worker_promo_monthly': 300, 'promotion_pct': 4, 'sustained_pct': 1.0},
+    'B+': {'staff1': 10, 'staff2': 8,  'worker_monthly': 400, 'worker_promo_monthly': 200, 'promotion_pct': 3, 'sustained_pct': 0.5},
+    'B':  {'staff1': 8,  'staff2': 7,  'worker_monthly': 200, 'worker_promo_monthly': 100, 'promotion_pct': 2, 'sustained_pct': 0.5},
+    'C':  {'staff1': 4,  'staff2': 3,  'worker_monthly': 100, 'worker_promo_monthly': 0,   'promotion_pct': 0, 'sustained_pct': 0.0},
+    'D':  {'staff1': 0,  'staff2': 0,  'worker_monthly': 0,   'worker_promo_monthly': 0,   'promotion_pct': 0, 'sustained_pct': 0.0},
 }
 
 
@@ -138,6 +138,7 @@ class PMSEmployee(models.Model):
     redesignation            = models.BooleanField(default=False)
     on_time_reward           = models.BooleanField(default=False)
     reward_amount            = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    sustained_performance    = models.BooleanField(default=False)  # checkpoint flag; adds grade-based sustained %
     management_discretion_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     promotion_readiness      = models.CharField(max_length=20, blank=True)  # ready_now/1_year/2_years/not_ready
 
@@ -233,10 +234,23 @@ class PMSEmployee(models.Model):
         return round(float(self.current_ctc) * float(self.management_discretion_pct) / 100, 2)
 
     @property
+    def sustained_pct(self):
+        """Grade-based sustained-performance % (only when the sustained checkpoint is met)."""
+        if not self.sustained_performance:
+            return 0.0
+        row = INCREMENT_MATRIX.get(self.effective_grade, INCREMENT_MATRIX['D'])
+        return float(row['sustained_pct'])
+
+    @property
+    def sustained_amount(self):
+        return round(float(self.current_ctc) * self.sustained_pct / 100, 2)
+
+    @property
     def new_ctc(self):
-        """Revised CTC = current + increment + promotion + management-discretion (all as ₹ amounts)."""
+        """Revised CTC = current + increment + promotion + mgmt-discretion + sustained (all ₹ amounts)."""
         cur = float(self.current_ctc)
-        return round(cur + self.increment_amount + self.promotion_amount + self.management_discretion_amount, 2)
+        return round(cur + self.increment_amount + self.promotion_amount
+                     + self.management_discretion_amount + self.sustained_amount, 2)
 
     @property
     def new_ctc_monthly(self):
@@ -245,7 +259,8 @@ class PMSEmployee(models.Model):
     @property
     def total_impact_pct(self):
         cur = float(self.current_ctc) or 0
-        total = self.increment_amount + self.promotion_amount + self.management_discretion_amount
+        total = (self.increment_amount + self.promotion_amount
+                 + self.management_discretion_amount + self.sustained_amount)
         return round(total / cur * 100, 2) if cur else 0.0
 
     @property
