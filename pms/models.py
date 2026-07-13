@@ -290,12 +290,13 @@ class PMSEmployee(models.Model):
 
     @property
     def new_ctc(self):
-        """Revised CTC = current + increment + promotion + mgmt-discretion% + sustained
-        + salary/market correction (₹) + special reward (₹). Management can add any amount."""
+        """Revised (recurring) CTC = current + increment + promotion + mgmt-discretion%
+        + sustained + salary/market correction (₹).
+        NOTE: Special/On-Time Reward is a ONE-TIME payout and is NOT part of CTC."""
         cur = float(self.current_ctc)
         return round(cur + self.increment_amount + self.promotion_amount
                      + self.management_discretion_amount + self.sustained_amount
-                     + self.salary_correction_amount + self.reward_payout, 2)
+                     + self.salary_correction_amount, 2)
 
     @property
     def new_ctc_monthly(self):
@@ -303,10 +304,11 @@ class PMSEmployee(models.Model):
 
     @property
     def total_impact_pct(self):
+        """Recurring CTC hike % (excludes the one-time special reward)."""
         cur = float(self.current_ctc) or 0
         total = (self.increment_amount + self.promotion_amount
                  + self.management_discretion_amount + self.sustained_amount
-                 + self.salary_correction_amount + self.reward_payout)
+                 + self.salary_correction_amount)
         return round(total / cur * 100, 2) if cur else 0.0
 
     @property

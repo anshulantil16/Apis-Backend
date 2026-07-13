@@ -795,14 +795,14 @@ class PMSExportView(APIView):
             ('Promotion', round(sum(e.promotion_amount for e in employees), 2), round(pct(sum(e.promotion_amount for e in employees)), 2)),
             ('Sustained Performance', round(sum(e.sustained_amount for e in employees), 2), round(pct(sum(e.sustained_amount for e in employees)), 2)),
             ('Salary Correction', round(sum(e.salary_correction_amount for e in employees), 2), round(pct(sum(e.salary_correction_amount for e in employees)), 2)),
-            ('Special Reward', round(sum(e.reward_payout for e in employees), 2), round(pct(sum(e.reward_payout for e in employees)), 2)),
             ('Management Discretion', round(sum(e.management_discretion_amount for e in employees), 2), round(pct(sum(e.management_discretion_amount for e in employees)), 2)),
-            ('Total Hike', round(total_new - total_ctc, 2), round(pct(total_new - total_ctc), 2)),
+            ('Total Hike (recurring)', round(total_new - total_ctc, 2), round(pct(total_new - total_ctc), 2)),
             ('New Payroll (Annual)', round(total_new, 2), None),
+            ('One-Time Rewards (not in CTC)', round(sum(e.reward_payout for e in employees), 2), None),
         ]
         for idx, (a, b, c) in enumerate(rows, 4):
-            _row(ws2, idx, a, b, c, bold=(a in ('Total Hike', 'New Payroll (Annual)')),
-                 fill='FCE4D6' if a in ('Total Hike', 'New Payroll (Annual)') else None)
+            _row(ws2, idx, a, b, c, bold=(a in ('Total Hike (recurring)', 'New Payroll (Annual)')),
+                 fill='FCE4D6' if a in ('Total Hike (recurring)', 'New Payroll (Annual)') else None)
 
         r0 = 4 + len(rows) + 2
         _row(ws2, r0, 'Grade Distribution', 'Count', None, bold=True, fill='D9E1F2')
