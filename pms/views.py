@@ -538,6 +538,19 @@ class PMSEmployeeUpdateView(APIView):
                 elif field in ('override_increment_pct', 'promotion_pct', 'management_discretion_pct', 'salary_correction', 'reward_amount'):
                     v = d[field]
                     new_val = float(v) if v not in (None, '', 'null') else (0 if field in ('promotion_pct', 'management_discretion_pct', 'salary_correction', 'reward_amount') else None)
+                    if new_val is not None and new_val < 0:
+                        new_val = 0
+                    # ── Policy enforcement (management discretion % stays UNLIMITED) ──
+                    if field == 'salary_correction':
+                        # Correction only for A+/A/B+/B and not when promoted → else blocked.
+                        allowed = (not emp.promoted) and emp.effective_grade in ('A+', 'A', 'B+', 'B')
+                        if not allowed:
+                            new_val = 0
+                    elif field == 'reward_amount':
+                        # Cap at the band's max range (M/O/W). C/D = Director/MD discretion (no cap).
+                        rng = emp.special_reward_range
+                        if rng and new_val and new_val > rng[1]:
+                            new_val = float(rng[1])
                 else:
                     new_val = d[field]
 

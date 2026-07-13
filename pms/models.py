@@ -266,18 +266,26 @@ class PMSEmployee(models.Model):
 
     @property
     def reward_payout(self):
-        """Special reward ₹ (added only when the On-Time / Special Reward flag is on)."""
-        return float(self.reward_amount) if self.on_time_reward else 0.0
+        """Special (one-time) reward ₹ — ENFORCED: capped at the band's max range (M/O/W).
+        C/D bands have no fixed range (Director/MD discretion) so any amount is allowed."""
+        if not self.on_time_reward:
+            return 0.0
+        amt = float(self.reward_amount or 0)
+        rng = self.special_reward_range
+        if rng:
+            return min(max(amt, 0.0), float(rng[1]))
+        return max(amt, 0.0)
 
     @property
     def salary_correction_allowed(self):
-        """Policy notes 1 & 3: correction is intended only for A+/A/B+/B grades and NOT when
-        promoted. This is advisory only — management may still override (shown as a warning)."""
+        """Policy notes 1 & 3: correction is allowed ONLY for A+/A/B+/B grades and NOT when promoted."""
         return (not self.promoted) and self.effective_grade in ('A+', 'A', 'B+', 'B')
 
     @property
     def salary_correction_amount(self):
-        """Flat management/market correction ₹ — always applied (management can give anything)."""
+        """ENFORCED: correction applies only when policy allows it (A+/A/B+/B & not promoted)."""
+        if not self.salary_correction_allowed:
+            return 0.0
         return float(self.salary_correction or 0)
 
     @property
