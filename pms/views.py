@@ -151,6 +151,36 @@ def build_summary(employees):
         g = e.effective_grade
         grade_dist[g] = grade_dist.get(g, 0) + 1
 
+    # Cost-centre-wise breakdown (headcount, increment, promotion, sustained, reward, new CTC)
+    cc_map = {}
+    for e in employees:
+        cc = e.cost_centre or 'Unknown'
+        v = cc_map.setdefault(cc, {'count': 0, 'current': 0, 'new': 0, 'inc': 0, 'promo': 0,
+                                   'sust': 0, 'reward': 0, 'promoted': 0, 'sustained': 0})
+        v['count'] += 1
+        v['current'] += float(e.current_ctc)
+        v['new'] += e.new_ctc
+        v['inc'] += e.increment_amount
+        v['promo'] += e.promotion_amount
+        v['sust'] += e.sustained_amount
+        v['reward'] += e.reward_payout
+        if e.promoted: v['promoted'] += 1
+        if e.sustained_performance: v['sustained'] += 1
+    cost_centre_breakdown = [{
+        'cost_centre': cc,
+        'count': v['count'],
+        'current_ctc': round(v['current'], 2),
+        'new_ctc': round(v['new'], 2),
+        'increment': round(v['new'] - v['current'], 2),
+        'increment_cost': round(v['inc'], 2),
+        'promotion_cost': round(v['promo'], 2),
+        'sustained_cost': round(v['sust'], 2),
+        'reward_cost': round(v['reward'], 2),
+        'promoted': v['promoted'],
+        'sustained': v['sustained'],
+        'hike_pct': round((v['new'] - v['current']) / v['current'] * 100, 2) if v['current'] else 0,
+    } for cc, v in sorted(cc_map.items(), key=lambda x: -x[1]['count'])]
+
     dept_map = {}
     for e in employees:
         d = e.department or 'Unknown'
@@ -242,6 +272,7 @@ def build_summary(employees):
         'location_distribution': location_dist,
         'category_distribution': category_dist,
         'cadre_distribution': cadre_dist,
+        'cost_centre_breakdown': cost_centre_breakdown,
         'grade_distribution': grade_dist,
         'grade_increment_breakdown': {g: {
             'count': v['count'],
