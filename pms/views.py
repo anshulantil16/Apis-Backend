@@ -361,7 +361,7 @@ class PMSImportView(APIView):
             'fy 22-23 (%)': 'fy_2223_growth_pct', 'fy 22-23 %': 'fy_2223_growth_pct',
             'fy 23-24 (%)': 'fy_2324_growth_pct', 'fy 23-24 %': 'fy_2324_growth_pct',
             'fy 24-25 (%)': 'fy_2425_growth_pct', 'fy 24-25 %': 'fy_2425_growth_pct',
-            'final score': 'final_score_value', 'final score (0-120)': 'final_score_value',
+            'final score': 'final_score_value', 'final score (0-120)': 'final_score_value', 'final score (0-100)': 'final_score_value',
             'score': 'final_score_value', 'overall score': 'final_score_value', 'total score': 'final_score_value',
             'self score': 'emp_score', 'emp score': 'emp_score', 'emp score (0-100)': 'emp_score',
             'manager score': 'manager_score', 'mgr score': 'manager_score', 'manager score (0-100)': 'manager_score',
@@ -534,7 +534,7 @@ class PMSEmployeeUpdateView(APIView):
                     v = d[field]
                     new_val = float(v) if v not in (None, '', 'null') else None
                     if new_val is not None:
-                        new_val = max(0.0, min(120.0, new_val))
+                        new_val = max(0.0, min(115.0, new_val))  # % of target; A+ up to 115%
                 elif field in ('override_increment_pct', 'promotion_pct', 'management_discretion_pct', 'salary_correction', 'reward_amount'):
                     v = d[field]
                     new_val = float(v) if v not in (None, '', 'null') else (0 if field in ('promotion_pct', 'management_discretion_pct', 'salary_correction', 'reward_amount') else None)
@@ -607,7 +607,7 @@ class PMSTemplateView(APIView):
             'Last Promotion (YR)', 'Years Not Promoted Before 2022',
             'FY 22-23 (CTC)', 'Increment 22-23', 'FY 23-24 (CTC)', 'Increment 23-24',
             'FY 24-25 (CTC)', 'Increment 24-25', 'FY 22-23 (%)', 'FY 23-24 (%)', 'FY 24-25 (%)',
-            'FY 25-26 (Current CTC)', 'Final Score (0-120) *',
+            'FY 25-26 (Current CTC)', 'Final Score (0-100) *',
             'Score Range', 'Final Score Range', 'Rating', 'Performance',
             'Promotion (Y/N)', 'Level', 'Promotion Readiness', 'Salary Correction Level',
             'Management Discretion', 'One Time Reward', 'Redesignation', 'Revised CTC',
