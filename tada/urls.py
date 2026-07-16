@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    SendOTPView, VerifyOTPView,
+    SendOTPView, VerifyOTPView, AdminOTPView, AdminVerifyView,
     UserTemplateView, UserImportView, UsersListView, CapsView,
     MyRequestsView, RequestDetailView,
     CreateTourSanctionView, CreateTravelExpenseView, CreateLocalTravelView,
@@ -9,8 +9,10 @@ from .views import (
 
 urlpatterns = [
     # Auth
-    path('auth/send-otp/',   SendOTPView.as_view()),
-    path('auth/verify-otp/', VerifyOTPView.as_view()),
+    path('auth/send-otp/',     SendOTPView.as_view()),
+    path('auth/verify-otp/',   VerifyOTPView.as_view()),
+    path('auth/admin-otp/',    AdminOTPView.as_view()),
+    path('auth/admin-verify/', AdminVerifyView.as_view()),
 
     # User directory
     path('users/template/',  UserTemplateView.as_view()),

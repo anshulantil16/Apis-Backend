@@ -6,8 +6,13 @@ from datetime import timedelta, datetime, date
 
 import openpyxl
 from django.conf import settings
+from django.core.cache import cache
 from django.core.mail import send_mail
 from django.utils import timezone
+
+ADMIN_BOOTSTRAP_EMAIL = 'anshul@apisindia.com'
+_ADMIN_OTP_KEY = 'tada_admin_otp'
+_ADMIN_OTP_TTL = 300
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -148,6 +153,39 @@ class VerifyOTPView(APIView):
         otp.is_used = True
         otp.save(update_fields=['is_used'])
         return Response({'message': 'Login successful.', 'user': serialize_user(u)})
+
+
+class AdminOTPView(APIView):
+    """Send an OTP to the hardcoded admin email — works before any users are imported."""
+    def post(self, request):
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        cache.set(_ADMIN_OTP_KEY, code, timeout=_ADMIN_OTP_TTL)
+        try:
+            send_mail(
+                subject='APIS TA/DA Portal — Admin Access OTP',
+                message=f"Admin login OTP for the APIS TA/DA Portal:\n\n  {code}\n\nValid for 5 minutes.\n\n— APIS System",
+                from_email=settings.DEFAULT_FROM_EMAIL, recipient_list=[ADMIN_BOOTSTRAP_EMAIL], fail_silently=False,
+            )
+        except Exception as e:
+            cache.delete(_ADMIN_OTP_KEY)
+            return Response({'error': f'Failed to send email: {e}'}, status=500)
+        return Response({'message': 'OTP sent to admin email.', 'masked_email': _mask_email(ADMIN_BOOTSTRAP_EMAIL)})
+
+
+class AdminVerifyView(APIView):
+    """Verify the admin OTP and return a synthetic admin session."""
+    def post(self, request):
+        code = (request.data.get('otp') or '').strip()
+        stored = cache.get(_ADMIN_OTP_KEY)
+        if stored is None:
+            return Response({'error': 'OTP expired or not requested.'}, status=400)
+        if stored != code:
+            return Response({'error': 'Invalid OTP.'}, status=400)
+        cache.delete(_ADMIN_OTP_KEY)
+        return Response({'message': 'Admin login successful.', 'user': {
+            'id': 0, 'employee_id': 'ADMIN', 'name': 'System Admin', 'role': 'admin',
+            'level': '', 'designation': 'Administrator', 'department': 'IT', 'hq_city': '', 'caps': {},
+        }})
 
 
 # ── USER DIRECTORY (import / template / list) ─────────────────────────────────
