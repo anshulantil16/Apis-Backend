@@ -288,6 +288,54 @@ class UsersListView(APIView):
         return Response({'message': 'All TA/DA users cleared.'})
 
 
+class AdminOverviewView(APIView):
+    """Super-admin oversight: all requests + stats across every stage."""
+    def get(self, request):
+        rs = list(TravelRequest.objects.select_related('user').all())
+        by_status, by_type, by_dept = {}, {}, {}
+        for r in rs:
+            by_status[r.status] = by_status.get(r.status, 0) + 1
+            by_type[r.request_type] = by_type.get(r.request_type, 0) + 1
+            d = r.user.department or 'Unknown'
+            by_dept[d] = by_dept.get(d, 0) + 1
+        users = TadaUser.objects.all()
+        by_role = {}
+        for u in users:
+            by_role[u.role] = by_role.get(u.role, 0) + 1
+        rejected = sum(1 for r in rs if r.status in ('manager_rejected', 'hr_rejected', 'finance_rejected'))
+        return Response({
+            'total_requests': len(rs),
+            'total_users': users.count(),
+            'total_claimed': round(sum(float(r.total_claimed) for r in rs), 2),
+            'total_approved': round(sum(float(r.total_approved) for r in rs), 2),
+            'pending_manager': by_status.get('submitted', 0),
+            'pending_hr': by_status.get('manager_approved', 0),
+            'pending_finance': by_status.get('hr_approved', 0),
+            'approved': by_status.get('finance_approved', 0),
+            'paid': by_status.get('paid', 0),
+            'rejected': rejected,
+            'by_status': by_status,
+            'by_type': by_type,
+            'by_department': dict(sorted(by_dept.items(), key=lambda x: -x[1])),
+            'users_by_role': by_role,
+            'requests': [serialize_request(r) for r in rs[:1000]],
+        })
+
+
+class AdminResetView(APIView):
+    """Clear TA/DA data. what='requests' (default) or 'all' (also users)."""
+    def post(self, request):
+        what = (request.data.get('what') or 'requests').strip()
+        n = TravelRequest.objects.count()
+        TravelRequest.objects.all().delete()   # cascades expense/local items + logs
+        msg = f'Cleared {n} requests.'
+        if what == 'all':
+            un = TadaUser.objects.count()
+            TadaUser.objects.all().delete()
+            msg += f' Cleared {un} users.'
+        return Response({'message': msg})
+
+
 class CapsView(APIView):
     def get(self, request):
         level = request.query_params.get('level', '')

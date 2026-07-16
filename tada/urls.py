@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     SendOTPView, VerifyOTPView, AdminOTPView, AdminVerifyView,
     UserTemplateView, UserImportView, UsersListView, CapsView,
+    AdminOverviewView, AdminResetView,
     MyRequestsView, RequestDetailView,
     CreateTourSanctionView, CreateTravelExpenseView, CreateLocalTravelView,
     BillDownloadView, PendingQueueView, ActionView,
@@ -19,6 +20,8 @@ urlpatterns = [
     path('users/import/',    UserImportView.as_view()),
     path('users/',           UsersListView.as_view()),
     path('caps/',            CapsView.as_view()),
+    path('admin/overview/',  AdminOverviewView.as_view()),
+    path('admin/reset/',     AdminResetView.as_view()),
 
     # Employee — create & view requests
     path('requests/mine/',                 MyRequestsView.as_view()),
