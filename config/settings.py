@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     'appraisal',
     'eom',
     'pms',
+    'tada',
 ]
 
 MIDDLEWARE = [
