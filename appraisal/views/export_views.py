@@ -19,6 +19,62 @@ def _hfill(color='1a3a5c'):
     return PatternFill(start_color=color, end_color=color, fill_type='solid')
 
 
+# ── Synopsis score helpers (mirror the exact formulas used in the role UIs) ──────
+def _kpi_achievement(kpi):
+    """Self-achievement % for one KPI — same logic as calcScoreAchievement() in the
+    employee/manager React views (actual vs target, by parameter direction)."""
+    try:
+        plan = float(kpi.target_value)
+        actual = float(kpi.actual_achievement)
+    except (TypeError, ValueError):
+        return None
+    if plan == 0:
+        return None
+    d = (kpi.parameter_type or '').lower()
+    if 'higher' in d:
+        return (actual / plan) * 100
+    if 'lower' in d:
+        return None if actual == 0 else (plan / actual) * 100
+    if 'target' in d:
+        return max(0.0, (actual / plan) * 100)
+    return None
+
+
+def _self_achievement_total(gc):
+    """Weighted self-achievement out of 100 = Σ (achievement% / 100 × weightage)."""
+    total, seen = 0.0, False
+    for kra in gc.goals.all():
+        for kpi in kra.kpis.all():
+            sc = _kpi_achievement(kpi)
+            wt = kpi.weightage or 0
+            if sc is not None and wt:
+                total += (sc / 100.0) * wt
+                seen = True
+    return round(total, 2) if seen else None
+
+
+def _sum_kpi_field(gc, field):
+    """Σ of a per-KPI score field (manager_score / hod_score) → out of 100.
+    Matches totalManagerScore / totalHODScore in the manager & HOD views."""
+    total, seen = 0.0, False
+    for kra in gc.goals.all():
+        for kpi in kra.kpis.all():
+            v = getattr(kpi, field, None)
+            if v is not None and v != '':
+                try:
+                    total += float(v)
+                    seen = True
+                except (TypeError, ValueError):
+                    pass
+    return round(total, 2) if seen else None
+
+
+_BAND_FILL = {
+    'outstanding': 'C6EFCE', 'exceeds': 'DDEBF7', 'meets': 'FFF2CC',
+    'below': 'FCE4D6', 'poor': 'F8CBAD',
+}
+
+
 class AppraisalExportView(APIView):
     """GET /api/appraisal/export/ — full Excel export for management."""
 
@@ -328,6 +384,113 @@ class AppraisalExportView(APIView):
                     c.fill = medal_fill
 
         ws5.freeze_panes = 'A3'
+
+        # ── Sheet 0: Synopsis (Score Extract) — inserted as the FIRST tab ─────
+        ws0 = wb.create_sheet('Synopsis (Score Extract)', 0)
+        SYN_COLS = [
+            ('Cycle',                   18),
+            ('Employee ID',             14),
+            ('Name',                    22),
+            ('Designation',             20),
+            ('Department',              18),
+            ('Zone',                    16),
+            ('Sub Zone',                16),
+            ('Manager ID',              13),
+            ('HOD ID',                  13),
+            ('Status',                  18),
+            ('Total KRAs',              10),
+            ('Total KPIs',              10),
+            ('Total Weightage %',       14),
+            ('Self Achievement /100',   16),
+            ('Manager Score /100',      15),
+            ('HOD Score /100',          14),
+            ('Mgr vs HOD Δ',       12),
+            ('Final Weighted Score',    16),
+            ('Performance Band',        18),
+            ('Competency Total',        13),
+            ('Competency Avg',          12),
+            ('Mgr Promotion',           12),
+            ('HOD Promotion',           12),
+            ('Mgr Salary Correction',   20),
+            ('HOD Salary Correction',   20),
+            ('Feedback→Mgr Rating', 14),
+            ('Feedback→Org Rating', 14),
+            ('Submitted At',            18),
+            ('HOD Reviewed At',         18),
+        ]
+
+        ws0.merge_cells(f'A1:{get_column_letter(len(SYN_COLS))}1')
+        t0 = ws0['A1']
+        t0.value = 'APIS INDIA LIMITED — Appraisal Hub: Synopsis (Final Score Extract, out of 100)'
+        t0.font = Font(name='Calibri', bold=True, size=13, color='FFFFFF')
+        t0.fill = _hfill()
+        t0.alignment = Alignment(horizontal='center', vertical='center')
+        ws0.row_dimensions[1].height = 28
+
+        for ci, (h, w) in enumerate(SYN_COLS, 1):
+            c = ws0.cell(row=2, column=ci, value=h)
+            c.font = Font(name='Calibri', bold=True, size=9, color='FFFFFF')
+            c.fill = _hfill('2d6a9f')
+            c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            c.border = _thin_border()
+            ws0.column_dimensions[get_column_letter(ci)].width = w
+        ws0.row_dimensions[2].height = 40
+
+        for ri, gc in enumerate(qs, 3):
+            emp = gc.employee
+            review = getattr(gc, 'review', None)
+
+            kras = gc.goals.all()
+            n_kras = len(kras)
+            n_kpis = sum(len(kra.kpis.all()) for kra in kras)
+            total_wt = round(gc.total_weightage, 2) if gc.total_weightage else 0
+
+            self_score = _self_achievement_total(gc)
+            mgr_score = _sum_kpi_field(gc, 'manager_score')
+            hod_score = _sum_kpi_field(gc, 'hod_score')
+            mgr_hod_delta = (round(mgr_score - hod_score, 2)
+                             if mgr_score is not None and hod_score is not None else '')
+            final_score = (float(review.final_weighted_score)
+                           if review and review.final_weighted_score is not None else '')
+            band = review.get_performance_band_display() if review and review.performance_band else ''
+
+            comp_marks = [cr.marks for cr in gc.competency_ratings.all() if cr.marks is not None]
+            comp_total = sum(comp_marks) if comp_marks else ''
+            comp_avg = round(sum(comp_marks) / len(comp_marks), 2) if comp_marks else ''
+
+            row = [
+                gc.cycle.name, emp.employee_id, emp.name, emp.designation,
+                emp.department, emp.zone, emp.subzone,
+                emp.reporting_manager_id, emp.hod_id, gc.get_status_display(),
+                n_kras, n_kpis, total_wt,
+                self_score if self_score is not None else '',
+                mgr_score if mgr_score is not None else '',
+                hod_score if hod_score is not None else '',
+                mgr_hod_delta,
+                final_score, band,
+                comp_total, comp_avg,
+                gc.manager_promoted or '', gc.hod_promoted or '',
+                gc.manager_salary_correction or '', gc.hod_salary_correction or '',
+                gc.feedback_manager_rating if gc.feedback_manager_rating else '',
+                gc.feedback_organization_rating if gc.feedback_organization_rating else '',
+                gc.submitted_at.strftime('%d-%m-%Y %H:%M') if gc.submitted_at else '',
+                gc.hod_reviewed_at.strftime('%d-%m-%Y %H:%M') if gc.hod_reviewed_at else '',
+            ]
+            for ci, v in enumerate(row, 1):
+                c = ws0.cell(row=ri, column=ci, value=v)
+                c.font = Font(name='Calibri', size=9,
+                              bold=ci in (14, 15, 16, 18))  # emphasise the score columns
+                c.alignment = Alignment(vertical='center', wrap_text=True,
+                                        horizontal='center' if ci >= 11 else 'left')
+                c.border = _thin_border()
+            # tint the Performance Band cell by band
+            if review and review.performance_band and review.performance_band in _BAND_FILL:
+                bc = ws0.cell(row=ri, column=19)
+                bc.fill = PatternFill(start_color=_BAND_FILL[review.performance_band],
+                                      end_color=_BAND_FILL[review.performance_band], fill_type='solid')
+            ws0.row_dimensions[ri].height = 26
+
+        ws0.freeze_panes = 'D3'
 
         # Return response
         filename = f'Appraisal_Data{"_Cycle_" + cycle_id if cycle_id else "_All"}.xlsx'
