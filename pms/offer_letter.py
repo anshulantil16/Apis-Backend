@@ -80,12 +80,12 @@ SALARY_COMPONENTS = [
     ('fuel',      'reimb',    'Fuel & Vehicle Maintenance Reimbursement',                     'Fuel & Vehicle (Monthly)',      'M'),
     ('driver',    'reimb',    'Driver/Chauffer Salary',                                       'Driver Salary (Monthly)',       'M'),
     ('car_lease', 'reimb',    'Car Lease / Company Car Benefit',                              'Car Lease (Monthly)',           'M'),
-    ('pf',        'benefits', 'Employer PF Contribution (12% of Basic / PF Ceiling Wages)',    'Employer PF (Annual)',          'A'),
-    ('esi',       'benefits', 'Employer ESI Contribution (3.25% of Gross Salary)',            'Employer ESI (Annual)',         'A'),
-    ('mediclaim', 'benefits', 'Mediclaim Charges ( As per Grade & Applicable Policy)',         'Mediclaim (Annual)',            'A'),
-    ('bonus',     'benefits', 'Statutory Bonus (8.33% of Basic & VDA)',                        'Statutory Bonus (Annual)',      'A'),
-    ('variable',  'other',    'Variable / Performance Pay $',                                  'Variable Pay (Annual)',         'A'),
-    ('gift',      'other',    'Gift Reimbursement',                                            'Gift Reimbursement (Annual)',   'A'),
+    ('pf',        'benefits', 'Employer PF Contribution (12% of Basic / PF Ceiling Wages)',    'Employer PF (Monthly)',         'M'),
+    ('esi',       'benefits', 'Employer ESI Contribution (3.25% of Gross Salary)',            'Employer ESI (Monthly)',        'M'),
+    ('mediclaim', 'benefits', 'Mediclaim Charges ( As per Grade & Applicable Policy)',         'Mediclaim (Monthly)',           'M'),
+    ('bonus',     'benefits', 'Statutory Bonus (8.33% of Basic & VDA)',                        'Statutory Bonus (Monthly)',     'M'),
+    ('variable',  'other',    'Variable / Performance Pay $',                                  'Variable Pay (Monthly)',        'M'),
+    ('gift',      'other',    'Gift Reimbursement',                                            'Gift Reimbursement (Monthly)',  'M'),
 ]
 
 # Extra Annexure employee-detail columns: (excel_header, model/dict key, annexure label)
