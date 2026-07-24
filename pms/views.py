@@ -876,9 +876,9 @@ class OfferLetterTemplateView(APIView):
         ws.title = 'Offer Letters'
 
         headers = [
-            'SR NO', 'Employee ID *', 'Employee Name *', 'Email *', 'Department',
+            'SR NO', 'Employee ID *', 'Title (Mr./Ms.)', 'Employee Name *', 'Email *', 'Department',
             'Current Designation', 'New Designation', 'Current CTC *', 'New CTC *',
-            'Increment %', 'Promotion %', 'Performance Rating', 'Grade Label',
+            'Increment %', 'Promotion %', 'Performance Rating', 'Performance Assessment', 'Grade Label',
             'Effective Date *', 'Remarks',
         ]
 
@@ -896,16 +896,17 @@ class OfferLetterTemplateView(APIView):
             c.border = border
 
         samples = [
-            [1, 'EMP001', 'Rahul Sharma', 'rahul.sharma@apis.com', 'Sales', 'Sales Manager', 'Senior Sales Manager', 600000, 660000, 10, 0, 'A', 'Outstanding', '2026-07-01', 'Excellent performer'],
-            [2, 'EMP002', 'Priya Singh', 'priya.singh@apis.com', 'Operations', 'Executive', 'Senior Executive', 450000, 540000, 12, 8, 'A+', 'Exceptional', '2026-07-01', 'Ready for promotion'],
-            [3, 'EMP003', 'Amit Kumar', 'amit.kumar@apis.com', 'IT', 'Associate', 'Associate', 280000, 340000, 5, 0, 'B', 'Meets Target', '2026-07-01', ''],
+            [1, 'EMP001', 'Mr.', 'Rahul Sharma', 'rahul.sharma@apis.com', 'Sales', 'Sales Manager', 'Senior Sales Manager', 600000, 660000, 10, 0, 'A', 'Strong Performer', 'Outstanding', '2026-04-01', 'Excellent performer'],
+            [2, 'EMP002', 'Ms.', 'Priya Singh', 'priya.singh@apis.com', 'Operations', 'Executive', 'Senior Executive', 450000, 540000, 12, 8, 'A+', 'Outstanding Performer', 'Exceptional', '2026-04-01', 'Ready for promotion'],
+            [3, 'EMP003', 'Mr.', 'Amit Kumar', 'amit.kumar@apis.com', 'IT', 'Associate', 'Associate', 280000, 340000, 5, 0, 'B', 'Solid Performer', 'Meets Target', '2026-04-01', ''],
         ]
 
+        date_col = headers.index('Effective Date *') + 1
         for ri, row in enumerate(samples, 2):
             for ci, val in enumerate(row, 1):
                 c = ws.cell(row=ri, column=ci, value=val)
                 c.border = border
-                if ci == 14:  # Effective Date column
+                if ci == date_col:
                     c.number_format = 'yyyy-mm-dd'
 
         for i in range(1, len(headers) + 1):
@@ -942,12 +943,16 @@ class OfferLetterUploadView(APIView):
             return Response({'error': f'Cannot read file: {str(e)}'}, status=400)
 
         HEADER_MAP = {
-            'sr no': 'sr_no', 'employee id': 'employee_id', 'employee name': 'name',
+            'sr no': 'sr_no', 'employee id': 'employee_id',
+            'title (mr./ms.)': 'salutation', 'title': 'salutation',
+            'employee name': 'name',
             'email': 'email', 'department': 'department',
             'current designation': 'current_designation', 'new designation': 'new_designation',
             'current ctc': 'current_ctc', 'new ctc': 'new_ctc',
             'increment %': 'increment_pct', 'promotion %': 'promotion_pct',
-            'performance rating': 'performance_rating', 'grade label': 'grade_label',
+            'performance rating': 'performance_rating',
+            'performance assessment': 'assessment',
+            'grade label': 'grade_label',
             'effective date': 'effective_date', 'remarks': 'remarks',
         }
         header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
@@ -1013,7 +1018,9 @@ class OfferLetterUploadView(APIView):
                 current_designation = str(get_val(row, 'current_designation') or '').strip()
                 new_designation = str(get_val(row, 'new_designation') or '').strip()
                 performance_rating = str(get_val(row, 'performance_rating') or '').strip()
+                assessment = str(get_val(row, 'assessment') or '').strip()
                 grade_label = str(get_val(row, 'grade_label') or '').strip()
+                salutation = str(get_val(row, 'salutation') or '').strip()
                 department = str(get_val(row, 'department') or '').strip()
                 effective_date = format_date(get_val(row, 'effective_date')) or date.today()
 
@@ -1031,6 +1038,7 @@ class OfferLetterUploadView(APIView):
                     effective_date=effective_date,
                     old_designation=current_designation, new_designation=new_designation,
                     performance_rating=performance_rating, grade_label=grade_label,
+                    salutation=salutation, assessment=assessment,
                     email_address=email, department=department, status='pending',
                 )
 
@@ -1039,6 +1047,7 @@ class OfferLetterUploadView(APIView):
                     old_designation=current_designation, new_designation=new_designation,
                     performance_rating=performance_rating, grade_label=grade_label,
                     employee_id=emp_id, employee_name=name, department=department,
+                    salutation_title=salutation, assessment=assessment,
                 )
                 pdf_bytes = pdf_buf.getvalue()
                 offer.pdf_file.save(f'offer_{emp_id}_{offer.id}.pdf', ContentFile(pdf_bytes), save=True)

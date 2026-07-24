@@ -394,6 +394,8 @@ class OfferLetter(models.Model):
     new_designation = models.CharField(max_length=200, blank=True)
     performance_rating = models.CharField(max_length=10, blank=True)
     grade_label    = models.CharField(max_length=100, blank=True)
+    salutation     = models.CharField(max_length=20, blank=True)   # Mr./Ms./Mr/Ms/Mrs
+    assessment     = models.CharField(max_length=100, blank=True)  # e.g. "Strong Performer"
     pdf_file       = models.FileField(upload_to='offer_letters/', null=True, blank=True)
     email_sent     = models.BooleanField(default=False)
     email_sent_at  = models.DateTimeField(null=True, blank=True)
