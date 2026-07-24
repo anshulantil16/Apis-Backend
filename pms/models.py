@@ -112,6 +112,7 @@ class PMSEmployee(models.Model):
     fy_2324_ctc              = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     fy_2425_ctc              = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     current_ctc              = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    variable_pay             = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)  # Current Variable Pay (from import)
 
     # ── CTC Growth %  ──────────────────────────────────────────────────────────
     fy_2223_growth_pct       = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
