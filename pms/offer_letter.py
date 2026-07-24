@@ -210,7 +210,8 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
                                effective_date, old_designation=None, new_designation=None,
                                performance_rating=None, grade_label=None, employee_id=None,
                                employee_name=None, department=None, salutation_title=None,
-                               assessment=None, emp_details=None, salary_breakup=None):
+                               assessment=None, emp_details=None, salary_breakup=None,
+                               special_reward=0, special_reward_note=''):
     """Generate the APIS appraisal / promotion letter PDF.
 
     Works with both PMS employees and standalone (Excel-uploaded) data.
@@ -361,6 +362,19 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
             "Congratulations on your revised compensation. We thank you for your commitment and "
             "look forward to your continued partnership in creating a stronger future for APIS "
             "India Limited. <b>Together, We UPLIFT. Together, We Grow.</b>",
+            body_style))
+
+    # One-time Special Reward (shown only when awarded; not part of recurring CTC)
+    try:
+        reward_val = float(special_reward or 0)
+    except (TypeError, ValueError):
+        reward_val = 0
+    if reward_val > 0:
+        note_clause = f" ({special_reward_note.strip()})" if (special_reward_note or '').strip() else ""
+        story.append(Paragraph(
+            "In addition, in recognition of your exceptional contribution, we are pleased to award "
+            f"you a <b>one-time Special Reward of {_rs(reward_val)}</b>{note_clause}. This amount is a "
+            "one-time payout and does not form part of your recurring annual CTC.",
             body_style))
 
     story.append(Paragraph(

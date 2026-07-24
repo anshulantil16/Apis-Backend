@@ -403,6 +403,8 @@ class OfferLetter(models.Model):
     date_of_joining = models.CharField(max_length=50, blank=True)
     work_location  = models.CharField(max_length=200, blank=True)
     salary_breakup = models.JSONField(default=dict, blank=True)  # {component_key: amount}
+    special_reward = models.DecimalField(max_digits=14, decimal_places=2, default=0)  # one-time, NOT in CTC
+    special_reward_note = models.CharField(max_length=300, blank=True)
     pdf_file       = models.FileField(upload_to='offer_letters/', null=True, blank=True)
     email_sent     = models.BooleanField(default=False)
     email_sent_at  = models.DateTimeField(null=True, blank=True)

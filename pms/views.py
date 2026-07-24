@@ -882,6 +882,7 @@ class OfferLetterTemplateView(APIView):
             'Function', 'Current Designation', 'New Designation', 'Cadre', 'Grade',
             'Date of Joining', 'Work Location', 'Current CTC *', 'New CTC *',
             'Increment %', 'Promotion %', 'Performance Rating', 'Performance Assessment', 'Grade Label',
+            'Special Reward (One-time)', 'Special Reward Note',
             'Effective Date *', 'Remarks',
         ]
         component_headers = [c[3] for c in SALARY_COMPONENTS]
@@ -913,7 +914,9 @@ class OfferLetterTemplateView(APIView):
              'Date of Joining': '01/06/2019', 'Work Location': 'Delhi HO',
              'Current CTC *': 600000, 'New CTC *': 660000, 'Increment %': 10, 'Promotion %': 5,
              'Performance Rating': 'A', 'Performance Assessment': 'Strong Performer',
-             'Grade Label': 'Outstanding', 'Effective Date *': '2026-04-01', 'Remarks': 'Excellent performer',
+             'Grade Label': 'Outstanding', 'Special Reward (One-time)': 25000,
+             'Special Reward Note': 'For outstanding project delivery',
+             'Effective Date *': '2026-04-01', 'Remarks': 'Excellent performer',
              'Basic Salary (Monthly)': 27500, 'HRA (Monthly)': 11000, 'Special Allowance (Monthly)': 8000,
              'Employer PF (Annual)': 39600, 'Statutory Bonus (Annual)': 27500, 'Variable Pay (Annual)': 40000},
             {'SR NO': 2, 'Employee ID *': 'EMP002', 'Title (Mr./Ms.)': 'Ms.',
@@ -992,6 +995,8 @@ class OfferLetterUploadView(APIView):
             'performance rating': 'performance_rating',
             'performance assessment': 'assessment',
             'grade label': 'grade_label',
+            'special reward (one-time)': 'special_reward', 'special reward': 'special_reward',
+            'special reward note': 'special_reward_note',
             'effective date': 'effective_date', 'remarks': 'remarks',
         }
         # salary-component columns keyed by their (lower-cased) Excel header → component key
@@ -1071,6 +1076,8 @@ class OfferLetterUploadView(APIView):
                 grade = str(get_val(row, 'grade') or '').strip()
                 date_of_joining = str(get_val(row, 'date_of_joining') or '').strip()
                 work_location = str(get_val(row, 'work_location') or '').strip()
+                special_reward = sf(get_val(row, 'special_reward'))
+                special_reward_note = str(get_val(row, 'special_reward_note') or '').strip()
                 effective_date = format_date(get_val(row, 'effective_date')) or date.today()
 
                 # Salary break-up: read each component column; skip blank/zero (not eligible)
@@ -1101,6 +1108,7 @@ class OfferLetterUploadView(APIView):
                     function=function, cadre=cadre, grade=grade,
                     date_of_joining=date_of_joining, work_location=work_location,
                     salary_breakup=salary_breakup,
+                    special_reward=special_reward, special_reward_note=special_reward_note,
                     email_address=email, department=department, status='pending',
                 )
 
@@ -1111,6 +1119,7 @@ class OfferLetterUploadView(APIView):
                     employee_id=emp_id, employee_name=name, department=department,
                     salutation_title=salutation, assessment=assessment,
                     emp_details=emp_details, salary_breakup=salary_breakup,
+                    special_reward=special_reward, special_reward_note=special_reward_note,
                 )
                 pdf_bytes = pdf_buf.getvalue()
                 offer.pdf_file.save(f'offer_{emp_id}_{offer.id}.pdf', ContentFile(pdf_bytes), save=True)
