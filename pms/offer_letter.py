@@ -10,7 +10,9 @@ Page 2 carries Annexure-A (revised salary structure).
 """
 import io
 import os
+import re
 from datetime import datetime
+from xml.sax.saxutils import escape as _xml_escape
 from django.core.mail import EmailMessage
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -34,6 +36,11 @@ def _logo_image(width_in):
     if not _LOGO_BYTES:
         return None
     return Image(io.BytesIO(_LOGO_BYTES), width=width_in * inch, height=width_in * inch * 109 / 198)
+
+
+def _esc(v):
+    """XML-escape a dynamic value for safe use inside a reportlab Paragraph."""
+    return _xml_escape(str(v if v is not None else ''))
 
 # Fixed signatory (same on every letter)
 SIGNATORY_NAME = 'Pankaj Tripathi'
@@ -242,22 +249,32 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     story = []
 
     # ── Resolve data (employee object OR standalone values) ──────────────────
-    emp_name = employee_name or (employee.name if employee else 'Employee')
-    emp_id = employee_id or (employee.employee_id if employee else 'N/A')
-    emp_dept = department or (employee.department if employee else '')
-    emp_desig = old_designation or (employee.designation if employee else '')
-    new_desig = (new_designation or '').strip()
-    title = (salutation_title or 'Mr./Ms.').strip()
+    #   Keep RAW values for logic (promotion detection, annexure which escapes
+    #   internally); use XML-escaped values for the letter body Paragraphs so
+    #   names/designations containing & < > (e.g. "Sales & Marketing") don't
+    #   break reportlab's mini-markup parser.
+    raw_name = employee_name or (employee.name if employee else 'Employee')
+    raw_id = employee_id or (employee.employee_id if employee else 'N/A')
+    raw_dept = department or (employee.department if employee else '') or ''
+    raw_desig = (old_designation or (employee.designation if employee else '') or '')
+    raw_new = (new_designation or '').strip()
+    raw_title = (salutation_title or 'Mr./Ms.').strip()
+    raw_phrase = (assessment or grade_label or 'Strong Performer').strip()
 
-    is_promotion = bool(new_desig and new_desig.lower() != (emp_desig or '').strip().lower())
+    is_promotion = bool(raw_new and raw_new.lower() != raw_desig.strip().lower())
+
+    emp_name = _esc(raw_name)
+    emp_id = _esc(raw_id)
+    emp_dept = _esc(raw_dept)
+    emp_desig = _esc(raw_desig)
+    new_desig = _esc(raw_new)
+    title = _esc(raw_title)
+    phrase = _esc(raw_phrase)
+    article = 'an' if raw_phrase[:1].upper() in 'AEIOU' else 'a'
 
     reviewed_fy, next_review = _fy_context(effective_date)
     eff_str = effective_date.strftime('%d %B %Y')
     date_str = datetime.now().strftime('%d %B %Y')
-
-    # assessment phrase, e.g. "Strong Performer"
-    phrase = (assessment or grade_label or 'Strong Performer').strip()
-    article = 'an' if phrase[:1].upper() in 'AEIOU' else 'a'
 
     letter_title = ('Annual Compensation Review &amp; Promotion Letter' if is_promotion
                     else 'Annual Compensation Review &amp; Salary Revision Letter')
@@ -320,7 +337,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         reward_val = 0
     reward_para = None
     if reward_val > 0:
-        note_clause = f" ({special_reward_note.strip()})" if (special_reward_note or '').strip() else ""
+        note_clause = f" ({_esc(special_reward_note.strip())})" if (special_reward_note or '').strip() else ""
         reward_para = ("In addition, in recognition of your exceptional contribution, we are pleased "
                        f"to award you a <b>one-time Special Reward of {_rs(reward_val)}</b>{note_clause}. "
                        "This amount is a one-time payout and does not form part of your recurring "
@@ -422,9 +439,9 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         f.append(top)
         f.append(Spacer(1, 5 * s))
         f.append(_annexure_table(
-            emp_name, emp_id, emp_dept, ed.get('function', ''), annx_desig,
-            ed.get('cadre', ''), ed.get('grade', ''), ed.get('date_of_joining', ''),
-            ed.get('work_location', ''), salary_breakup, scale=s))
+            emp_name, emp_id, emp_dept, _esc(ed.get('function', '')), annx_desig,
+            _esc(ed.get('cadre', '')), _esc(ed.get('grade', '')), _esc(ed.get('date_of_joining', '')),
+            _esc(ed.get('work_location', '')), salary_breakup, scale=s))
         f.append(Spacer(1, 0.13 * inch * s))
         note_l = ParagraphStyle('nL', fontName='Helvetica', fontSize=9.5 * s, alignment=TA_LEFT)
         note_r = ParagraphStyle('nR', fontName='Helvetica-Bold', fontSize=9.5 * s, alignment=TA_RIGHT)

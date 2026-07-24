@@ -965,7 +965,7 @@ def _process_offer_batch(rows, batch_id, send_emails):
     Runs in its own thread so a 500-1000 employee run never blocks/times-out the
     HTTP request. Uses ONE shared SMTP connection for the whole batch."""
     import io as _io
-    from datetime import datetime  # noqa
+    import re
     from django.core.files.base import ContentFile
     from django.utils import timezone
     from django.db import connections
@@ -1015,7 +1015,8 @@ def _process_offer_batch(rows, batch_id, send_emails):
                     emp_details=r['emp_details'], salary_breakup=r['salary_breakup'],
                     special_reward=r['special_reward'], special_reward_note=r['special_reward_note'],
                 ).getvalue()
-                offer.pdf_file.save(f"offer_{r['emp_id']}_{offer.id}.pdf",
+                safe_id = re.sub(r'[^A-Za-z0-9_.-]', '_', str(r['emp_id']))[:40]
+                offer.pdf_file.save(f"offer_{safe_id}_{offer.id}.pdf",
                                     ContentFile(pdf_bytes), save=True)
                 gen += 1
 
@@ -1235,10 +1236,19 @@ class OfferLetterBatchStatusView(APIView):
     per-letter results once completed."""
     def get(self, request, batch_id):
         from .models import OfferLetterBatch
+        from django.utils import timezone
+        from datetime import timedelta
         try:
             b = OfferLetterBatch.objects.get(batch_id=batch_id)
         except OfferLetterBatch.DoesNotExist:
             return Response({'error': 'Batch not found'}, status=404)
+
+        # If a running batch hasn't advanced for 5 min, the worker died — mark it errored
+        if b.status == 'running' and b.updated_at < timezone.now() - timedelta(minutes=5):
+            b.status = 'error'
+            b.errors = (b.errors or []) + ['Batch stalled — generation stopped unexpectedly. '
+                                           'Please re-upload the remaining rows.']
+            b.save(update_fields=['status', 'errors'])
 
         data = {
             'batch_id': b.batch_id, 'status': b.status, 'total': b.total,
