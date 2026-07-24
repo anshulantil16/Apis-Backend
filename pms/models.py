@@ -422,3 +422,25 @@ class OfferLetter(models.Model):
     def __str__(self):
         who = self.employee_name or (self.employee.name if self.employee else self.employee_code)
         return f"{who} - {self.letter_type.title()}"
+
+
+class OfferLetterBatch(models.Model):
+    """Tracks a bulk offer-letter generation run so the UI can poll progress
+    while the letters are produced in a background thread."""
+    batch_id    = models.CharField(max_length=50, unique=True, db_index=True)
+    total       = models.IntegerField(default=0)
+    processed   = models.IntegerField(default=0)
+    generated   = models.IntegerField(default=0)
+    emailed     = models.IntegerField(default=0)
+    failed      = models.IntegerField(default=0)
+    send_emails = models.BooleanField(default=False)
+    status      = models.CharField(max_length=20, default='running')  # running / completed / error
+    errors      = models.JSONField(default=list, blank=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Batch {self.batch_id} — {self.processed}/{self.total} ({self.status})"

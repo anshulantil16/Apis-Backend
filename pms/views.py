@@ -959,16 +959,111 @@ class OfferLetterTemplateView(APIView):
         return resp
 
 
+def _process_offer_batch(rows, batch_id, send_emails):
+    """Background worker: generate PDFs (+ optional emails) and update batch progress.
+
+    Runs in its own thread so a 500-1000 employee run never blocks/times-out the
+    HTTP request. Uses ONE shared SMTP connection for the whole batch."""
+    import io as _io
+    from datetime import datetime  # noqa
+    from django.core.files.base import ContentFile
+    from django.utils import timezone
+    from django.db import connections
+    from django.core.mail import get_connection
+    from .offer_letter import generate_offer_letter_pdf, send_offer_letter_email
+    from .models import OfferLetterBatch
+
+    batch = None
+    mail_conn = None
+    try:
+        batch = OfferLetterBatch.objects.get(batch_id=batch_id)
+        if send_emails:
+            try:
+                mail_conn = get_connection()
+                mail_conn.open()
+            except Exception:
+                mail_conn = None
+
+        gen = eml = fail = proc = 0
+        errs = []
+        total = len(rows)
+        for r in rows:
+            try:
+                offer = OfferLetter.objects.create(
+                    employee=None, employee_code=r['emp_id'], employee_name=r['name'],
+                    letter_type=r['letter_type'],
+                    current_ctc=r['current_ctc'], new_ctc=r['new_ctc'],
+                    increment_pct=r['increment_pct'], promotion_pct=r['promotion_pct'],
+                    effective_date=r['effective_date'],
+                    old_designation=r['current_designation'], new_designation=r['new_designation'],
+                    performance_rating=r['performance_rating'], grade_label=r['grade_label'],
+                    salutation=r['salutation'], assessment=r['assessment'],
+                    function=r['function'], cadre=r['cadre'], grade=r['grade'],
+                    date_of_joining=r['date_of_joining'], work_location=r['work_location'],
+                    salary_breakup=r['salary_breakup'],
+                    special_reward=r['special_reward'], special_reward_note=r['special_reward_note'],
+                    email_address=r['email'], department=r['department'],
+                    batch_id=batch_id, status='pending',
+                )
+                pdf_bytes = generate_offer_letter_pdf(
+                    None, r['current_ctc'], r['new_ctc'], r['increment_pct'], r['promotion_pct'],
+                    r['effective_date'],
+                    old_designation=r['current_designation'], new_designation=r['new_designation'],
+                    performance_rating=r['performance_rating'], grade_label=r['grade_label'],
+                    employee_id=r['emp_id'], employee_name=r['name'], department=r['department'],
+                    salutation_title=r['salutation'], assessment=r['assessment'],
+                    emp_details=r['emp_details'], salary_breakup=r['salary_breakup'],
+                    special_reward=r['special_reward'], special_reward_note=r['special_reward_note'],
+                ).getvalue()
+                offer.pdf_file.save(f"offer_{r['emp_id']}_{offer.id}.pdf",
+                                    ContentFile(pdf_bytes), save=True)
+                gen += 1
+
+                if send_emails and r['email']:
+                    try:
+                        send_offer_letter_email(r['email'], r['name'], _io.BytesIO(pdf_bytes),
+                                                r['effective_date'], offer.id, connection=mail_conn)
+                        offer.status = 'sent'
+                        offer.email_sent = True
+                        offer.email_sent_at = timezone.now()
+                        offer.save(update_fields=['status', 'email_sent', 'email_sent_at'])
+                        eml += 1
+                    except Exception as ee:
+                        offer.status = 'failed'
+                        offer.save(update_fields=['status'])
+                        errs.append(f"{r['emp_id']}: email failed: {ee}")
+            except Exception as e:
+                fail += 1
+                errs.append(f"{r['emp_id']}: {e}")
+
+            proc += 1
+            if proc % 5 == 0 or proc == total:  # flush progress periodically
+                OfferLetterBatch.objects.filter(batch_id=batch_id).update(
+                    processed=proc, generated=gen, emailed=eml, failed=fail, errors=errs[:50])
+
+        OfferLetterBatch.objects.filter(batch_id=batch_id).update(
+            processed=proc, generated=gen, emailed=eml, failed=fail,
+            errors=errs[:50], status='completed')
+    except Exception as e:
+        if batch is not None:
+            OfferLetterBatch.objects.filter(batch_id=batch_id).update(
+                status='error', errors=[str(e)])
+    finally:
+        if mail_conn is not None:
+            try:
+                mail_conn.close()
+            except Exception:
+                pass
+        connections.close_all()  # release this thread's DB connections
+
+
 class OfferLetterUploadView(APIView):
-    """Generate offer-letter PDFs synchronously from an uploaded Excel file.
-    Preview mode: PDFs are generated and stored, but emails are NOT sent."""
+    """Parse the uploaded Excel instantly, then generate letters in a background
+    thread. Returns a batch_id the UI polls for progress — scales to 500-1000+."""
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
-        from .offer_letter import generate_offer_letter_pdf, send_offer_letter_email
         from datetime import datetime, date
-        from django.core.files.base import ContentFile
-        from django.utils import timezone
 
         send_emails = str(request.data.get('send_emails', 'false')).lower() == 'true'
 
@@ -1047,112 +1142,76 @@ class OfferLetterUploadView(APIView):
                     pass
             return None
 
-        created = 0
-        errors = []
-        results = []
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        # ── Fast parse: turn every valid row into a plain dict (no PDF/DB yet) ──
+        rows = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
             if not any(row):
                 continue
             emp_id = str(get_val(row, 'employee_id') or '').strip()
             name = str(get_val(row, 'name') or '').strip()
-            email = str(get_val(row, 'email') or '').strip()
             if not emp_id or not name:
                 continue
-            try:
-                # Standalone system — everything comes from the uploaded file, no PMS lookup.
-                current_ctc = sf(get_val(row, 'current_ctc'))
-                new_ctc = sf(get_val(row, 'new_ctc'))
-                increment_pct = sf(get_val(row, 'increment_pct'))
-                promotion_pct = sf(get_val(row, 'promotion_pct'))
-                current_designation = str(get_val(row, 'current_designation') or '').strip()
-                new_designation = str(get_val(row, 'new_designation') or '').strip()
-                performance_rating = str(get_val(row, 'performance_rating') or '').strip()
-                assessment = str(get_val(row, 'assessment') or '').strip()
-                grade_label = str(get_val(row, 'grade_label') or '').strip()
-                salutation = str(get_val(row, 'salutation') or '').strip()
-                department = str(get_val(row, 'department') or '').strip()
-                function = str(get_val(row, 'function') or '').strip()
-                cadre = str(get_val(row, 'cadre') or '').strip()
-                grade = str(get_val(row, 'grade') or '').strip()
-                date_of_joining = str(get_val(row, 'date_of_joining') or '').strip()
-                work_location = str(get_val(row, 'work_location') or '').strip()
-                special_reward = sf(get_val(row, 'special_reward'))
-                special_reward_note = str(get_val(row, 'special_reward_note') or '').strip()
-                effective_date = format_date(get_val(row, 'effective_date')) or date.today()
+            increment_pct = sf(get_val(row, 'increment_pct'))
+            promotion_pct = sf(get_val(row, 'promotion_pct'))
+            current_designation = str(get_val(row, 'current_designation') or '').strip()
+            new_designation = str(get_val(row, 'new_designation') or '').strip()
+            function = str(get_val(row, 'function') or '').strip()
+            cadre = str(get_val(row, 'cadre') or '').strip()
+            grade = str(get_val(row, 'grade') or '').strip()
+            date_of_joining = str(get_val(row, 'date_of_joining') or '').strip()
+            work_location = str(get_val(row, 'work_location') or '').strip()
 
-                # Salary break-up: read each component column; skip blank/zero (not eligible)
-                salary_breakup = {}
-                for ckey, ci in comp_col.items():
-                    cval = sf(row[ci] if ci < len(row) else None, default=0)
-                    if cval:
-                        salary_breakup[ckey] = cval
+            salary_breakup = {}
+            for ckey, ci in comp_col.items():
+                cval = sf(row[ci] if ci < len(row) else None, default=0)
+                if cval:
+                    salary_breakup[ckey] = cval
 
-                emp_details = {'function': function, 'cadre': cadre, 'grade': grade,
-                               'date_of_joining': date_of_joining, 'work_location': work_location}
+            letter_type = 'increment'
+            if new_designation and new_designation != current_designation:
+                letter_type = 'promotion' if promotion_pct > 0 else 'redesignation'
+            if increment_pct > 0 and promotion_pct > 0:
+                letter_type = 'combined'
 
-                letter_type = 'increment'
-                if new_designation and new_designation != current_designation:
-                    letter_type = 'promotion' if promotion_pct > 0 else 'redesignation'
-                if increment_pct > 0 and promotion_pct > 0:
-                    letter_type = 'combined'
+            rows.append({
+                'emp_id': emp_id, 'name': name,
+                'email': str(get_val(row, 'email') or '').strip(),
+                'current_ctc': sf(get_val(row, 'current_ctc')),
+                'new_ctc': sf(get_val(row, 'new_ctc')),
+                'increment_pct': increment_pct, 'promotion_pct': promotion_pct,
+                'current_designation': current_designation, 'new_designation': new_designation,
+                'performance_rating': str(get_val(row, 'performance_rating') or '').strip(),
+                'assessment': str(get_val(row, 'assessment') or '').strip(),
+                'grade_label': str(get_val(row, 'grade_label') or '').strip(),
+                'salutation': str(get_val(row, 'salutation') or '').strip(),
+                'department': str(get_val(row, 'department') or '').strip(),
+                'function': function, 'cadre': cadre, 'grade': grade,
+                'date_of_joining': date_of_joining, 'work_location': work_location,
+                'special_reward': sf(get_val(row, 'special_reward')),
+                'special_reward_note': str(get_val(row, 'special_reward_note') or '').strip(),
+                'effective_date': format_date(get_val(row, 'effective_date')) or date.today(),
+                'salary_breakup': salary_breakup,
+                'emp_details': {'function': function, 'cadre': cadre, 'grade': grade,
+                                'date_of_joining': date_of_joining, 'work_location': work_location},
+                'letter_type': letter_type,
+            })
 
-                offer = OfferLetter.objects.create(
-                    employee=None, employee_code=emp_id, employee_name=name,
-                    letter_type=letter_type,
-                    current_ctc=current_ctc, new_ctc=new_ctc,
-                    increment_pct=increment_pct, promotion_pct=promotion_pct,
-                    effective_date=effective_date,
-                    old_designation=current_designation, new_designation=new_designation,
-                    performance_rating=performance_rating, grade_label=grade_label,
-                    salutation=salutation, assessment=assessment,
-                    function=function, cadre=cadre, grade=grade,
-                    date_of_joining=date_of_joining, work_location=work_location,
-                    salary_breakup=salary_breakup,
-                    special_reward=special_reward, special_reward_note=special_reward_note,
-                    email_address=email, department=department, status='pending',
-                )
+        if not rows:
+            return Response({'error': 'No valid employee rows found in the file.'}, status=400)
 
-                pdf_buf = generate_offer_letter_pdf(
-                    None, current_ctc, new_ctc, increment_pct, promotion_pct, effective_date,
-                    old_designation=current_designation, new_designation=new_designation,
-                    performance_rating=performance_rating, grade_label=grade_label,
-                    employee_id=emp_id, employee_name=name, department=department,
-                    salutation_title=salutation, assessment=assessment,
-                    emp_details=emp_details, salary_breakup=salary_breakup,
-                    special_reward=special_reward, special_reward_note=special_reward_note,
-                )
-                pdf_bytes = pdf_buf.getvalue()
-                offer.pdf_file.save(f'offer_{emp_id}_{offer.id}.pdf', ContentFile(pdf_bytes), save=True)
+        # ── Kick off background generation and return immediately ──
+        import threading
+        import uuid
+        from .models import OfferLetterBatch
+        batch_id = uuid.uuid4().hex[:16]
+        OfferLetterBatch.objects.create(batch_id=batch_id, total=len(rows),
+                                        send_emails=send_emails, status='running')
+        threading.Thread(target=_process_offer_batch, args=(rows, batch_id, send_emails),
+                         daemon=True).start()
 
-                status_label = 'generated'
-                msg = 'Letter generated (not emailed)'
-                if send_emails and email:
-                    try:
-                        send_offer_letter_email(email, name, io.BytesIO(pdf_bytes), effective_date, offer.id)
-                        offer.status = 'sent'
-                        offer.email_sent = True
-                        offer.email_sent_at = timezone.now()
-                        offer.save()
-                        status_label = 'sent'
-                        msg = f'Generated and emailed to {email}'
-                    except Exception as ee:
-                        offer.status = 'failed'
-                        offer.save()
-                        msg = f'Generated, but email failed: {ee}'
-                elif send_emails and not email:
-                    msg = 'Generated, but no email address provided'
-
-                results.append({'employee_id': emp_id, 'name': name, 'status': status_label,
-                                'message': msg, 'pdf_url': f'/api/pms/offer-letter/{offer.id}/pdf/'})
-                created += 1
-            except Exception as e:
-                errors.append(f'Row {row_idx}: {str(e)}')
-                results.append({'employee_id': emp_id, 'name': name, 'status': 'failed', 'message': str(e)})
-
-        summary_mode = 'and emailed to employees' if send_emails else '(emails not sent — preview mode)'
         return Response({
-            'message': f'✅ {created} offer letter(s) generated {summary_mode}.',
-            'created': created, 'errors': errors, 'results': results,
+            'message': f'Processing {len(rows)} letter(s) in the background…',
+            'batch_id': batch_id, 'total': len(rows), 'send_emails': send_emails,
         })
 
 
@@ -1169,3 +1228,27 @@ class OfferLetterPDFView(APIView):
         code = offer.employee_code or (offer.employee.employee_id if offer.employee else offer.id)
         return FileResponse(offer.pdf_file.open('rb'), content_type='application/pdf',
                             filename=f'OfferLetter_{code}.pdf')
+
+
+class OfferLetterBatchStatusView(APIView):
+    """Poll bulk-generation progress. Returns live counts while running and the
+    per-letter results once completed."""
+    def get(self, request, batch_id):
+        from .models import OfferLetterBatch
+        try:
+            b = OfferLetterBatch.objects.get(batch_id=batch_id)
+        except OfferLetterBatch.DoesNotExist:
+            return Response({'error': 'Batch not found'}, status=404)
+
+        data = {
+            'batch_id': b.batch_id, 'status': b.status, 'total': b.total,
+            'processed': b.processed, 'generated': b.generated, 'emailed': b.emailed,
+            'failed': b.failed, 'send_emails': b.send_emails, 'errors': b.errors,
+        }
+        if b.status == 'completed':
+            data['results'] = [
+                {'employee_id': o.employee_code, 'name': o.employee_name, 'status': o.status,
+                 'pdf_url': f'/api/pms/offer-letter/{o.id}/pdf/'}
+                for o in OfferLetter.objects.filter(batch_id=b.batch_id).order_by('id')
+            ]
+        return Response(data)

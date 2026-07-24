@@ -22,6 +22,18 @@ from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table,
 from reportlab.lib import colors
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), 'assets', 'apis_logo.png')
+try:
+    with open(LOGO_PATH, 'rb') as _lf:
+        _LOGO_BYTES = _lf.read()          # cached once → no disk read per letter
+except OSError:
+    _LOGO_BYTES = None
+
+
+def _logo_image(width_in):
+    """Fresh reportlab Image from the cached logo bytes (avoids per-letter disk I/O)."""
+    if not _LOGO_BYTES:
+        return None
+    return Image(io.BytesIO(_LOGO_BYTES), width=width_in * inch, height=width_in * inch * 109 / 198)
 
 # Fixed signatory (same on every letter)
 SIGNATORY_NAME = 'Pankaj Tripathi'
@@ -268,8 +280,8 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
 
     # ── Letterhead (logo) ────────────────────────────────────────────────────
     def add_logo(width_in=1.5):
-        if os.path.exists(LOGO_PATH):
-            img = Image(LOGO_PATH, width=width_in * inch, height=width_in * inch * 109 / 198)
+        img = _logo_image(width_in)
+        if img is not None:
             img.hAlign = 'CENTER'
             story.append(img)
             story.append(Spacer(1, 0.08 * inch))
@@ -430,8 +442,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     # Top header: logo left + "APIS (COR) / People & Culture" / version right
     right_txt = Paragraph('APIS (COR) / People &amp; Culture<br/>V_01_2026', ParagraphStyle(
         'anxRT', fontName='Helvetica-Bold', fontSize=9, alignment=TA_RIGHT, leading=12))
-    logo_cell = (Image(LOGO_PATH, width=0.85 * inch, height=0.85 * inch * 109 / 198)
-                 if os.path.exists(LOGO_PATH) else Paragraph('apis', styles['Normal']))
+    logo_cell = _logo_image(0.85) or Paragraph('apis', styles['Normal'])
     top = Table([[logo_cell, right_txt]], colWidths=[3.0 * inch, 3.57 * inch])
     top.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
                              ('ALIGN', (0, 0), (0, 0), 'LEFT'),
@@ -488,8 +499,13 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     return buffer
 
 
-def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective_date, offer_letter_id=None):
-    """Send the compensation review letter PDF via email."""
+def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective_date,
+                            offer_letter_id=None, connection=None):
+    """Send the compensation review letter PDF via email.
+
+    Pass a shared `connection` (django.core.mail.get_connection) when sending in
+    bulk so the whole batch reuses a single SMTP connection instead of opening
+    one per email — a major speed-up for hundreds of letters."""
     from django.conf import settings
 
     subject = f"APIS India — Compensation Review Letter (Effective {effective_date.strftime('%d %B %Y')})"
@@ -518,6 +534,7 @@ def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective
         body=body,
         from_email=settings.EMAIL_HOST_USER,
         to=[employee_email],
+        connection=connection,
     )
     email.content_subtype = 'html'
 
