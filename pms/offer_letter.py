@@ -116,22 +116,24 @@ def _amt(v):
 
 
 def _annexure_table(emp_name, emp_id, department, function, designation,
-                    cadre, grade, date_of_joining, work_location, breakup):
+                    cadre, grade, date_of_joining, work_location, breakup, scale=1.0):
     """Build the Compensation Break-up (Annexure-A) table. Components with a
-    blank/zero value are skipped (employee not eligible) and excluded from totals."""
+    blank/zero value are skipped (employee not eligible) and excluded from totals.
+    `scale` shrinks fonts/padding so the whole table fits one page."""
     breakup = breakup or {}
+    s = scale
     c0, c1, c2 = 3.37 * inch, 1.60 * inch, 1.60 * inch
 
-    pB = ParagraphStyle('anxB', fontName='Helvetica-Bold', fontSize=12, alignment=TA_CENTER)
-    pSub = ParagraphStyle('anxSub', fontName='Helvetica-Bold', fontSize=10, alignment=TA_CENTER)
-    pHdr = ParagraphStyle('anxHdr', fontName='Helvetica-Bold', fontSize=9.5, alignment=TA_CENTER, textColor=colors.white)
-    pHdrL = ParagraphStyle('anxHdrL', fontName='Helvetica-Bold', fontSize=9.5, alignment=TA_LEFT, textColor=colors.white)
-    pLbl = ParagraphStyle('anxLbl', fontName='Helvetica-Bold', fontSize=8.5, alignment=TA_LEFT, leading=11)
-    pDL = ParagraphStyle('anxDL', fontName='Helvetica-Bold', fontSize=9, alignment=TA_LEFT)
-    pDV = ParagraphStyle('anxDV', fontName='Helvetica', fontSize=9, alignment=TA_LEFT)
-    pST = ParagraphStyle('anxST', fontName='Helvetica-Bold', fontSize=9, alignment=TA_LEFT, textColor=colors.white)
-    pAmt = ParagraphStyle('anxAmt', fontName='Helvetica', fontSize=9, alignment=TA_RIGHT)
-    pAmtW = ParagraphStyle('anxAmtW', fontName='Helvetica-Bold', fontSize=9, alignment=TA_RIGHT, textColor=colors.white)
+    pB = ParagraphStyle('anxB', fontName='Helvetica-Bold', fontSize=12 * s, leading=14 * s, alignment=TA_CENTER)
+    pSub = ParagraphStyle('anxSub', fontName='Helvetica-Bold', fontSize=10 * s, leading=12 * s, alignment=TA_CENTER)
+    pHdr = ParagraphStyle('anxHdr', fontName='Helvetica-Bold', fontSize=9.5 * s, leading=11 * s, alignment=TA_CENTER, textColor=colors.white)
+    pHdrL = ParagraphStyle('anxHdrL', fontName='Helvetica-Bold', fontSize=9.5 * s, leading=11 * s, alignment=TA_LEFT, textColor=colors.white)
+    pLbl = ParagraphStyle('anxLbl', fontName='Helvetica-Bold', fontSize=8.5 * s, alignment=TA_LEFT, leading=10 * s)
+    pDL = ParagraphStyle('anxDL', fontName='Helvetica-Bold', fontSize=9 * s, leading=10.5 * s, alignment=TA_LEFT)
+    pDV = ParagraphStyle('anxDV', fontName='Helvetica', fontSize=9 * s, leading=10.5 * s, alignment=TA_LEFT)
+    pST = ParagraphStyle('anxST', fontName='Helvetica-Bold', fontSize=9 * s, leading=10.5 * s, alignment=TA_LEFT, textColor=colors.white)
+    pAmt = ParagraphStyle('anxAmt', fontName='Helvetica', fontSize=9 * s, leading=10.5 * s, alignment=TA_RIGHT)
+    pAmtW = ParagraphStyle('anxAmtW', fontName='Helvetica-Bold', fontSize=9 * s, leading=10.5 * s, alignment=TA_RIGHT, textColor=colors.white)
 
     data, cmds = [], []
 
@@ -208,8 +210,8 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
     cmds.extend([
         ('GRID', (0, 0), (-1, -1), 0.6, colors.black),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.5 * s),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5 * s),
         ('LEFTPADDING', (0, 0), (-1, -1), 5),
         ('RIGHTPADDING', (0, 0), (-1, -1), 5),
     ])
@@ -232,8 +234,8 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4,
-                            topMargin=0.55 * inch, bottomMargin=0.55 * inch,
-                            leftMargin=0.85 * inch, rightMargin=0.85 * inch,
+                            topMargin=0.5 * inch, bottomMargin=0.45 * inch,
+                            leftMargin=0.8 * inch, rightMargin=0.8 * inch,
                             title='APIS India Limited — Compensation Review Letter')
 
     styles = getSampleStyleSheet()
@@ -257,220 +259,92 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     phrase = (assessment or grade_label or 'Strong Performer').strip()
     article = 'an' if phrase[:1].upper() in 'AEIOU' else 'a'
 
-    # ── Styles ───────────────────────────────────────────────────────────────
-    title_style = ParagraphStyle('LTitle', parent=styles['Heading1'], fontSize=15,
-                                 textColor=NAVY, alignment=TA_CENTER, spaceAfter=2,
-                                 fontName='Helvetica-Bold', leading=19)
-    confid_style = ParagraphStyle('Confid', parent=styles['Normal'], fontSize=9.5,
-                                  textColor=HexColor('#b03030'), alignment=TA_CENTER,
-                                  spaceAfter=10, fontName='Helvetica-BoldOblique')
-    meta_style = ParagraphStyle('Meta', parent=styles['Normal'], fontSize=10,
-                               leading=15, spaceAfter=1)
-    body_style = ParagraphStyle('Body', parent=styles['BodyText'], fontSize=10,
-                               leading=15, spaceAfter=8, alignment=TA_JUSTIFY)
-    sign_style = ParagraphStyle('Sign', parent=styles['Normal'], fontSize=10, leading=15)
-    small_style = ParagraphStyle('Small', parent=styles['Normal'], fontSize=8.5,
-                                leading=12, spaceAfter=6, alignment=TA_JUSTIFY,
-                                textColor=GREY)
-    ack_style = ParagraphStyle('Ack', parent=styles['Normal'], fontSize=9.5,
-                              leading=14, spaceBefore=6, spaceAfter=10)
-    annx_title = ParagraphStyle('Annx', parent=styles['Heading2'], fontSize=13,
-                               textColor=NAVY, alignment=TA_CENTER, fontName='Helvetica-Bold',
-                               spaceAfter=4)
-
-    # ── Letterhead (logo) ────────────────────────────────────────────────────
-    def add_logo(width_in=1.5):
-        img = _logo_image(width_in)
-        if img is not None:
-            img.hAlign = 'CENTER'
-            story.append(img)
-            story.append(Spacer(1, 0.08 * inch))
-
-    add_logo(1.6)
-    story.append(HRFlowable(width='100%', thickness=1.4, color=GOLD, spaceBefore=2, spaceAfter=10))
-
-    # ── Title + confidentiality ──────────────────────────────────────────────
     letter_title = ('Annual Compensation Review &amp; Promotion Letter' if is_promotion
                     else 'Annual Compensation Review &amp; Salary Revision Letter')
-    story.append(Paragraph(letter_title, title_style))
-    story.append(Paragraph('Private &amp; Confidential', confid_style))
 
-    # ── Date + employee meta ─────────────────────────────────────────────────
-    story.append(Paragraph(f"<b>Date:</b> {date_str}", meta_style))
-    story.append(Spacer(1, 0.06 * inch))
-    story.append(Paragraph(f"<b>Employee Name:</b> {emp_name}", meta_style))
-    story.append(Paragraph(f"<b>Employee Code:</b> {emp_id}", meta_style))
-    story.append(Paragraph(f"<b>Designation:</b> {emp_desig or '—'}", meta_style))
-    story.append(Paragraph(f"<b>Department:</b> {emp_dept or '—'}", meta_style))
-    story.append(Spacer(1, 0.14 * inch))
-
-    story.append(Paragraph(f"Dear {title} {emp_name},", body_style))
-
-    # ── Body (conditional) ───────────────────────────────────────────────────
+    # ── Body text (conditional) ──────────────────────────────────────────────
     intro = ("At APIS India Limited, we recognize that our organization's sustained growth "
              "&amp; success is made possible through the consistent commitment and performance "
              "of our people. We remain steadfast in fostering a culture of meritocracy and "
              "accountability, where performance at all levels is objectively evaluated "
              "&amp; appropriately acknowledged.")
-    story.append(Paragraph(intro, body_style))
-
     if is_promotion:
-        story.append(Paragraph(
+        body_paras = [
             f"Following the completion of the performance review cycle for the year {reviewed_fy}, "
             f"we are pleased to inform that you have been assessed as {article} <b>{phrase}</b>, "
             "demonstrating dependable results &amp; meeting the expectations set for your role.",
-            body_style))
-        story.append(Paragraph(
             "In recognition of your consistent performance and valuable contribution to the "
             f"organization, we are delighted to inform you that you are promoted from "
             f"<b>{emp_desig}</b> to <b>{new_desig}</b> with effect from <b>{eff_str}</b>. The details of "
             "your revised salary structure are enclosed as <b>Annexure–A</b>, which forms an "
             "integral part of this letter.",
-            body_style))
-        story.append(Paragraph(
             "Your compensation and promotion have been determined after considering your overall "
             "performance, demonstrated capabilities, expanded responsibilities, market "
             "competitiveness, internal equity, leadership potential and the Company's overall "
             "business performance.",
-            body_style))
-        story.append(Paragraph(
             "Your promotion reflects the confidence that the Management places in your ability to "
             "take on broader responsibilities and contribute meaningfully to the continued growth "
             "and success of APIS India Limited. We are confident that you will continue to lead by "
             "example, uphold the APIS UPLIFT Values, and deliver excellence in your new role.",
-            body_style))
-        story.append(Paragraph(
             "As we continue building a stronger and future-ready organization, we encourage you to "
             "embrace new opportunities, strengthen collaboration, foster innovation, and create "
             "lasting value for our customers, colleagues, business partners and stakeholders. We "
             "are confident that your continued contribution will help us achieve new milestones "
             f"together. Your next performance review is scheduled for <b>{next_review}</b>.",
-            body_style))
-        story.append(Paragraph(
             "Congratulations on your well-deserved compensation revision and promotion. We thank "
             "you for your commitment and look forward to your continued partnership in creating a "
             "stronger future for APIS India Limited. <b>Together, We UPLIFT. Together, We Grow.</b>",
-            body_style))
+        ]
     else:
-        story.append(Paragraph(
+        body_paras = [
             f"Following the completion of the performance review cycle for the year {reviewed_fy}, "
             f"we are pleased to inform that you have been assessed as {article} <b>{phrase}</b>.",
-            body_style))
-        story.append(Paragraph(
             f"We are pleased to inform you that your compensation has been revised effective "
             f"<b>{eff_str}</b>. The details of your revised salary structure are enclosed as "
             "<b>Annexure–A</b>, which forms an integral part of this letter. This revision reflects "
             "our annual compensation review and recognizes your performance, responsibilities, "
             "market competitiveness, internal equity and the Company's overall business performance.",
-            body_style))
-        story.append(Paragraph(
             "As we continue building a stronger and more agile organization, we encourage you to "
             "embody the spirit of UPLIFT by demonstrating ownership, collaboration, innovation, "
             "customer focus, integrity, and a relentless pursuit of excellence. We are confident "
             "that your continued contribution will help us achieve new milestones together. Your "
             f"next performance review is scheduled for <b>{next_review}</b>.",
-            body_style))
-        story.append(Paragraph(
             "Congratulations on your revised compensation. We thank you for your commitment and "
             "look forward to your continued partnership in creating a stronger future for APIS "
             "India Limited. <b>Together, We UPLIFT. Together, We Grow.</b>",
-            body_style))
+        ]
 
-    # One-time Special Reward (shown only when awarded; not part of recurring CTC)
     try:
         reward_val = float(special_reward or 0)
     except (TypeError, ValueError):
         reward_val = 0
+    reward_para = None
     if reward_val > 0:
         note_clause = f" ({special_reward_note.strip()})" if (special_reward_note or '').strip() else ""
-        story.append(Paragraph(
-            "In addition, in recognition of your exceptional contribution, we are pleased to award "
-            f"you a <b>one-time Special Reward of {_rs(reward_val)}</b>{note_clause}. This amount is a "
-            "one-time payout and does not form part of your recurring annual CTC.",
-            body_style))
+        reward_para = ("In addition, in recognition of your exceptional contribution, we are pleased "
+                       f"to award you a <b>one-time Special Reward of {_rs(reward_val)}</b>{note_clause}. "
+                       "This amount is a one-time payout and does not form part of your recurring "
+                       "annual CTC.")
+    terms_para = ("All other terms and conditions of your employment shall remain unchanged and "
+                  "continue to be governed by your Letter of Appointment and the Company's policies, "
+                  "as amended from time to time.")
+    confid_para = ("<b>Confidentiality:</b> Please treat this communication and your compensation "
+                   "details as strictly confidential. Disclosure or discussion of your package with "
+                   "others will be considered a violation of company policy. Your compensation is "
+                   "uniquely determined and should not be compared with that of other employees.")
+    nda_para = ("<b>Non-Disclosure &amp; Non-Compete:</b> As part of our evolving business practices, "
+                "certain roles may require additional confidentiality and compliance measures. Based "
+                "on the criticality and sensitivity of your role, you may be asked to sign a "
+                "Non-Disclosure and Non-Compete Agreement, as assessed by your HR representative. "
+                "This process may be initiated at any point during the year.")
+    ack_para = ("I acknowledge receipt of this Salary Revision Letter and accept the revised "
+                f"compensation effective <b>{eff_str}</b>.")
+    sign_line = ("Employee Signature: ______________________ &nbsp;&nbsp; "
+                 "Name: ______________________ &nbsp;&nbsp; Date: ________________")
 
-    story.append(Paragraph(
-        "All other terms and conditions of your employment shall remain unchanged and continue to "
-        "be governed by your Letter of Appointment and the Company's policies, as amended from "
-        "time to time.",
-        body_style))
-
-    # ── Signature (kept together so it never splits across pages) ────────────
-    story.append(Spacer(1, 0.12 * inch))
-    story.append(KeepTogether([
-        Paragraph("With Best Wishes,", sign_style),
-        Paragraph("For <b>APIS India Limited</b>", sign_style),
-        Spacer(1, 0.35 * inch),
-        Paragraph(f"<b>{SIGNATORY_NAME}</b>", sign_style),
-        Paragraph(SIGNATORY_TITLE, sign_style),
-    ]))
-
-    # ── Confidentiality + NDA ────────────────────────────────────────────────
-    story.append(Spacer(1, 0.1 * inch))
-    story.append(HRFlowable(width='100%', thickness=0.7, color=colors.grey, spaceAfter=8))
-    story.append(Paragraph(
-        "<b>Confidentiality:</b> Please treat this communication and your compensation details as "
-        "strictly confidential. Disclosure or discussion of your package with others will be "
-        "considered a violation of company policy. Your compensation is uniquely determined and "
-        "should not be compared with that of other employees.",
-        small_style))
-    story.append(Paragraph(
-        "<b>Non-Disclosure &amp; Non-Compete:</b> As part of our evolving business practices, certain "
-        "roles may require additional confidentiality and compliance measures. Based on the "
-        "criticality and sensitivity of your role, you may be asked to sign a Non-Disclosure and "
-        "Non-Compete Agreement, as assessed by your HR representative. This process may be "
-        "initiated at any point during the year.",
-        small_style))
-
-    # ── Acknowledgement ──────────────────────────────────────────────────────
-    story.append(Spacer(1, 0.06 * inch))
-    story.append(Paragraph(
-        f"I acknowledge receipt of this Salary Revision Letter and accept the revised compensation "
-        f"effective <b>{eff_str}</b>.",
-        ack_style))
-    story.append(Spacer(1, 0.18 * inch))
-    story.append(Paragraph(
-        "Employee Signature: ______________________ &nbsp;&nbsp; "
-        "Name: ______________________ &nbsp;&nbsp; Date: ________________",
-        ack_style))
-
-    # ── Page 2: Annexure-A — Compensation Break-up Structure (exact replica) ──
-    story.append(PageBreak())
     ed = emp_details or {}
     annx_desig = new_desig if is_promotion else (emp_desig or '')
-
-    # Top header: logo left + "APIS (COR) / People & Culture" / version right
-    right_txt = Paragraph('APIS (COR) / People &amp; Culture<br/>V_01_2026', ParagraphStyle(
-        'anxRT', fontName='Helvetica-Bold', fontSize=9, alignment=TA_RIGHT, leading=12))
-    logo_cell = _logo_image(0.85) or Paragraph('apis', styles['Normal'])
-    top = Table([[logo_cell, right_txt]], colWidths=[3.0 * inch, 3.57 * inch])
-    top.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                             ('ALIGN', (0, 0), (0, 0), 'LEFT'),
-                             ('LEFTPADDING', (0, 0), (-1, -1), 0),
-                             ('RIGHTPADDING', (0, 0), (-1, -1), 0)]))
-    story.append(top)
-    story.append(Spacer(1, 5))
-
-    story.append(_annexure_table(
-        emp_name, emp_id, emp_dept, ed.get('function', ''), annx_desig,
-        ed.get('cadre', ''), ed.get('grade', ''), ed.get('date_of_joining', ''),
-        ed.get('work_location', ''), salary_breakup))
-
-    # Signatures
-    story.append(Spacer(1, 0.18 * inch))
-    note_l = ParagraphStyle('nL', fontName='Helvetica', fontSize=9.5, alignment=TA_LEFT)
-    note_r = ParagraphStyle('nR', fontName='Helvetica-Bold', fontSize=9.5, alignment=TA_RIGHT)
-    sig = Table([[Paragraph(f"Date : {date_str}", note_l),
-                  Paragraph('Signature of Head People &amp; Culture', note_r)]],
-                colWidths=[3.3 * inch, 3.27 * inch])
-    sig.setStyle(TableStyle([('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0)]))
-    story.append(sig)
-    story.append(Spacer(1, 0.14 * inch))
-
-    # Footer notes
-    fn = ParagraphStyle('fn', fontName='Helvetica', fontSize=8, leading=11.5, alignment=TA_LEFT,
-                        textColor=HexColor('#333333'), spaceAfter=2)
-    for note in [
+    notes = [
         "# Tax applicability as per Income Tax Act &amp; shall be borne by the employee",
         "$ Variable pay is paid as per company's variable pay policy on quarterly basis",
         "@ Children Education Allowance is applicable for a maximum 2 children only",
@@ -480,20 +354,132 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         "Your Compensation Break-up Structure have been determined based on your cadre and grade, "
         "in accordance with the company's compensation policy as per the provisions of Code on "
         "Wages &amp; applicable laws",
-    ]:
-        story.append(Paragraph(note, fn))
+    ]
 
-    story.append(Spacer(1, 0.06 * inch))
-    story.append(HRFlowable(width='100%', thickness=0.8, color=colors.grey,
-                            dash=(2, 2), spaceAfter=5))
-    story.append(Paragraph(
-        "Note: This is a computer generated Compensation Component Break-up Structure. In case of "
-        "any discrepancy, please contact your HR Dept.",
-        ParagraphStyle('fnote', parent=fn, fontName='Helvetica-Oblique')))
-    story.append(Spacer(1, 4))
-    story.append(Paragraph('APIS --Approved_P &amp; C', ParagraphStyle(
-        'tag', fontName='Helvetica', fontSize=8, alignment=TA_RIGHT, textColor=HexColor('#555555'))))
+    # ── Page builders parameterised by a shrink `scale` (auto-fit to one page) ─
+    def build_letter(s):
+        t_title = ParagraphStyle('LTitle', fontSize=15 * s, textColor=NAVY, alignment=TA_CENTER,
+                                 spaceAfter=2 * s, fontName='Helvetica-Bold', leading=18 * s)
+        t_conf = ParagraphStyle('Confid', fontSize=9.5 * s, textColor=HexColor('#b03030'),
+                                alignment=TA_CENTER, spaceAfter=8 * s, fontName='Helvetica-BoldOblique')
+        t_meta = ParagraphStyle('Meta', fontSize=10 * s, leading=13.5 * s, spaceAfter=1)
+        t_body = ParagraphStyle('Body', fontSize=10 * s, leading=13.5 * s, spaceAfter=6.5 * s, alignment=TA_JUSTIFY)
+        t_sign = ParagraphStyle('Sign', fontSize=10 * s, leading=13.5 * s)
+        t_small = ParagraphStyle('Small', fontSize=8.5 * s, leading=10.5 * s, spaceAfter=4 * s,
+                                 alignment=TA_JUSTIFY, textColor=GREY)
+        t_ack = ParagraphStyle('Ack', fontSize=9 * s, leading=12 * s, spaceBefore=3 * s, spaceAfter=5 * s)
+        f = []
+        img = _logo_image(1.5 * s)
+        if img is not None:
+            img.hAlign = 'CENTER'
+            f.append(img)
+            f.append(Spacer(1, 0.06 * inch * s))
+        f.append(HRFlowable(width='100%', thickness=1.4, color=GOLD, spaceBefore=2, spaceAfter=8 * s))
+        f.append(Paragraph(letter_title, t_title))
+        f.append(Paragraph('Private &amp; Confidential', t_conf))
+        f.append(Paragraph(f"<b>Date:</b> {date_str}", t_meta))
+        f.append(Spacer(1, 0.04 * inch * s))
+        f.append(Paragraph(f"<b>Employee Name:</b> {emp_name}", t_meta))
+        f.append(Paragraph(f"<b>Employee Code:</b> {emp_id}", t_meta))
+        f.append(Paragraph(f"<b>Designation:</b> {emp_desig or '—'}", t_meta))
+        f.append(Paragraph(f"<b>Department:</b> {emp_dept or '—'}", t_meta))
+        f.append(Spacer(1, 0.1 * inch * s))
+        f.append(Paragraph(f"Dear {title} {emp_name},", t_body))
+        f.append(Paragraph(intro, t_body))
+        for p in body_paras:
+            f.append(Paragraph(p, t_body))
+        if reward_para:
+            f.append(Paragraph(reward_para, t_body))
+        f.append(Paragraph(terms_para, t_body))
+        f.append(Spacer(1, 0.1 * inch * s))
+        f.append(KeepTogether([
+            Paragraph("With Best Wishes,", t_sign),
+            Paragraph("For <b>APIS India Limited</b>", t_sign),
+            Spacer(1, 0.32 * inch * s),
+            Paragraph(f"<b>{SIGNATORY_NAME}</b>", t_sign),
+            Paragraph(SIGNATORY_TITLE, t_sign),
+        ]))
+        f.append(Spacer(1, 0.08 * inch * s))
+        f.append(HRFlowable(width='100%', thickness=0.7, color=colors.grey, spaceAfter=7 * s))
+        f.append(Paragraph(confid_para, t_small))
+        f.append(Paragraph(nda_para, t_small))
+        f.append(Spacer(1, 0.04 * inch * s))
+        f.append(Paragraph(ack_para, t_ack))
+        f.append(Spacer(1, 0.14 * inch * s))
+        f.append(Paragraph(sign_line, t_ack))
+        return f
 
+    def build_annexure(s):
+        f = []
+        right_txt = Paragraph('APIS (COR) / People &amp; Culture<br/>V_01_2026', ParagraphStyle(
+            'anxRT', fontName='Helvetica-Bold', fontSize=9 * s, alignment=TA_RIGHT, leading=12 * s))
+        logo_cell = _logo_image(0.85 * s) or Paragraph('apis', styles['Normal'])
+        top = Table([[logo_cell, right_txt]], colWidths=[3.0 * inch, avail_w - 3.0 * inch])
+        top.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                                 ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+                                 ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                                 ('RIGHTPADDING', (0, 0), (-1, -1), 0)]))
+        f.append(top)
+        f.append(Spacer(1, 5 * s))
+        f.append(_annexure_table(
+            emp_name, emp_id, emp_dept, ed.get('function', ''), annx_desig,
+            ed.get('cadre', ''), ed.get('grade', ''), ed.get('date_of_joining', ''),
+            ed.get('work_location', ''), salary_breakup, scale=s))
+        f.append(Spacer(1, 0.13 * inch * s))
+        note_l = ParagraphStyle('nL', fontName='Helvetica', fontSize=9.5 * s, alignment=TA_LEFT)
+        note_r = ParagraphStyle('nR', fontName='Helvetica-Bold', fontSize=9.5 * s, alignment=TA_RIGHT)
+        sig = Table([[Paragraph(f"Date : {date_str}", note_l),
+                      Paragraph('Signature of Head People &amp; Culture', note_r)]],
+                    colWidths=[avail_w * 0.5, avail_w * 0.5])
+        sig.setStyle(TableStyle([('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0)]))
+        f.append(sig)
+        f.append(Spacer(1, 0.1 * inch * s))
+        fn = ParagraphStyle('fn', fontName='Helvetica', fontSize=8 * s, leading=11 * s, alignment=TA_LEFT,
+                            textColor=HexColor('#333333'), spaceAfter=2 * s)
+        for note in notes:
+            f.append(Paragraph(note, fn))
+        f.append(Spacer(1, 0.05 * inch * s))
+        f.append(HRFlowable(width='100%', thickness=0.8, color=colors.grey, dash=(2, 2), spaceAfter=5 * s))
+        f.append(Paragraph(
+            "Note: This is a computer generated Compensation Component Break-up Structure. In case of "
+            "any discrepancy, please contact your HR Dept.",
+            ParagraphStyle('fnote', parent=fn, fontName='Helvetica-Oblique')))
+        f.append(Spacer(1, 4 * s))
+        f.append(Paragraph('APIS --Approved_P &amp; C', ParagraphStyle(
+            'tag', fontName='Helvetica', fontSize=8 * s, alignment=TA_RIGHT, textColor=HexColor('#555555'))))
+        return f
+
+    # ── Auto-fit: shrink each page until it fits within one page ──────────────
+    avail_w, avail_h = doc.width, doc.height
+
+    def _measure(flows):
+        total = 0.0
+        for fl in flows:
+            content = getattr(fl, '_content', None)  # KeepTogether reports 0 when wrapped alone
+            if content:
+                total += _measure(content)
+                continue
+            try:
+                _, h = fl.wrap(avail_w, avail_h)
+            except Exception:
+                h = 0
+            total += h
+            st = getattr(fl, 'style', None)
+            if st is not None:
+                total += getattr(st, 'spaceBefore', 0) + getattr(st, 'spaceAfter', 0)
+        return total
+
+    def _fit(builder, scales):
+        limit = avail_h * 0.96  # small slack for wrap/rounding
+        for sc in scales:
+            if _measure(builder(sc)) <= limit:
+                return sc
+        return scales[-1]
+
+    letter_scale = _fit(build_letter, (1.0, 0.97, 0.94, 0.91, 0.88, 0.85, 0.82, 0.79, 0.76, 0.73, 0.70))
+    annx_scale = _fit(build_annexure, (1.0, 0.96, 0.92, 0.88, 0.84, 0.80, 0.76, 0.72, 0.68, 0.64))
+
+    story = build_letter(letter_scale) + [PageBreak()] + build_annexure(annx_scale)
     doc.build(story)
     buffer.seek(0)
     return buffer
