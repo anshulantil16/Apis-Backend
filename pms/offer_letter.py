@@ -16,7 +16,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib.colors import HexColor
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table,
                                 TableStyle, PageBreak, Image, HRFlowable, KeepTogether)
 from reportlab.lib import colors
@@ -50,11 +50,167 @@ def _fy_context(effective_date):
     return reviewed_fy, next_review
 
 
+# ── Annexure-A: Compensation Break-up spec (single source of truth) ──────────────
+# (key, section, full_label, excel_header, basis)
+#   basis 'M' = value entered as MONTHLY  → annual = ×12
+#   basis 'A' = value entered as ANNUAL   → monthly = ÷12
+SALARY_COMPONENTS = [
+    ('basic',     'earnings', 'Basic Salary (Inclusive of DA/VDA)',                          'Basic Salary (Monthly)',        'M'),
+    ('hra',       'earnings', 'House Rent Allowance (HRA)',                                   'HRA (Monthly)',                 'M'),
+    ('cea',       'earnings', 'Child Education Allowance (CEA) @',                            'CEA (Monthly)',                 'M'),
+    ('lta',       'earnings', 'Leave Travel Allowance (LTA)',                                 'LTA (Monthly)',                 'M'),
+    ('special',   'earnings', 'Special Allowance (Flexi Pay)',                               'Special Allowance (Monthly)',   'M'),
+    ('meal',      'reimb',    'Meal Vocher Reimbursement',                                    'Meal Voucher (Monthly)',        'M'),
+    ('telephone', 'reimb',    'Telephone-Handset / Accessories & Internet Reimbursement',     'Telephone/Internet (Monthly)',  'M'),
+    ('health',    'reimb',    'Health & Wellness Reimbursement',                              'Health & Wellness (Monthly)',   'M'),
+    ('books',     'reimb',    'Books, Periodicals & Professional Development Reimbursement',   'Books/Prof Dev (Monthly)',      'M'),
+    ('uniform',   'reimb',    'Uniform & Attire Reimbursement',                               'Uniform & Attire (Monthly)',    'M'),
+    ('fuel',      'reimb',    'Fuel & Vehicle Maintenance Reimbursement',                     'Fuel & Vehicle (Monthly)',      'M'),
+    ('driver',    'reimb',    'Driver/Chauffer Salary',                                       'Driver Salary (Monthly)',       'M'),
+    ('car_lease', 'reimb',    'Car Lease / Company Car Benefit',                              'Car Lease (Monthly)',           'M'),
+    ('pf',        'benefits', 'Employer PF Contribution (12% of Basic / PF Ceiling Wages)',    'Employer PF (Annual)',          'A'),
+    ('esi',       'benefits', 'Employer ESI Contribution (3.25% of Gross Salary)',            'Employer ESI (Annual)',         'A'),
+    ('mediclaim', 'benefits', 'Mediclaim Charges ( As per Grade & Applicable Policy)',         'Mediclaim (Annual)',            'A'),
+    ('bonus',     'benefits', 'Statutory Bonus (8.33% of Basic & VDA)',                        'Statutory Bonus (Annual)',      'A'),
+    ('variable',  'other',    'Variable / Performance Pay $',                                  'Variable Pay (Annual)',         'A'),
+    ('gift',      'other',    'Gift Reimbursement',                                            'Gift Reimbursement (Annual)',   'A'),
+]
+
+# Extra Annexure employee-detail columns: (excel_header, model/dict key, annexure label)
+ANNEXURE_EMP_FIELDS = [
+    ('Function',        'function',        'Function'),
+    ('Cadre',           'cadre',           'Cadre'),
+    ('Grade',           'grade',           'Grade'),
+    ('Date of Joining', 'date_of_joining', 'Date of Joining'),
+    ('Work Location',   'work_location',   'Work Location'),
+]
+
+_YEL = HexColor('#FFFF00')
+_CYAN = HexColor('#00B0F0')
+_DGREY = HexColor('#808080')
+_LGREEN = HexColor('#92D050')
+_PEACH = HexColor('#FCE4D6')
+
+
+def _amt(v):
+    """Format an amount with thousands separators; blank string for empty/zero."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return ''
+    if not v:
+        return ''
+    return f"{round(v):,}"
+
+
+def _annexure_table(emp_name, emp_id, department, function, designation,
+                    cadre, grade, date_of_joining, work_location, breakup):
+    """Build the Compensation Break-up (Annexure-A) table. Components with a
+    blank/zero value are skipped (employee not eligible) and excluded from totals."""
+    breakup = breakup or {}
+    c0, c1, c2 = 3.37 * inch, 1.60 * inch, 1.60 * inch
+
+    pB = ParagraphStyle('anxB', fontName='Helvetica-Bold', fontSize=12, alignment=TA_CENTER)
+    pSub = ParagraphStyle('anxSub', fontName='Helvetica-Bold', fontSize=10, alignment=TA_CENTER)
+    pHdr = ParagraphStyle('anxHdr', fontName='Helvetica-Bold', fontSize=9.5, alignment=TA_CENTER, textColor=colors.white)
+    pHdrL = ParagraphStyle('anxHdrL', fontName='Helvetica-Bold', fontSize=9.5, alignment=TA_LEFT, textColor=colors.white)
+    pLbl = ParagraphStyle('anxLbl', fontName='Helvetica-Bold', fontSize=8.5, alignment=TA_LEFT, leading=11)
+    pDL = ParagraphStyle('anxDL', fontName='Helvetica-Bold', fontSize=9, alignment=TA_LEFT)
+    pDV = ParagraphStyle('anxDV', fontName='Helvetica', fontSize=9, alignment=TA_LEFT)
+    pST = ParagraphStyle('anxST', fontName='Helvetica-Bold', fontSize=9, alignment=TA_LEFT, textColor=colors.white)
+    pAmt = ParagraphStyle('anxAmt', fontName='Helvetica', fontSize=9, alignment=TA_RIGHT)
+    pAmtW = ParagraphStyle('anxAmtW', fontName='Helvetica-Bold', fontSize=9, alignment=TA_RIGHT, textColor=colors.white)
+
+    data, cmds = [], []
+
+    def row(cells):
+        data.append(cells)
+        return len(data) - 1
+
+    def band(text, bg, para=pHdrL):
+        i = row([Paragraph(text, para), '', ''])
+        cmds.extend([('SPAN', (0, i), (2, i)), ('BACKGROUND', (0, i), (2, i), bg)])
+
+    # Banner + subtitle
+    band('APIS INDIA LIMITED', _YEL, pB)
+    i = row([Paragraph('<u>Compensation Break-up Structure - Annexure A</u>', pSub), '', ''])
+    cmds.append(('SPAN', (0, i), (2, i)))
+
+    # Employee details
+    band('Employee Details', _CYAN, pHdr)
+    for lbl, val in [
+        ('Employee Code', emp_id), ('Employee Name', emp_name), ('Department', department),
+        ('Function', function), ('Designation', designation), ('Cadre', cadre),
+        ('Grade', grade), ('Date of Joining', date_of_joining), ('Work Location', work_location),
+    ]:
+        i = row([Paragraph(lbl, pDL), Paragraph(str(val or ''), pDV), ''])
+        cmds.append(('SPAN', (1, i), (2, i)))
+
+    # Salary component header
+    i = row([Paragraph('Salary Component #', pHdrL), Paragraph('Monthly', pHdr), Paragraph('Annually', pHdr)])
+    cmds.append(('BACKGROUND', (0, i), (2, i), _CYAN))
+
+    def comp_val(key, basis):
+        try:
+            v = float(breakup.get(key))
+        except (TypeError, ValueError):
+            return None
+        if not v:
+            return None
+        return (v, v * 12) if basis == 'M' else (v / 12.0, v)
+
+    def add_section(section, peach=False):
+        tm = ta = 0.0
+        for key, sec, label, _h, basis in SALARY_COMPONENTS:
+            if sec != section:
+                continue
+            vv = comp_val(key, basis)
+            if vv is None:
+                continue
+            m, a = vv
+            tm += m
+            ta += a
+            i = row([Paragraph(label, pLbl), Paragraph(_amt(m), pAmt), Paragraph(_amt(a), pAmt)])
+            if peach:
+                cmds.append(('BACKGROUND', (0, i), (2, i), _PEACH))
+        return tm, ta
+
+    def subtotal(label, m, a, bg):
+        i = row([Paragraph(label, pST), Paragraph(_amt(m), pAmtW), Paragraph(_amt(a), pAmtW)])
+        cmds.append(('BACKGROUND', (0, i), (2, i), bg))
+
+    e_m, e_a = add_section('earnings')
+    subtotal('GROSS EARNINGS', e_m, e_a, _DGREY)
+    r_m, r_a = add_section('reimb', peach=True)
+    gs_m, gs_a = e_m + r_m, e_a + r_a
+    subtotal('Gross Salary', gs_m, gs_a, _DGREY)
+    band('Annual Benefits', _CYAN)
+    b_m, b_a = add_section('benefits')
+    subtotal('Total Annual Benefits', b_m, b_a, _DGREY)
+    tc_m, tc_a = gs_m + b_m, gs_a + b_a
+    subtotal('TOTAL Salary/ Compensation ( Per Month)', tc_m, tc_a, _LGREEN)
+    band('Other Payments (Payout on Quarterly Basis)', _CYAN)
+    o_m, o_a = add_section('other')
+    subtotal('TOTAL  CTC ( Per Annum)', tc_m + o_m, tc_a + o_a, _LGREEN)
+
+    cmds.extend([
+        ('GRID', (0, 0), (-1, -1), 0.6, colors.black),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+    ])
+    tbl = Table(data, colWidths=[c0, c1, c2], repeatRows=0)
+    tbl.setStyle(TableStyle(cmds))
+    return tbl
+
+
 def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, promotion_pct,
                                effective_date, old_designation=None, new_designation=None,
                                performance_rating=None, grade_label=None, employee_id=None,
                                employee_name=None, department=None, salutation_title=None,
-                               assessment=None):
+                               assessment=None, emp_details=None, salary_breakup=None):
     """Generate the APIS appraisal / promotion letter PDF.
 
     Works with both PMS employees and standalone (Excel-uploaded) data.
@@ -252,66 +408,66 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         "Name: ______________________ &nbsp;&nbsp; Date: ________________",
         ack_style))
 
-    # ── Page 2: Annexure-A (revised salary structure summary) ────────────────
+    # ── Page 2: Annexure-A — Compensation Break-up Structure (exact replica) ──
     story.append(PageBreak())
-    add_logo(1.3)
-    story.append(HRFlowable(width='100%', thickness=1.2, color=GOLD, spaceBefore=2, spaceAfter=10))
-    story.append(Paragraph("Annexure – A", annx_title))
-    story.append(Paragraph("Revised Salary Structure", ParagraphStyle(
-        'AnnxSub', parent=styles['Normal'], fontSize=10.5, textColor=BLUE,
-        alignment=TA_CENTER, spaceAfter=10, fontName='Helvetica-Bold')))
+    ed = emp_details or {}
+    annx_desig = new_desig if is_promotion else (emp_desig or '')
 
-    story.append(Paragraph(f"<b>Employee:</b> {emp_name} &nbsp;&nbsp; <b>Code:</b> {emp_id}", meta_style))
-    desig_line = (f"<b>Designation:</b> {emp_desig or '—'} to <b>{new_desig}</b>" if is_promotion
-                  else f"<b>Designation:</b> {emp_desig or '—'}")
-    story.append(Paragraph(desig_line, meta_style))
-    story.append(Paragraph(f"<b>Effective Date:</b> {eff_str}", meta_style))
+    # Top header: logo left + "APIS (COR) / People & Culture" / version right
+    right_txt = Paragraph('APIS (COR) / People &amp; Culture<br/>V_01_2026', ParagraphStyle(
+        'anxRT', fontName='Helvetica-Bold', fontSize=9, alignment=TA_RIGHT, leading=12))
+    logo_cell = (Image(LOGO_PATH, width=0.85 * inch, height=0.85 * inch * 109 / 198)
+                 if os.path.exists(LOGO_PATH) else Paragraph('apis', styles['Normal']))
+    top = Table([[logo_cell, right_txt]], colWidths=[3.0 * inch, 3.57 * inch])
+    top.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                             ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+                             ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                             ('RIGHTPADDING', (0, 0), (-1, -1), 0)]))
+    story.append(top)
+    story.append(Spacer(1, 5))
+
+    story.append(_annexure_table(
+        emp_name, emp_id, emp_dept, ed.get('function', ''), annx_desig,
+        ed.get('cadre', ''), ed.get('grade', ''), ed.get('date_of_joining', ''),
+        ed.get('work_location', ''), salary_breakup))
+
+    # Signatures
+    story.append(Spacer(1, 0.18 * inch))
+    note_l = ParagraphStyle('nL', fontName='Helvetica', fontSize=9.5, alignment=TA_LEFT)
+    note_r = ParagraphStyle('nR', fontName='Helvetica-Bold', fontSize=9.5, alignment=TA_RIGHT)
+    sig = Table([[Paragraph(f"Date : {date_str}", note_l),
+                  Paragraph('Signature of Head People &amp; Culture', note_r)]],
+                colWidths=[3.3 * inch, 3.27 * inch])
+    sig.setStyle(TableStyle([('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0)]))
+    story.append(sig)
     story.append(Spacer(1, 0.14 * inch))
 
-    cc = float(current_ctc or 0)
-    nc = float(new_ctc or 0)
-    diff = nc - cc
-    diff_pct = (diff / cc * 100) if cc else 0
+    # Footer notes
+    fn = ParagraphStyle('fn', fontName='Helvetica', fontSize=8, leading=11.5, alignment=TA_LEFT,
+                        textColor=HexColor('#333333'), spaceAfter=2)
+    for note in [
+        "# Tax applicability as per Income Tax Act &amp; shall be borne by the employee",
+        "$ Variable pay is paid as per company's variable pay policy on quarterly basis",
+        "@ Children Education Allowance is applicable for a maximum 2 children only",
+        "Car Lease as per car lease policy",
+        "NPS : Max contribution up to 10 % of Basic in old tax regime &amp; 14 % in new tax regime",
+        "Gratuity amount payment as per Code on Social Security, 2020 (PGA 1972)",
+        "Your Compensation Break-up Structure have been determined based on your cadre and grade, "
+        "in accordance with the company's compensation policy as per the provisions of Code on "
+        "Wages &amp; applicable laws",
+    ]:
+        story.append(Paragraph(note, fn))
 
-    ctc_rows = [
-        ['Particulars', 'Current (Annual)', 'Revised (Annual)', 'Difference'],
-        ['Cost to Company (CTC)', _rs(cc), _rs(nc), _rs(diff)],
-        ['Monthly (approx.)', _rs(cc / 12), _rs(nc / 12), _rs(diff / 12)],
-    ]
-    ctc_table = Table(ctc_rows, colWidths=[1.9 * inch, 1.55 * inch, 1.55 * inch, 1.55 * inch])
-    ctc_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), BLUE),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 9.5),
-        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-        ('ALIGN', (1, 0), (-1, 0), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 7),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
-        ('GRID', (0, 0), (-1, -1), 0.6, colors.grey),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, HexColor('#f4f7fb')]),
-    ]))
-    story.append(ctc_table)
-    story.append(Spacer(1, 0.12 * inch))
+    story.append(Spacer(1, 0.06 * inch))
+    story.append(HRFlowable(width='100%', thickness=0.8, color=colors.grey,
+                            dash=(2, 2), spaceAfter=5))
     story.append(Paragraph(
-        f"<b>Total Annual Increase:</b> {_rs(diff)} ({diff_pct:.2f}%)", meta_style))
-
-    comp = []
-    if increment_pct and float(increment_pct) > 0:
-        comp.append(f"Performance Increment: {float(increment_pct):g}%")
-    if promotion_pct and float(promotion_pct) > 0:
-        comp.append(f"Promotion Benefit: {float(promotion_pct):g}%")
-    if comp:
-        story.append(Paragraph("<b>Components:</b> " + " &nbsp;|&nbsp; ".join(comp), meta_style))
-
-    story.append(Spacer(1, 0.18 * inch))
-    story.append(Paragraph(
-        "The figures above are indicative of your revised Cost to Company. The complete "
-        "component-wise salary structure forms part of this Annexure and is subject to applicable "
-        "statutory deductions and Company policies.",
-        small_style))
+        "Note: This is a computer generated Compensation Component Break-up Structure. In case of "
+        "any discrepancy, please contact your HR Dept.",
+        ParagraphStyle('fnote', parent=fn, fontName='Helvetica-Oblique')))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph('APIS --Approved_P &amp; C', ParagraphStyle(
+        'tag', fontName='Helvetica', fontSize=8, alignment=TA_RIGHT, textColor=HexColor('#555555'))))
 
     doc.build(story)
     buffer.seek(0)

@@ -870,47 +870,83 @@ class OfferLetterTemplateView(APIView):
     def get(self, request):
         from django.http import HttpResponse
         from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from .offer_letter import SALARY_COMPONENTS, ANNEXURE_EMP_FIELDS
 
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = 'Offer Letters'
 
-        headers = [
+        # Letter-level identity + Annexure employee details + salary-component columns
+        identity = [
             'SR NO', 'Employee ID *', 'Title (Mr./Ms.)', 'Employee Name *', 'Email *', 'Department',
-            'Current Designation', 'New Designation', 'Current CTC *', 'New CTC *',
+            'Function', 'Current Designation', 'New Designation', 'Cadre', 'Grade',
+            'Date of Joining', 'Work Location', 'Current CTC *', 'New CTC *',
             'Increment %', 'Promotion %', 'Performance Rating', 'Performance Assessment', 'Grade Label',
             'Effective Date *', 'Remarks',
         ]
+        component_headers = [c[3] for c in SALARY_COMPONENTS]
+        headers = identity + component_headers
 
         hf = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
         hf_yellow = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+        hf_green = PatternFill(start_color='C6E0B4', end_color='C6E0B4', fill_type='solid')
         border = Border(left=Side(style='thin'), right=Side(style='thin'),
                         top=Side(style='thin'), bottom=Side(style='thin'))
+        comp_start = len(identity)  # 0-based index where component columns begin
 
         for ci, h in enumerate(headers, 1):
             c = ws.cell(row=1, column=ci, value=h)
             is_required = '*' in h
-            c.fill = hf if is_required else hf_yellow
+            is_comp = ci > comp_start
+            c.fill = hf if is_required else (hf_green if is_comp else hf_yellow)
             c.font = Font(color='FFFFFF' if is_required else '000000', bold=True, size=10)
             c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
             c.border = border
 
-        samples = [
-            [1, 'EMP001', 'Mr.', 'Rahul Sharma', 'rahul.sharma@apis.com', 'Sales', 'Sales Manager', 'Senior Sales Manager', 600000, 660000, 10, 0, 'A', 'Strong Performer', 'Outstanding', '2026-04-01', 'Excellent performer'],
-            [2, 'EMP002', 'Ms.', 'Priya Singh', 'priya.singh@apis.com', 'Operations', 'Executive', 'Senior Executive', 450000, 540000, 12, 8, 'A+', 'Outstanding Performer', 'Exceptional', '2026-04-01', 'Ready for promotion'],
-            [3, 'EMP003', 'Mr.', 'Amit Kumar', 'amit.kumar@apis.com', 'IT', 'Associate', 'Associate', 280000, 340000, 5, 0, 'B', 'Solid Performer', 'Meets Target', '2026-04-01', ''],
+        # Sample rows (dict keyed by header; blank components demonstrate the
+        # "not eligible → leave blank → hidden in letter" behaviour)
+        sample_dicts = [
+            {'SR NO': 1, 'Employee ID *': 'EMP001', 'Title (Mr./Ms.)': 'Mr.',
+             'Employee Name *': 'Rahul Sharma', 'Email *': 'rahul.sharma@apis.com',
+             'Department': 'Sales', 'Function': 'Field Sales', 'Current Designation': 'Sales Manager',
+             'New Designation': 'Senior Sales Manager', 'Cadre': 'M2', 'Grade': 'G5',
+             'Date of Joining': '01/06/2019', 'Work Location': 'Delhi HO',
+             'Current CTC *': 600000, 'New CTC *': 660000, 'Increment %': 10, 'Promotion %': 5,
+             'Performance Rating': 'A', 'Performance Assessment': 'Strong Performer',
+             'Grade Label': 'Outstanding', 'Effective Date *': '2026-04-01', 'Remarks': 'Excellent performer',
+             'Basic Salary (Monthly)': 27500, 'HRA (Monthly)': 11000, 'Special Allowance (Monthly)': 8000,
+             'Employer PF (Annual)': 39600, 'Statutory Bonus (Annual)': 27500, 'Variable Pay (Annual)': 40000},
+            {'SR NO': 2, 'Employee ID *': 'EMP002', 'Title (Mr./Ms.)': 'Ms.',
+             'Employee Name *': 'Priya Singh', 'Email *': 'priya.singh@apis.com',
+             'Department': 'Operations', 'Function': 'Operations', 'Current Designation': 'Executive',
+             'New Designation': 'Senior Executive', 'Cadre': 'M1', 'Grade': 'G4',
+             'Date of Joining': '15/03/2021', 'Work Location': 'Mumbai',
+             'Current CTC *': 450000, 'New CTC *': 540000, 'Increment %': 12, 'Promotion %': 8,
+             'Performance Rating': 'A+', 'Performance Assessment': 'Outstanding Performer',
+             'Grade Label': 'Exceptional', 'Effective Date *': '2026-04-01', 'Remarks': 'Ready for promotion',
+             'Basic Salary (Monthly)': 22500, 'HRA (Monthly)': 9000, 'Special Allowance (Monthly)': 6000,
+             'Employer PF (Annual)': 32400, 'Statutory Bonus (Annual)': 22500},
+            {'SR NO': 3, 'Employee ID *': 'EMP003', 'Title (Mr./Ms.)': 'Mr.',
+             'Employee Name *': 'Amit Kumar', 'Email *': 'amit.kumar@apis.com',
+             'Department': 'IT', 'Function': 'Information Technology', 'Current Designation': 'Associate',
+             'New Designation': 'Associate', 'Cadre': 'E3', 'Grade': 'G3',
+             'Date of Joining': '10/01/2023', 'Work Location': 'Delhi HO',
+             'Current CTC *': 280000, 'New CTC *': 340000, 'Increment %': 5, 'Promotion %': 0,
+             'Performance Rating': 'B', 'Performance Assessment': 'Solid Performer',
+             'Grade Label': 'Meets Target', 'Effective Date *': '2026-04-01', 'Remarks': '',
+             'Basic Salary (Monthly)': 14000, 'HRA (Monthly)': 5600, 'Special Allowance (Monthly)': 4000},
         ]
 
         date_col = headers.index('Effective Date *') + 1
-        for ri, row in enumerate(samples, 2):
-            for ci, val in enumerate(row, 1):
-                c = ws.cell(row=ri, column=ci, value=val)
+        for ri, d in enumerate(sample_dicts, 2):
+            for ci, h in enumerate(headers, 1):
+                c = ws.cell(row=ri, column=ci, value=d.get(h, ''))
                 c.border = border
                 if ci == date_col:
                     c.number_format = 'yyyy-mm-dd'
 
         for i in range(1, len(headers) + 1):
-            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = 18
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = 20
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -942,12 +978,15 @@ class OfferLetterUploadView(APIView):
         except Exception as e:
             return Response({'error': f'Cannot read file: {str(e)}'}, status=400)
 
+        from .offer_letter import SALARY_COMPONENTS
         HEADER_MAP = {
             'sr no': 'sr_no', 'employee id': 'employee_id',
             'title (mr./ms.)': 'salutation', 'title': 'salutation',
             'employee name': 'name',
-            'email': 'email', 'department': 'department',
+            'email': 'email', 'department': 'department', 'function': 'function',
             'current designation': 'current_designation', 'new designation': 'new_designation',
+            'cadre': 'cadre', 'grade': 'grade',
+            'date of joining': 'date_of_joining', 'work location': 'work_location',
             'current ctc': 'current_ctc', 'new ctc': 'new_ctc',
             'increment %': 'increment_pct', 'promotion %': 'promotion_pct',
             'performance rating': 'performance_rating',
@@ -955,14 +994,19 @@ class OfferLetterUploadView(APIView):
             'grade label': 'grade_label',
             'effective date': 'effective_date', 'remarks': 'remarks',
         }
+        # salary-component columns keyed by their (lower-cased) Excel header → component key
+        COMP_MAP = {c[3].strip().lower(): c[0] for c in SALARY_COMPONENTS}
         header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
         col_map = {}
+        comp_col = {}   # component_key → column index
         for ci, cell in enumerate(header_row):
             if cell is None:
                 continue
             key = str(cell).strip().lower().replace('*', '').strip()
             if key in HEADER_MAP:
                 col_map[HEADER_MAP[key]] = ci
+            elif key in COMP_MAP:
+                comp_col[COMP_MAP[key]] = ci
 
         required = ['employee_id', 'name', 'email', 'current_ctc', 'new_ctc', 'effective_date']
         if not all(f in col_map for f in required):
@@ -1022,7 +1066,22 @@ class OfferLetterUploadView(APIView):
                 grade_label = str(get_val(row, 'grade_label') or '').strip()
                 salutation = str(get_val(row, 'salutation') or '').strip()
                 department = str(get_val(row, 'department') or '').strip()
+                function = str(get_val(row, 'function') or '').strip()
+                cadre = str(get_val(row, 'cadre') or '').strip()
+                grade = str(get_val(row, 'grade') or '').strip()
+                date_of_joining = str(get_val(row, 'date_of_joining') or '').strip()
+                work_location = str(get_val(row, 'work_location') or '').strip()
                 effective_date = format_date(get_val(row, 'effective_date')) or date.today()
+
+                # Salary break-up: read each component column; skip blank/zero (not eligible)
+                salary_breakup = {}
+                for ckey, ci in comp_col.items():
+                    cval = sf(row[ci] if ci < len(row) else None, default=0)
+                    if cval:
+                        salary_breakup[ckey] = cval
+
+                emp_details = {'function': function, 'cadre': cadre, 'grade': grade,
+                               'date_of_joining': date_of_joining, 'work_location': work_location}
 
                 letter_type = 'increment'
                 if new_designation and new_designation != current_designation:
@@ -1039,6 +1098,9 @@ class OfferLetterUploadView(APIView):
                     old_designation=current_designation, new_designation=new_designation,
                     performance_rating=performance_rating, grade_label=grade_label,
                     salutation=salutation, assessment=assessment,
+                    function=function, cadre=cadre, grade=grade,
+                    date_of_joining=date_of_joining, work_location=work_location,
+                    salary_breakup=salary_breakup,
                     email_address=email, department=department, status='pending',
                 )
 
@@ -1048,6 +1110,7 @@ class OfferLetterUploadView(APIView):
                     performance_rating=performance_rating, grade_label=grade_label,
                     employee_id=emp_id, employee_name=name, department=department,
                     salutation_title=salutation, assessment=assessment,
+                    emp_details=emp_details, salary_breakup=salary_breakup,
                 )
                 pdf_bytes = pdf_buf.getvalue()
                 offer.pdf_file.save(f'offer_{emp_id}_{offer.id}.pdf', ContentFile(pdf_bytes), save=True)
