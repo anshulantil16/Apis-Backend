@@ -3,9 +3,11 @@ from .views import (
     PMSListView, PMSImportView, PMSEmployeeUpdateView, PMSTemplateView,
     PMSExportView, PMSSettingsView, OfferLetterTemplateView,
     OfferLetterUploadView, OfferLetterPDFView, OfferLetterBatchStatusView,
+    PMSLoginView,
 )
 
 urlpatterns = [
+    path('login/',                  PMSLoginView.as_view()),
     path('employees/',              PMSListView.as_view()),
     path('import/',                 PMSImportView.as_view()),
     path('employees/<int:emp_id>/', PMSEmployeeUpdateView.as_view()),
