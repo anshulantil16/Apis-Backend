@@ -487,6 +487,8 @@ class PMSImportView(APIView):
 
         created = updated = 0
         errors = []
+        seen_codes = {}          # employee_id → first row it appeared on (within THIS file)
+        dup_in_file = []         # codes repeated inside the uploaded file
 
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row):
@@ -497,6 +499,12 @@ class PMSImportView(APIView):
             if not emp_id or not name:
                 errors.append(f'Row {row_idx}: Missing Employee ID or Name — skipped')
                 continue
+            # Duplicate Employee Code WITHIN this file — flag it (last row wins on save)
+            code_key = emp_id.lower()
+            if code_key in seen_codes:
+                dup_in_file.append(f'{emp_id} (rows {seen_codes[code_key]} & {row_idx})')
+            else:
+                seen_codes[code_key] = row_idx
 
             def sf(val, default=None):
                 if val is None or str(val).strip() == '': return default
@@ -584,9 +592,15 @@ class PMSImportView(APIView):
             updated += not was_created
 
         employees = list(PMSEmployee.objects.all())
+        msg = (f'✅ Import merged by Employee Code — {created} new added, {updated} updated. '
+               f'Total: {len(employees)} employees.')
+        if dup_in_file:
+            preview = ', '.join(dup_in_file[:10]) + ('…' if len(dup_in_file) > 10 else '')
+            msg += f' ⚠️ {len(dup_in_file)} duplicate code(s) inside the file (last row kept): {preview}'
         return Response({
-            'message': f'✅ Import complete! {created} new employees added, {updated} updated.',
+            'message': msg,
             'created': created, 'updated': updated, 'errors': errors,
+            'duplicates_in_file': dup_in_file,
             'total': len(employees), 'summary': build_summary(employees),
         })
 
