@@ -219,6 +219,12 @@ class PMSEmployee(models.Model):
         return SPECIAL_REWARD_RANGE.get(self.band_letter)
 
     @property
+    def effective_department(self):
+        """Department to show/group by everywhere: the New Department (imported as
+        'business') when present, otherwise the original department."""
+        return (self.business or '').strip() or (self.department or '').strip()
+
+    @property
     def is_worker(self):
         return self.increment_group == 'worker'
 

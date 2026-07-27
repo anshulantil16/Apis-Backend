@@ -111,7 +111,8 @@ def serialize_emp(e):
         'cadre': e.cadre,
         'band': e.band,
         'level': e.level,
-        'department': e.department,
+        'department': e.effective_department,   # New Department (falls back to original)
+        'department_original': e.department,
         'business': e.business,
         'location': e.location,
         'payroll_location': e.payroll_location,
@@ -268,9 +269,9 @@ def build_summary(employees):
         'hike_pct': round((v['new'] - v['current']) / v['current'] * 100, 2) if v['current'] else 0,
     } for cc, v in sorted(cc_map.items(), key=lambda x: -x[1]['count'])]
 
-    dept_map = {}
+    dept_map = {}  # keyed by New Department (effective_department)
     for e in employees:
-        d = e.department or 'Unknown'
+        d = e.effective_department or 'Unknown'
         if d not in dept_map:
             dept_map[d] = {'current': 0, 'new': 0, 'count': 0, 'scores': [], 'promoted': 0}
         dept_map[d]['current'] += float(e.current_ctc)
@@ -826,7 +827,7 @@ class PMSExportView(APIView):
             ('EMPLOYEE & ORGANISATION', 18, '1F4E79'),
             ('PERFORMANCE', 4, '548235'),
             ('CTC HISTORY', 4, '7F6000'),
-            ('INCREMENT COMPONENTS', 13, 'C55A11'),
+            ('INCREMENT COMPONENTS', 16, 'C55A11'),
             ('REVISED CTC', 4, '2E75B6'),
             ('DECISIONS & REMARKS', 5, '7030A0'),
         ]
@@ -837,6 +838,7 @@ class PMSExportView(APIView):
             'Final Score', 'Perf Grade', 'Rating Label', 'Increment Category',
             'FY 22-23 CTC', 'FY 23-24 CTC', 'FY 24-25 CTC', 'Current CTC',
             'Merit Increment %', 'Merit Increment Rs',
+            'Service Days', 'Service Adj %', 'Service Adj Rs',
             'Promoted', 'Promotion %', 'Promotion Rs',
             'Sustained', 'Sustained %', 'Sustained Rs',
             'Salary Correction Rs',
@@ -847,7 +849,10 @@ class PMSExportView(APIView):
         ]
         thin = Side(style='thin', color='D9D9D9')
         border = Border(left=thin, right=thin, top=thin, bottom=thin)
-        left_cols = {2, 4, 5, 13, 14, 46, 47, 48}
+        # Name-based column lookup so inserting columns never mis-aligns totals/formatting
+        col = lambda h: headers.index(h) + 1
+        left_cols = {col(h) for h in ('Name', 'Designation', 'New Designation', 'Reporting Manager',
+                                      'HOD Name', 'Manager Remarks', 'HOD Remarks', 'Notes')}
 
         ci = 1
         for gname, gcount, gcolor in groups:
@@ -868,12 +873,13 @@ class PMSExportView(APIView):
         for ri, e in enumerate(employees, 3):
             row = [
                 e.employee_id, e.name, e.gender, e.designation, e.new_designation,
-                e.cadre, e.band, e.category, e.department, e.cost_centre, e.location, e.hq_location,
+                e.cadre, e.band, e.category, e.effective_department, e.cost_centre, e.location, e.hq_location,
                 e.reporting_manager, e.hod_name, str(e.date_of_joining or ''), e.age or '',
                 e.tenure_years if e.tenure_years is not None else '', 'Yes' if e.merit_eligible else 'No',
                 e.final_score, e.effective_grade, e.grade_config['label'], e.increment_group,
                 float(e.fy_2223_ctc or 0), float(e.fy_2324_ctc or 0), float(e.fy_2425_ctc or 0), float(e.current_ctc),
                 e.effective_increment_pct, e.increment_amount,
+                e.service_days if e.service_days is not None else '', e.service_adjustment_pct, e.service_adjustment_amount,
                 'Yes' if e.promoted else 'No', e.effective_promotion_pct, e.promotion_amount,
                 'Yes' if e.sustained_performance else 'No', e.sustained_pct, e.sustained_amount,
                 e.salary_correction_amount,
@@ -892,15 +898,16 @@ class PMSExportView(APIView):
         tcell = ws.cell(row=last, column=1, value='TOTAL')
         tcell.font = Font(bold=True, size=11)
         totals = {
-            26: sum(float(e.current_ctc) for e in employees),
-            28: sum(e.increment_amount for e in employees),
-            31: sum(e.promotion_amount for e in employees),
-            34: sum(e.sustained_amount for e in employees),
-            35: sum(e.salary_correction_amount for e in employees),
-            37: sum(e.reward_payout for e in employees),
-            39: sum(e.management_discretion_amount for e in employees),
-            41: sum(e.new_ctc - float(e.current_ctc) for e in employees),
-            42: sum(e.new_ctc for e in employees),
+            col('Current CTC'): sum(float(e.current_ctc) for e in employees),
+            col('Merit Increment Rs'): sum(e.increment_amount for e in employees),
+            col('Service Adj Rs'): sum(e.service_adjustment_amount for e in employees),
+            col('Promotion Rs'): sum(e.promotion_amount for e in employees),
+            col('Sustained Rs'): sum(e.sustained_amount for e in employees),
+            col('Salary Correction Rs'): sum(e.salary_correction_amount for e in employees),
+            col('Special Reward Rs'): sum(e.reward_payout for e in employees),
+            col('Mgmt Discretion Rs'): sum(e.management_discretion_amount for e in employees),
+            col('Total Increase Rs'): sum(e.new_ctc - float(e.current_ctc) for e in employees),
+            col('New CTC (Annual)'): sum(e.new_ctc for e in employees),
         }
         for col, v in totals.items():
             cell = ws.cell(row=last, column=col, value=round(v, 2))
@@ -941,6 +948,7 @@ class PMSExportView(APIView):
             ('Total Employees', len(employees), None),
             ('Current Payroll (Annual)', round(total_ctc, 2), None),
             ('Merit Increment', round(sum(e.increment_amount for e in employees), 2), round(pct(sum(e.increment_amount for e in employees)), 2)),
+            ('Service-Days Adjustment (±)', round(sum(e.service_adjustment_amount for e in employees), 2), round(pct(sum(e.service_adjustment_amount for e in employees)), 2)),
             ('Promotion', round(sum(e.promotion_amount for e in employees), 2), round(pct(sum(e.promotion_amount for e in employees)), 2)),
             ('Sustained Performance', round(sum(e.sustained_amount for e in employees), 2), round(pct(sum(e.sustained_amount for e in employees)), 2)),
             ('Salary Correction', round(sum(e.salary_correction_amount for e in employees), 2), round(pct(sum(e.salary_correction_amount for e in employees)), 2)),
