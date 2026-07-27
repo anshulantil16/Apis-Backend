@@ -256,6 +256,8 @@ def build_summary(employees):
     # Component-wise cost of the total hike
     cost_increment  = round(sum(e.increment_amount for e in employees), 2)
     cost_service_adjustment = round(sum(e.service_adjustment_amount for e in employees), 2)
+    cost_service_adj_up   = round(sum(e.service_adjustment_amount for e in employees if e.service_adjustment_amount > 0), 2)
+    cost_service_adj_down = round(sum(e.service_adjustment_amount for e in employees if e.service_adjustment_amount < 0), 2)  # negative
     cost_promotion  = round(sum(e.promotion_amount for e in employees), 2)
     cost_sustained  = round(sum(e.sustained_amount for e in employees), 2)
     cost_correction = round(sum(e.salary_correction_amount for e in employees), 2)
@@ -406,6 +408,8 @@ def build_summary(employees):
         'worker_count': worker_count,
         'cost_increment': cost_increment,
         'cost_service_adjustment': cost_service_adjustment,
+        'cost_service_adj_up': cost_service_adj_up,
+        'cost_service_adj_down': cost_service_adj_down,
         'cost_promotion': cost_promotion,
         'cost_sustained': cost_sustained,
         'cost_correction': cost_correction,
@@ -440,7 +444,8 @@ def build_summary(employees):
     # top10/bottom10 already annualised via serialize_emp; one-time rewards & %
     # fields are left as-is.
     for k in ('total_current_ctc', 'total_new_ctc', 'total_increment', 'cost_increment',
-              'cost_service_adjustment', 'cost_promotion', 'cost_sustained', 'cost_correction',
+              'cost_service_adjustment', 'cost_service_adj_up', 'cost_service_adj_down',
+              'cost_promotion', 'cost_sustained', 'cost_correction',
               'cost_mgmt_discretion', 'median_ctc', 'matrix_median_ctc'):
         if isinstance(result.get(k), (int, float)):
             result[k] = round(result[k] * CTC_ANNUAL_MULT, 2)
