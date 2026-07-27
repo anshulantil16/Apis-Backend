@@ -37,6 +37,16 @@ def _location_sort_key(name):
     return (3, 0, n)
 
 
+# Imported CTC is MONTHLY → multiply for ANNUAL display/export everywhere.
+# (One-time rewards and % fields are never annualised.)
+CTC_ANNUAL_MULT = 12
+
+
+def _ann(v):
+    """Annualise a single money value (monthly → annual). Non-numbers pass through."""
+    return round(v * CTC_ANNUAL_MULT, 2) if isinstance(v, (int, float)) else v
+
+
 # ── PMS Simulator login (email OTP) ───────────────────────────────────────────
 PMS_BOOTSTRAP_EMAIL = 'anshul@apisindia.com'
 _PMS_OTP_TTL = 300  # 5 minutes
@@ -128,7 +138,7 @@ GRADE_ORDER = ['A+', 'A', 'B+', 'B', 'C', 'D']
 
 def serialize_emp(e):
     cfg = e.grade_config
-    return {
+    data = {
         'id': e.id,
         'employee_id': e.employee_id,
         'name': e.name,
@@ -220,6 +230,15 @@ def serialize_emp(e):
         'hod_remarks': e.hod_remarks,
         'notes': e.notes,
     }
+    # Annualise recurring CTC money (stored monthly → annual). One-time reward &
+    # % fields are left as-is.
+    for k in ('current_ctc', 'new_ctc', 'fy_2223_ctc', 'fy_2324_ctc', 'fy_2425_ctc', 'variable_pay',
+              'increment_amount', 'service_adjustment_amount', 'promotion_amount',
+              'management_discretion_amount', 'sustained_amount', 'salary_correction_amount'):
+        if isinstance(data.get(k), (int, float)):
+            data[k] = round(data[k] * CTC_ANNUAL_MULT, 2)
+    data['new_ctc_monthly'] = round((data['new_ctc'] or 0) / 12, 2)  # true monthly of the annual New CTC
+    return data
 
 
 def build_summary(employees):
@@ -374,7 +393,7 @@ def build_summary(employees):
         band_map[b]['new']     += e.new_ctc
         band_map[b]['count']   += 1
 
-    return {
+    result = {
         'total_employees': total,
         'total_current_ctc': round(total_ctc, 2),
         'total_new_ctc': round(total_new_ctc, 2),
@@ -416,6 +435,31 @@ def build_summary(employees):
         'median_score': med_score,
         'median_ctc': med_ctc,
     }
+
+    # ── Annualise every recurring CTC money (stored monthly → annual) ─────────
+    # top10/bottom10 already annualised via serialize_emp; one-time rewards & %
+    # fields are left as-is.
+    for k in ('total_current_ctc', 'total_new_ctc', 'total_increment', 'cost_increment',
+              'cost_service_adjustment', 'cost_promotion', 'cost_sustained', 'cost_correction',
+              'cost_mgmt_discretion', 'median_ctc', 'matrix_median_ctc'):
+        if isinstance(result.get(k), (int, float)):
+            result[k] = round(result[k] * CTC_ANNUAL_MULT, 2)
+    for row in result['cost_centre_breakdown']:
+        for k in ('current_ctc', 'new_ctc', 'increment', 'increment_cost', 'promotion_cost', 'sustained_cost'):
+            if isinstance(row.get(k), (int, float)):
+                row[k] = round(row[k] * CTC_ANNUAL_MULT, 2)
+    for row in result['department_breakdown']:
+        for k in ('current_ctc', 'new_ctc', 'increment'):
+            if isinstance(row.get(k), (int, float)):
+                row[k] = round(row[k] * CTC_ANNUAL_MULT, 2)
+    for row in result['band_breakdown']:
+        for k in ('current_ctc', 'new_ctc'):
+            if isinstance(row.get(k), (int, float)):
+                row[k] = round(row[k] * CTC_ANNUAL_MULT, 2)
+    for grow in result['grade_increment_breakdown'].values():
+        if isinstance(grow.get('total_increment'), (int, float)):
+            grow['total_increment'] = round(grow['total_increment'] * CTC_ANNUAL_MULT, 2)
+    return result
 
 
 class PMSListView(APIView):
@@ -908,6 +952,7 @@ class PMSExportView(APIView):
             c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
             c.border = border
 
+        X = lambda v: round(float(v or 0) * CTC_ANNUAL_MULT, 2)  # monthly → annual for export
         for ri, e in enumerate(employees, 3):
             row = [
                 e.employee_id, e.name, e.gender, e.designation, e.new_designation,
@@ -915,15 +960,15 @@ class PMSExportView(APIView):
                 e.reporting_manager, e.hod_name, str(e.date_of_joining or ''), e.age or '',
                 e.tenure_years if e.tenure_years is not None else '', 'Yes' if e.merit_eligible else 'No',
                 e.final_score, e.effective_grade, e.grade_config['label'], e.increment_group,
-                float(e.fy_2223_ctc or 0), float(e.fy_2324_ctc or 0), float(e.fy_2425_ctc or 0), float(e.current_ctc),
-                e.effective_increment_pct, e.increment_amount,
-                e.service_days if e.service_days is not None else '', e.service_adjustment_pct, e.service_adjustment_amount,
-                'Yes' if e.promoted else 'No', e.effective_promotion_pct, e.promotion_amount,
-                'Yes' if e.sustained_performance else 'No', e.sustained_pct, e.sustained_amount,
-                e.salary_correction_amount,
-                'Yes' if e.on_time_reward else 'No', e.reward_payout,
-                float(e.management_discretion_pct), e.management_discretion_amount,
-                e.total_impact_pct, round(e.new_ctc - float(e.current_ctc), 2), e.new_ctc, e.new_ctc_monthly,
+                X(e.fy_2223_ctc), X(e.fy_2324_ctc), X(e.fy_2425_ctc), X(e.current_ctc),
+                e.effective_increment_pct, X(e.increment_amount),
+                e.service_days if e.service_days is not None else '', e.service_adjustment_pct, X(e.service_adjustment_amount),
+                'Yes' if e.promoted else 'No', e.effective_promotion_pct, X(e.promotion_amount),
+                'Yes' if e.sustained_performance else 'No', e.sustained_pct, X(e.sustained_amount),
+                X(e.salary_correction_amount),
+                'Yes' if e.on_time_reward else 'No', e.reward_payout,  # reward is one-time, not annualised
+                float(e.management_discretion_pct), X(e.management_discretion_amount),
+                e.total_impact_pct, X(e.new_ctc - float(e.current_ctc)), X(e.new_ctc), round(float(e.new_ctc), 2),
                 'Yes' if e.redesignation else 'No', e.promotion_readiness, e.manager_remarks, e.hod_remarks, e.notes,
             ]
             for ci2, val in enumerate(row, 1):
@@ -936,16 +981,16 @@ class PMSExportView(APIView):
         tcell = ws.cell(row=last, column=1, value='TOTAL')
         tcell.font = Font(bold=True, size=11)
         totals = {
-            col('Current CTC'): sum(float(e.current_ctc) for e in employees),
-            col('Merit Increment Rs'): sum(e.increment_amount for e in employees),
-            col('Service Adj Rs'): sum(e.service_adjustment_amount for e in employees),
-            col('Promotion Rs'): sum(e.promotion_amount for e in employees),
-            col('Sustained Rs'): sum(e.sustained_amount for e in employees),
-            col('Salary Correction Rs'): sum(e.salary_correction_amount for e in employees),
-            col('Special Reward Rs'): sum(e.reward_payout for e in employees),
-            col('Mgmt Discretion Rs'): sum(e.management_discretion_amount for e in employees),
-            col('Total Increase Rs'): sum(e.new_ctc - float(e.current_ctc) for e in employees),
-            col('New CTC (Annual)'): sum(e.new_ctc for e in employees),
+            col('Current CTC'): X(sum(float(e.current_ctc) for e in employees)),
+            col('Merit Increment Rs'): X(sum(e.increment_amount for e in employees)),
+            col('Service Adj Rs'): X(sum(e.service_adjustment_amount for e in employees)),
+            col('Promotion Rs'): X(sum(e.promotion_amount for e in employees)),
+            col('Sustained Rs'): X(sum(e.sustained_amount for e in employees)),
+            col('Salary Correction Rs'): X(sum(e.salary_correction_amount for e in employees)),
+            col('Special Reward Rs'): round(sum(e.reward_payout for e in employees), 2),  # one-time, not annualised
+            col('Mgmt Discretion Rs'): X(sum(e.management_discretion_amount for e in employees)),
+            col('Total Increase Rs'): X(sum(e.new_ctc - float(e.current_ctc) for e in employees)),
+            col('New CTC (Annual)'): X(sum(e.new_ctc for e in employees)),
         }
         for col, v in totals.items():
             cell = ws.cell(row=last, column=col, value=round(v, 2))
@@ -984,15 +1029,15 @@ class PMSExportView(APIView):
         _row(ws2, 3, 'Metric', 'Amount (Rs)', '% of Payroll', bold=True, fill='D9E1F2')
         rows = [
             ('Total Employees', len(employees), None),
-            ('Current Payroll (Annual)', round(total_ctc, 2), None),
-            ('Merit Increment', round(sum(e.increment_amount for e in employees), 2), round(pct(sum(e.increment_amount for e in employees)), 2)),
-            ('Service-Days Adjustment (±)', round(sum(e.service_adjustment_amount for e in employees), 2), round(pct(sum(e.service_adjustment_amount for e in employees)), 2)),
-            ('Promotion', round(sum(e.promotion_amount for e in employees), 2), round(pct(sum(e.promotion_amount for e in employees)), 2)),
-            ('Sustained Performance', round(sum(e.sustained_amount for e in employees), 2), round(pct(sum(e.sustained_amount for e in employees)), 2)),
-            ('Salary Correction', round(sum(e.salary_correction_amount for e in employees), 2), round(pct(sum(e.salary_correction_amount for e in employees)), 2)),
-            ('Management Discretion', round(sum(e.management_discretion_amount for e in employees), 2), round(pct(sum(e.management_discretion_amount for e in employees)), 2)),
-            ('Total Hike (recurring)', round(total_new - total_ctc, 2), round(pct(total_new - total_ctc), 2)),
-            ('New Payroll (Annual)', round(total_new, 2), None),
+            ('Current Payroll (Annual)', X(total_ctc), None),
+            ('Merit Increment', X(sum(e.increment_amount for e in employees)), round(pct(sum(e.increment_amount for e in employees)), 2)),
+            ('Service-Days Adjustment (±)', X(sum(e.service_adjustment_amount for e in employees)), round(pct(sum(e.service_adjustment_amount for e in employees)), 2)),
+            ('Promotion', X(sum(e.promotion_amount for e in employees)), round(pct(sum(e.promotion_amount for e in employees)), 2)),
+            ('Sustained Performance', X(sum(e.sustained_amount for e in employees)), round(pct(sum(e.sustained_amount for e in employees)), 2)),
+            ('Salary Correction', X(sum(e.salary_correction_amount for e in employees)), round(pct(sum(e.salary_correction_amount for e in employees)), 2)),
+            ('Management Discretion', X(sum(e.management_discretion_amount for e in employees)), round(pct(sum(e.management_discretion_amount for e in employees)), 2)),
+            ('Total Hike (recurring)', X(total_new - total_ctc), round(pct(total_new - total_ctc), 2)),
+            ('New Payroll (Annual)', X(total_new), None),
             ('One-Time Rewards (not in CTC)', round(sum(e.reward_payout for e in employees), 2), None),
         ]
         for idx, (a, b, c) in enumerate(rows, 4):
