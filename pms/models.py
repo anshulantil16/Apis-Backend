@@ -2,8 +2,20 @@
 PMS - Performance Management System
 Complete HR data model with all employee fields
 """
+from datetime import date
 from django.db import models
 from django.utils import timezone
+
+
+# ── Appraisal-cycle anchors for service-days (pro-rata) increment ─────────────
+# The merit increment is pro-rated by how long the employee has actually served
+# in the un-appraised period, relative to a full year (365 days).
+APPRAISAL_CYCLE_END = date(2026, 3, 31)        # end of the current appraisal year
+INCREMENT_REF_DAYS = 365                        # a full-year of service = full increment
+# Employees who joined on/before this date already received their previous-cycle
+# increment → no pro-rata (factor 1.0). Those who joined AFTER it get their first
+# increment now, pro-rated by service days (more days → higher %, fewer → lower).
+PRIOR_INCREMENT_CUTOFF = date(2024, 9, 30)
 
 
 GRADE_META = {
@@ -211,8 +223,9 @@ class PMSEmployee(models.Model):
         return self.increment_group == 'worker'
 
     @property
-    def increment_amount(self):
-        """Annual increment amount (₹). Staff = % of CTC; Workers = fixed monthly ×12."""
+    def base_increment_amount(self):
+        """Grade/policy increment (₹) BEFORE service-days pro-rata.
+        Staff = % of CTC; Workers = fixed monthly ×12; manual override wins."""
         if self.override_increment_pct is not None:
             return round(float(self.current_ctc) * float(self.override_increment_pct) / 100, 2)
         row = INCREMENT_MATRIX.get(self.effective_grade, INCREMENT_MATRIX['D'])
@@ -225,8 +238,43 @@ class PMSEmployee(models.Model):
         return round(float(self.current_ctc) * pct / 100, 2)
 
     @property
+    def base_increment_pct(self):
+        """Grade increment as % of CTC BEFORE pro-rata."""
+        cur = float(self.current_ctc) or 0
+        return round(self.base_increment_amount / cur * 100, 2) if cur else 0.0
+
+    @property
+    def service_days(self):
+        """Days of service counted for the increment: DOJ → 31-Mar-2026."""
+        if not self.date_of_joining:
+            return None
+        return max(0, (APPRAISAL_CYCLE_END - self.date_of_joining).days)
+
+    @property
+    def increment_proration_factor(self):
+        """Service-days multiplier applied to the increment:
+          • manual override, or joined on/before the prior-increment cutoff → 1.0
+          • joined after the cutoff → days(DOJ→31-Mar-2026) / 365
+            (>1 for early joiners who missed last cycle, <1 for recent joiners)."""
+        if self.override_increment_pct is not None:
+            return 1.0
+        doj = self.date_of_joining
+        if not doj or doj <= PRIOR_INCREMENT_CUTOFF:
+            return 1.0
+        return round(max(0, (APPRAISAL_CYCLE_END - doj).days) / INCREMENT_REF_DAYS, 4)
+
+    @property
+    def is_increment_prorated(self):
+        return abs(self.increment_proration_factor - 1.0) > 1e-6
+
+    @property
+    def increment_amount(self):
+        """Effective annual increment (₹) AFTER service-days pro-rata — used in New CTC."""
+        return round(self.base_increment_amount * self.increment_proration_factor, 2)
+
+    @property
     def effective_increment_pct(self):
-        """Effective increment as % of current CTC (derived from the amount, works for workers too)."""
+        """Effective increment as % of current CTC (after pro-rata; works for workers too)."""
         cur = float(self.current_ctc) or 0
         return round(self.increment_amount / cur * 100, 2) if cur else 0.0
 
