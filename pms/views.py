@@ -161,11 +161,11 @@ def serialize_emp(e):
         'override_increment_pct': float(e.override_increment_pct) if e.override_increment_pct is not None else None,
         'effective_increment_pct': e.effective_increment_pct,
         'increment_amount': e.increment_amount,
-        'base_increment_pct': e.base_increment_pct,
-        'base_increment_amount': e.base_increment_amount,
         'service_days': e.service_days,
         'increment_proration_factor': e.increment_proration_factor,
         'is_increment_prorated': e.is_increment_prorated,
+        'service_adjustment_pct': e.service_adjustment_pct,
+        'service_adjustment_amount': e.service_adjustment_amount,
         'promotion_pct': float(e.promotion_pct),
         'effective_promotion_pct': e.effective_promotion_pct,
         'promotion_amount': e.promotion_amount,
@@ -208,6 +208,7 @@ def build_summary(employees):
 
     # Component-wise cost of the total hike
     cost_increment  = round(sum(e.increment_amount for e in employees), 2)
+    cost_service_adjustment = round(sum(e.service_adjustment_amount for e in employees), 2)
     cost_promotion  = round(sum(e.promotion_amount for e in employees), 2)
     cost_sustained  = round(sum(e.sustained_amount for e in employees), 2)
     cost_correction = round(sum(e.salary_correction_amount for e in employees), 2)
@@ -246,7 +247,7 @@ def build_summary(employees):
         v['count'] += 1
         v['current'] += float(e.current_ctc)
         v['new'] += e.new_ctc
-        v['inc'] += e.increment_amount
+        v['inc'] += e.increment_amount + e.service_adjustment_amount
         v['promo'] += e.promotion_amount
         v['sust'] += e.sustained_amount
         v['reward'] += e.reward_payout
@@ -348,6 +349,7 @@ def build_summary(employees):
         'sustained_count': sustained_count,
         'worker_count': worker_count,
         'cost_increment': cost_increment,
+        'cost_service_adjustment': cost_service_adjustment,
         'cost_promotion': cost_promotion,
         'cost_sustained': cost_sustained,
         'cost_correction': cost_correction,

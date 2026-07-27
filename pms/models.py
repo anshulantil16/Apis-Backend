@@ -223,9 +223,11 @@ class PMSEmployee(models.Model):
         return self.increment_group == 'worker'
 
     @property
-    def base_increment_amount(self):
-        """Grade/policy increment (₹) BEFORE service-days pro-rata.
-        Staff = % of CTC; Workers = fixed monthly ×12; manual override wins."""
+    def increment_amount(self):
+        """Grade/policy merit increment (₹) — the STANDARD increment shown on the
+        bar. This stays the grade value; the service-days effect is a SEPARATE
+        component (see service_adjustment_amount). Staff = % of CTC; Workers =
+        fixed monthly ×12; manual override wins."""
         if self.override_increment_pct is not None:
             return round(float(self.current_ctc) * float(self.override_increment_pct) / 100, 2)
         row = INCREMENT_MATRIX.get(self.effective_grade, INCREMENT_MATRIX['D'])
@@ -238,12 +240,6 @@ class PMSEmployee(models.Model):
         return round(float(self.current_ctc) * pct / 100, 2)
 
     @property
-    def base_increment_pct(self):
-        """Grade increment as % of CTC BEFORE pro-rata."""
-        cur = float(self.current_ctc) or 0
-        return round(self.base_increment_amount / cur * 100, 2) if cur else 0.0
-
-    @property
     def service_days(self):
         """Days of service counted for the increment: DOJ → 31-Mar-2026."""
         if not self.date_of_joining:
@@ -252,7 +248,7 @@ class PMSEmployee(models.Model):
 
     @property
     def increment_proration_factor(self):
-        """Service-days multiplier applied to the increment:
+        """Service-days multiplier for the increment:
           • manual override, or joined on/before the prior-increment cutoff → 1.0
           • joined after the cutoff → days(DOJ→31-Mar-2026) / 365
             (>1 for early joiners who missed last cycle, <1 for recent joiners)."""
@@ -268,13 +264,21 @@ class PMSEmployee(models.Model):
         return abs(self.increment_proration_factor - 1.0) > 1e-6
 
     @property
-    def increment_amount(self):
-        """Effective annual increment (₹) AFTER service-days pro-rata — used in New CTC."""
-        return round(self.base_increment_amount * self.increment_proration_factor, 2)
+    def service_adjustment_amount(self):
+        """± ₹ SERVICE-DAYS adjustment to the increment (kept separate from the
+        base increment). = increment × (factor − 1): positive for early joiners
+        with extra un-appraised days, negative for recent joiners."""
+        return round(self.increment_amount * (self.increment_proration_factor - 1.0), 2)
+
+    @property
+    def service_adjustment_pct(self):
+        """The ± adjustment as % of current CTC."""
+        cur = float(self.current_ctc) or 0
+        return round(self.service_adjustment_amount / cur * 100, 2) if cur else 0.0
 
     @property
     def effective_increment_pct(self):
-        """Effective increment as % of current CTC (after pro-rata; works for workers too)."""
+        """Grade increment as % of current CTC (the bar value — no pro-rata)."""
         cur = float(self.current_ctc) or 0
         return round(self.increment_amount / cur * 100, 2) if cur else 0.0
 
@@ -351,9 +355,9 @@ class PMSEmployee(models.Model):
         + sustained + salary/market correction (₹).
         NOTE: Special/On-Time Reward is a ONE-TIME payout and is NOT part of CTC."""
         cur = float(self.current_ctc)
-        return round(cur + self.increment_amount + self.promotion_amount
-                     + self.management_discretion_amount + self.sustained_amount
-                     + self.salary_correction_amount, 2)
+        return round(cur + self.increment_amount + self.service_adjustment_amount
+                     + self.promotion_amount + self.management_discretion_amount
+                     + self.sustained_amount + self.salary_correction_amount, 2)
 
     @property
     def new_ctc_monthly(self):
@@ -363,7 +367,7 @@ class PMSEmployee(models.Model):
     def total_impact_pct(self):
         """Recurring CTC hike % (excludes the one-time special reward)."""
         cur = float(self.current_ctc) or 0
-        total = (self.increment_amount + self.promotion_amount
+        total = (self.increment_amount + self.service_adjustment_amount + self.promotion_amount
                  + self.management_discretion_amount + self.sustained_amount
                  + self.salary_correction_amount)
         return round(total / cur * 100, 2) if cur else 0.0
