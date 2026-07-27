@@ -36,9 +36,9 @@ GRADE_META = {
 # promo_pct/worker_promo_monthly apply only when the employee is promoted.
 INCREMENT_MATRIX = {
     'A+': {'staff1': 14, 'staff2': 10, 'worker_monthly': 800, 'worker_promo_monthly': 400, 'promotion_pct': 5, 'sustained_pct': 1.0},
-    'A':  {'staff1': 12, 'staff2': 9,  'worker_monthly': 600, 'worker_promo_monthly': 300, 'promotion_pct': 4, 'sustained_pct': 1.0},
+    'A':  {'staff1': 12, 'staff2': 9,  'worker_monthly': 600, 'worker_promo_monthly': 300, 'promotion_pct': 4, 'sustained_pct': 0.75},
     'B+': {'staff1': 10, 'staff2': 8,  'worker_monthly': 400, 'worker_promo_monthly': 200, 'promotion_pct': 3, 'sustained_pct': 0.5},
-    'B':  {'staff1': 8,  'staff2': 7,  'worker_monthly': 200, 'worker_promo_monthly': 100, 'promotion_pct': 2, 'sustained_pct': 0.5},
+    'B':  {'staff1': 8,  'staff2': 7,  'worker_monthly': 200, 'worker_promo_monthly': 100, 'promotion_pct': 2, 'sustained_pct': 0.25},
     'C':  {'staff1': 4,  'staff2': 3,  'worker_monthly': 100, 'worker_promo_monthly': 0,   'promotion_pct': 0, 'sustained_pct': 0.0},
     'D':  {'staff1': 0,  'staff2': 0,  'worker_monthly': 0,   'worker_promo_monthly': 0,   'promotion_pct': 0, 'sustained_pct': 0.0},
 }
