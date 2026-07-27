@@ -410,6 +410,8 @@ def build_summary(employees):
         'bottom10_performers': bot10,
         'promotion_readiness': readiness,
         'performance_vs_salary': quadrants,
+        'matrix_median_score': round(med_score, 2),
+        'matrix_median_ctc': round(med_ctc, 2),
         'gender_breakdown': gender_breakdown,
         'median_score': med_score,
         'median_ctc': med_ctc,
