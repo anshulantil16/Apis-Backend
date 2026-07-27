@@ -1,6 +1,7 @@
 """PMS views — comprehensive HR data management with full Excel support."""
 import io
 import os
+import re
 import secrets
 import openpyxl
 from django.core.cache import cache
@@ -8,6 +9,32 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import PMSEmployee, PMSAuditLog, PMSSettings, OfferLetter, GRADE_META
+
+
+# ── Fixed display orders for distribution charts (not sorted by count) ────────
+# Cadre/Band hierarchy: Director → CXO/HOD → Middle Mgmt → Officer → Workforce
+BAND_ORDER = ['D', 'C5', 'C4', 'C3', 'C2', 'C1',
+              'M6', 'M5', 'M4', 'M3', 'M2', 'M1',
+              'O5', 'O4', 'O3', 'O2', 'O1',
+              'W4', 'W3', 'W2', 'W1']
+_BAND_IDX = {b: i for i, b in enumerate(BAND_ORDER)}
+
+
+def _band_sort_key(name):
+    return (_BAND_IDX.get(str(name).strip().upper(), len(BAND_ORDER)), str(name))
+
+
+def _location_sort_key(name):
+    """Order: GTR01…GTR09 (numeric), then HO, then Plant, then everything else."""
+    n = str(name).strip().upper()
+    m = re.match(r'GTR\s*0*(\d+)', n)
+    if m:
+        return (0, int(m.group(1)), n)
+    if n in ('HO', 'HEAD OFFICE', 'H.O.'):
+        return (1, 0, n)
+    if n == 'PLANT':
+        return (2, 0, n)
+    return (3, 0, n)
 
 
 # ── PMS Simulator login (email OTP) ───────────────────────────────────────────
@@ -230,9 +257,18 @@ def build_summary(employees):
             k = (getattr(e, attr) or 'Unknown')
             d[k] = d.get(k, 0) + 1
         return dict(sorted(d.items(), key=lambda x: -x[1]))
-    location_dist = _dist('location')
+
+    def _dist_ordered(attr, keyfn):
+        """Distribution in a FIXED order (by name/hierarchy), not by count."""
+        d = {}
+        for e in employees:
+            k = (getattr(e, attr) or 'Unknown')
+            d[k] = d.get(k, 0) + 1
+        return dict(sorted(d.items(), key=lambda x: keyfn(x[0])))
+
+    location_dist = _dist_ordered('location', _location_sort_key)
     category_dist = _dist('category')
-    cadre_dist    = _dist('band')
+    cadre_dist    = _dist_ordered('band', _band_sort_key)
 
     grade_dist = {}
     for e in employees:
