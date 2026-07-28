@@ -640,6 +640,7 @@ class PMSImportView(APIView):
                     'new_designation': str(data.get('new_designation') or '').strip(),
                     'new_designation_type': str(data.get('new_designation_type') or '').strip(),
                     'department': str(data.get('department') or '').strip(),
+                    'business': str(data.get('business') or '').strip(),   # New Department column
                     'location': str(data.get('location') or '').strip(),
                     'new_operational_location': str(data.get('new_operational_location') or '').strip(),
                     'sub_category': str(data.get('sub_category') or '').strip(),
@@ -675,7 +676,11 @@ class PMSImportView(APIView):
                     'fy_2324_grade': str(data.get('fy_2324_grade') or '').strip(),
                     'fy_2425_grade': str(data.get('fy_2425_grade') or '').strip(),
                     'last_promotion_year': int(data.get('last_promotion_year')) if data.get('last_promotion_year') else None,
-                    # NOTE: promotion %, management discretion, salary correction and special reward
+                    # Salary Correction (Rs, monthly) IS imported from the "Salary Correction Level"
+                    # column. It is still gated by salary_correction_allowed (only A+/A/B+/B & not
+                    # promoted), so an amount for an ineligible employee is ignored in the maths.
+                    'salary_correction': sf(data.get('salary_correction'), 0) or 0,
+                    # NOTE: promotion %, management discretion and special reward
                     # are NOT imported — they come strictly from the policy table (promotion) or are
                     # entered by management in the UI. Imported values would give wrong salaries.
                     # promoted / redesignation / sustained_performance are set ONLY on first import
