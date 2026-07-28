@@ -109,7 +109,7 @@ class PMSLoginView(APIView):
                              f"  {otp_code}\n\n"
                              f"This OTP is valid for 5 minutes. Do not share it with anyone.\n\n"
                              f"— APIS System"),
-                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                    from_email=settings.EMAIL_HOST_USER or settings.DEFAULT_FROM_EMAIL,
                     recipient_list=[email],
                     fail_silently=False,
                 )
