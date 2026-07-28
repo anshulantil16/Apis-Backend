@@ -398,6 +398,27 @@ class PMSEmployee(models.Model):
             (today.month, today.day) < (self.date_of_joining.month, self.date_of_joining.day)
         )
 
+    @property
+    def tenure_display(self):
+        """Tenure as 'X years Y months' (as on today), e.g. '9 years 10 months'."""
+        if not self.date_of_joining:
+            return None
+        from datetime import date
+        today = date.today()
+        doj = self.date_of_joining
+        years = today.year - doj.year
+        months = today.month - doj.month
+        if today.day < doj.day:
+            months -= 1
+        if months < 0:
+            years -= 1
+            months += 12
+        years = max(0, years)
+        parts = []
+        if years: parts.append(f"{years} year{'s' if years != 1 else ''}")
+        parts.append(f"{months} month{'s' if months != 1 else ''}")
+        return ' '.join(parts)
+
 
 class PMSAuditLog(models.Model):
     """Tracks every change made to an employee record."""

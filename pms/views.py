@@ -171,6 +171,7 @@ def serialize_emp(e):
         'date_of_joining': str(e.date_of_joining) if e.date_of_joining else None,
         'age': e.age,
         'tenure_years': e.tenure_years,
+        'tenure_display': e.tenure_display,
         'reporting_manager': e.reporting_manager,
         'reporting_manager_id': e.reporting_manager_id,
         'hod_name': e.hod_name,
