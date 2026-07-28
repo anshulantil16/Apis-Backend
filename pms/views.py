@@ -53,16 +53,23 @@ _PMS_OTP_TTL = 300  # 5 minutes
 
 
 def _pms_allowed_emails():
-    """Emails allowed to log in: the bootstrap admin + any configured in env."""
+    """Explicit allowlist: the bootstrap admin + anyone in the PMS_ADMIN_EMAILS env
+    (comma-separated). This is the master access list for the PMS Simulator."""
     extra = [e.strip().lower() for e in os.getenv('PMS_ADMIN_EMAILS', '').split(',') if e.strip()]
     return set([PMS_BOOTSTRAP_EMAIL] + extra)
 
 
 def _pms_email_authorized(email):
-    """Authorized if it's the bootstrap admin, in the env allowlist, or a company
-    (@apisindia.com) address — so managers can log in with an OTP to their own inbox."""
+    """Authorized only if the email is on the allowlist (bootstrap admin +
+    PMS_ADMIN_EMAILS). Any @apisindia.com address is allowed ONLY when
+    PMS_ALLOW_ANY_COMPANY_EMAIL=true (kept on QA for convenience; OFF on PROD so
+    access is restricted to the named allowlist)."""
     email = (email or '').strip().lower()
-    return email in _pms_allowed_emails() or email.endswith('@apisindia.com')
+    if email in _pms_allowed_emails():
+        return True
+    if os.getenv('PMS_ALLOW_ANY_COMPANY_EMAIL', 'true').lower() == 'true' and email.endswith('@apisindia.com'):
+        return True
+    return False
 
 
 def _mask_email(email):
