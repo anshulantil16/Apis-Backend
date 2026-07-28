@@ -400,15 +400,15 @@ class PMSEmployee(models.Model):
 
     @property
     def tenure_display(self):
-        """Tenure as 'X years Y months' (as on today), e.g. '9 years 10 months'."""
+        """Tenure as 'X years Y months', as on the appraisal cycle end (31-Mar-2026) —
+        matching the Excel's own "Tenure in APIS as on 31st Mar-2026" column."""
         if not self.date_of_joining:
             return None
-        from datetime import date
-        today = date.today()
+        ref = APPRAISAL_CYCLE_END
         doj = self.date_of_joining
-        years = today.year - doj.year
-        months = today.month - doj.month
-        if today.day < doj.day:
+        years = ref.year - doj.year
+        months = ref.month - doj.month
+        if ref.day < doj.day:
             months -= 1
         if months < 0:
             years -= 1
