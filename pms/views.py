@@ -600,7 +600,24 @@ class PMSImportView(APIView):
             if field:
                 col_map[field] = ci
             else:
-                ignored_headers.append(str(cell).strip())
+                ignored_headers.append((key, ci, str(cell).strip()))
+
+        # Fuzzy fallback for the two columns whose exact wording varies a lot between
+        # sheets. Runs only if the exact-alias pass above didn't already find them, and
+        # explicitly EXCLUDES "new function" so that column can never be mistaken for
+        # New Department.
+        if 'business' not in col_map:
+            for key, ci, _raw in ignored_headers:
+                if 'new' in key and ('depart' in key or 'dept' in key) and 'function' not in key:
+                    col_map['business'] = ci
+                    break
+        if 'salary_correction' not in col_map:
+            for key, ci, _raw in ignored_headers:
+                if 'salary' in key and 'correct' in key:
+                    col_map['salary_correction'] = ci
+                    break
+        ignored_headers = [raw for _key, _ci, raw in ignored_headers
+                            if _ci not in col_map.values()]
 
         created = updated = 0
         errors = []
