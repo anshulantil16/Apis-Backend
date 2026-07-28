@@ -514,7 +514,10 @@ class PMSImportView(APIView):
             'new designation': 'new_designation', 're-designation': 'new_designation',
             'new designation type': 'new_designation_type', 'new employee type': 'new_designation_type', 'designation type': 'new_designation_type',
             'department': 'department', 'dept': 'department',
-            'new department': 'business', 'new function': 'business',
+            'new department': 'business',   # column H — the ONLY source of New Department.
+            # NB: 'New Function' must NOT map to business — it is a separate (often blank)
+            # column that comes after New Department and would overwrite it, leaving business
+            # empty and falling back to the old Department.
             'location': 'location', 'zone': 'location',
             'new operational location': 'new_operational_location', 'est': 'new_operational_location', 'sub zone': 'sub_category',
             'sub category': 'sub_category', 'sub cat': 'sub_category',
