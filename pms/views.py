@@ -514,7 +514,9 @@ class PMSImportView(APIView):
             'new designation': 'new_designation', 're-designation': 'new_designation',
             'new designation type': 'new_designation_type', 'new employee type': 'new_designation_type', 'designation type': 'new_designation_type',
             'department': 'department', 'dept': 'department',
-            'new department': 'business',   # column H — the ONLY source of New Department.
+            'new department': 'business', 'new dept': 'business', 'new deptt': 'business',
+            'new department name': 'business', 'revised department': 'business',
+            'proposed department': 'business',
             # NB: 'New Function' must NOT map to business — it is a separate (often blank)
             # column that comes after New Department and would overwrite it, leaving business
             # empty and falling back to the old Department.
@@ -564,6 +566,9 @@ class PMSImportView(APIView):
             'promotion (y/n)': 'promoted', 'promotion': 'promoted',
             'promotion readiness': 'promotion_readiness',
             'salary correction': 'salary_correction', 'salary correction level': 'salary_correction',
+            'salary correction (rs)': 'salary_correction', 'salary correction rs': 'salary_correction',
+            'salary correction amount': 'salary_correction', 'salary correction level (rs)': 'salary_correction',
+            'correction': 'salary_correction', 'salary correction level rs': 'salary_correction',
             'promotion %': 'promotion_pct',
             'management discretion': 'management_discretion_pct', 'management discretion %': 'management_discretion_pct',
             'one time reward': 'on_time_reward',
@@ -582,13 +587,20 @@ class PMSImportView(APIView):
 
         header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
         col_map = {}
+        ignored_headers = []     # header text present in the sheet but not recognised
         for ci, cell in enumerate(header_row):
             if cell is None:
                 continue
-            key = str(cell).strip().lower().replace('*', '').strip()
+            # collapse newlines / multiple spaces / trailing '*' so wrapped or
+            # sloppily-typed headers still match (e.g. "New\nDepartment").
+            key = ' '.join(str(cell).replace('*', '').split()).lower()
+            if not key:
+                continue
             field = HEADER_ALIASES.get(key)
             if field:
                 col_map[field] = ci
+            else:
+                ignored_headers.append(str(cell).strip())
 
         created = updated = 0
         errors = []
@@ -707,10 +719,20 @@ class PMSImportView(APIView):
         if dup_in_file:
             preview = ', '.join(dup_in_file[:10]) + ('…' if len(dup_in_file) > 10 else '')
             msg += f' ⚠️ {len(dup_in_file)} duplicate code(s) inside the file (last row kept): {preview}'
+        # Tell the user plainly whether the two problem columns were recognised.
+        if 'business' not in col_map:
+            msg += ' ⚠️ No "New Department" column recognised — departments will fall back to the old Department.'
+        if 'salary_correction' not in col_map:
+            msg += ' ⚠️ No "Salary Correction Level" column recognised — corrections were not imported.'
+        if ('business' not in col_map or 'salary_correction' not in col_map) and ignored_headers:
+            preview = ', '.join(ignored_headers[:25])
+            msg += f' | Columns in your file that were NOT recognised: {preview}'
         return Response({
             'message': msg,
             'created': created, 'updated': updated, 'errors': errors,
             'duplicates_in_file': dup_in_file,
+            'matched_columns': sorted(col_map.keys()),
+            'ignored_headers': ignored_headers,
             'total': len(employees), 'summary': build_summary(employees),
         })
 
