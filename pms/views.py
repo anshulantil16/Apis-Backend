@@ -713,9 +713,12 @@ class PMSImportView(APIView):
                     # column. It is still gated by salary_correction_allowed (only A+/A/B+/B & not
                     # promoted), so an amount for an ineligible employee is ignored in the maths.
                     'salary_correction': sf(data.get('salary_correction'), 0) or 0,
-                    # NOTE: promotion %, management discretion and special reward
-                    # are NOT imported — they come strictly from the policy table (promotion) or are
-                    # entered by management in the UI. Imported values would give wrong salaries.
+                    # Management Discretion (%) and One Time Reward (Y/N) ARE imported from their
+                    # own columns — re-importing always reflects the latest sheet values here.
+                    'management_discretion_pct': sf(data.get('management_discretion_pct'), 0) or 0,
+                    'on_time_reward': parse_bool(data.get('on_time_reward')),
+                    # NOTE: promotion % is NOT imported — it comes strictly from the policy table.
+                    # Reward Amount stays UI-only (capped/validated by band range there).
                     # promoted / redesignation / sustained_performance are set ONLY on first import
                     # (below) so re-importing does not wipe management's UI decisions.
                     'promotion_readiness': str(data.get('promotion_readiness') or '').strip(),
