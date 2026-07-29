@@ -982,6 +982,7 @@ class PMSExportView(APIView):
         from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
         employees = list(PMSEmployee.objects.all())
+        summary = build_summary(employees)
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = 'Appraisal Sheet'
@@ -1095,6 +1096,8 @@ class PMSExportView(APIView):
         ws2.column_dimensions['A'].width = 34
         ws2.column_dimensions['B'].width = 20
         ws2.column_dimensions['C'].width = 14
+        for col_letter in ('D', 'E', 'F', 'G', 'H', 'I'):
+            ws2.column_dimensions[col_letter].width = 15
         total_ctc = sum(float(e.current_ctc) for e in employees)
         total_new = sum(e.new_ctc for e in employees)
         pct = lambda v: (v / total_ctc * 100) if total_ctc else 0
@@ -1134,6 +1137,20 @@ class PMSExportView(APIView):
             gd[e.effective_grade] = gd.get(e.effective_grade, 0) + 1
         for j, g in enumerate(GRADE_ORDER, r0 + 1):
             _row(ws2, j, g, gd.get(g, 0), None)
+
+        # ── Cost Centre-wise Impact ────────────────────────────────────────
+        r1 = r0 + len(GRADE_ORDER) + 2
+        cc_headers = ['Cost Centre', 'Emp', 'Current CTC', 'Increment', 'Promotion',
+                      'Sustained', 'Promoted', 'Hike %', 'New CTC']
+        for ci3, h in enumerate(cc_headers, 1):
+            c = ws2.cell(row=r1, column=ci3, value=h)
+            c.font = Font(bold=True)
+            c.fill = PatternFill(start_color='D9E1F2', end_color='D9E1F2', fill_type='solid')
+        for k, row in enumerate(summary['cost_centre_breakdown'], r1 + 1):
+            vals = [row['cost_centre'], row['count'], row['current_ctc'], row['increment_cost'],
+                    row['promotion_cost'], row['sustained_cost'], row['promoted'], row['hike_pct'], row['new_ctc']]
+            for ci3, v in enumerate(vals, 1):
+                ws2.cell(row=k, column=ci3, value=v)
 
         buf = io.BytesIO()
         wb.save(buf)
