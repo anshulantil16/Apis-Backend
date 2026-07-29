@@ -1275,12 +1275,31 @@ def _process_offer_batch(rows, batch_id, send_emails):
     mail_conn = None
     try:
         batch = OfferLetterBatch.objects.get(batch_id=batch_id)
+        # 30s socket timeout so a single hung email can never freeze the whole
+        # batch (no EMAIL_TIMEOUT is configured globally).
         if send_emails:
             try:
-                mail_conn = get_connection()
+                mail_conn = get_connection(timeout=30)
                 mail_conn.open()
             except Exception:
                 mail_conn = None
+
+        def _send_with_retry(email, name, pdf_io, eff_date, oid):
+            """Send via the shared SMTP connection; if it has dropped mid-batch
+            (common on 500+ sends), reopen a fresh connection once and retry."""
+            nonlocal mail_conn
+            try:
+                send_offer_letter_email(email, name, pdf_io, eff_date, oid, connection=mail_conn)
+            except Exception:
+                try:
+                    if mail_conn is not None:
+                        mail_conn.close()
+                except Exception:
+                    pass
+                mail_conn = get_connection(timeout=30)
+                mail_conn.open()
+                pdf_io.seek(0)
+                send_offer_letter_email(email, name, pdf_io, eff_date, oid, connection=mail_conn)
 
         gen = eml = fail = proc = 0
         errs = []
@@ -1318,35 +1337,45 @@ def _process_offer_batch(rows, batch_id, send_emails):
                                     ContentFile(pdf_bytes), save=True)
                 gen += 1
 
-                if send_emails and r['email']:
-                    try:
-                        send_offer_letter_email(r['email'], r['name'], _io.BytesIO(pdf_bytes),
-                                                r['effective_date'], offer.id, connection=mail_conn)
-                        offer.status = 'sent'
-                        offer.email_sent = True
-                        offer.email_sent_at = timezone.now()
-                        offer.save(update_fields=['status', 'email_sent', 'email_sent_at'])
-                        eml += 1
-                    except Exception as ee:
+                if send_emails:
+                    if not r['email']:
+                        # No email in the sheet — record as a failure so it is visible.
                         offer.status = 'failed'
                         offer.save(update_fields=['status'])
-                        errs.append(f"{r['emp_id']}: email failed: {ee}")
+                        fail += 1
+                        errs.append(f"{r['emp_id']} ({r['name']}): no email address in the sheet")
+                    else:
+                        try:
+                            _send_with_retry(r['email'], r['name'], _io.BytesIO(pdf_bytes),
+                                             r['effective_date'], offer.id)
+                            offer.status = 'sent'
+                            offer.email_sent = True
+                            offer.email_sent_at = timezone.now()
+                            offer.save(update_fields=['status', 'email_sent', 'email_sent_at'])
+                            eml += 1
+                        except Exception as ee:
+                            offer.status = 'failed'
+                            offer.save(update_fields=['status'])
+                            fail += 1
+                            errs.append(f"{r['emp_id']} ({r['name']}) <{r['email']}>: email failed: {ee}")
             except Exception as e:
                 fail += 1
-                errs.append(f"{r['emp_id']}: {e}")
+                errs.append(f"{r['emp_id']} ({r.get('name','')}): {e}")
 
             proc += 1
             if proc % 5 == 0 or proc == total:  # flush progress periodically
                 OfferLetterBatch.objects.filter(batch_id=batch_id).update(
-                    processed=proc, generated=gen, emailed=eml, failed=fail, errors=errs[:50])
+                    processed=proc, generated=gen, emailed=eml, failed=fail,
+                    errors=errs[:50], updated_at=timezone.now())
 
         OfferLetterBatch.objects.filter(batch_id=batch_id).update(
             processed=proc, generated=gen, emailed=eml, failed=fail,
-            errors=errs[:50], status='completed')
+            errors=errs[:500], status='completed', updated_at=timezone.now())
     except Exception as e:
         if batch is not None:
+            from django.utils import timezone as _tz
             OfferLetterBatch.objects.filter(batch_id=batch_id).update(
-                status='error', errors=[str(e)])
+                status='error', errors=[str(e)], updated_at=_tz.now())
     finally:
         if mail_conn is not None:
             try:
@@ -1554,8 +1583,18 @@ class OfferLetterBatchStatusView(APIView):
             'failed': b.failed, 'send_emails': b.send_emails, 'errors': b.errors,
         }
         if b.status == 'completed':
+            # Map each failure reason back to its employee code so the UI can show
+            # WHY a letter failed, not just that it did. Batch errors look like
+            # "EMP001 (Name) <email>: reason".
+            reason_map = {}
+            for line in (b.errors or []):
+                code = str(line).split(' ', 1)[0].split(':', 1)[0].strip()
+                if code:
+                    reason_map.setdefault(code, str(line))
             data['results'] = [
                 {'employee_id': o.employee_code, 'name': o.employee_name, 'status': o.status,
+                 'email': o.email_address,
+                 'message': reason_map.get(o.employee_code, '') if o.status == 'failed' else '',
                  'pdf_url': f'/api/pms/offer-letter/{o.id}/pdf/'}
                 for o in OfferLetter.objects.filter(batch_id=b.batch_id).order_by('id')
             ]
