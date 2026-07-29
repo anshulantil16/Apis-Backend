@@ -572,7 +572,9 @@ class PMSImportView(APIView):
             'correction': 'salary_correction', 'salary correction level rs': 'salary_correction',
             'promotion %': 'promotion_pct',
             'management discretion': 'management_discretion_pct', 'management discretion %': 'management_discretion_pct',
-            'one time reward': 'on_time_reward',
+            # "One Time Reward" is now a direct ₹ amount column (not Y/N) — on_time_reward
+            # is derived automatically from whether the amount is > 0.
+            'one time reward': 'reward_amount',
             'sustained performance': 'sustained_performance', 'sustained': 'sustained_performance',
             'reward amount': 'reward_amount',
             'redesignation': 'redesignation', 're-designation': 'redesignation',
@@ -665,6 +667,8 @@ class PMSImportView(APIView):
                 except:
                     return None
 
+            reward_amt = sf(data.get('reward_amount'), 0) or 0
+
             obj, was_created = PMSEmployee.objects.update_or_create(
                 employee_id=emp_id,
                 defaults={
@@ -713,12 +717,15 @@ class PMSImportView(APIView):
                     # column. It is still gated by salary_correction_allowed (only A+/A/B+/B & not
                     # promoted), so an amount for an ineligible employee is ignored in the maths.
                     'salary_correction': sf(data.get('salary_correction'), 0) or 0,
-                    # Management Discretion (%) and One Time Reward (Y/N) ARE imported from their
-                    # own columns — re-importing always reflects the latest sheet values here.
+                    # Management Discretion (%) and One Time Reward (₹ amount) ARE imported from
+                    # their own columns — re-importing always reflects the latest sheet values.
+                    # One Time Reward is a direct ₹ figure now (not Y/N); on_time_reward is derived
+                    # from it automatically (True whenever the amount is > 0). The amount is still
+                    # capped by band range via reward_payout when actually applied to salary.
                     'management_discretion_pct': sf(data.get('management_discretion_pct'), 0) or 0,
-                    'on_time_reward': parse_bool(data.get('on_time_reward')),
+                    'reward_amount': reward_amt,
+                    'on_time_reward': reward_amt > 0,
                     # NOTE: promotion % is NOT imported — it comes strictly from the policy table.
-                    # Reward Amount stays UI-only (capped/validated by band range there).
                     # promoted / redesignation / sustained_performance are set ONLY on first import
                     # (below) so re-importing does not wipe management's UI decisions.
                     'promotion_readiness': str(data.get('promotion_readiness') or '').strip(),
@@ -890,7 +897,7 @@ class PMSTemplateView(APIView):
              720000, 108,
              '', '', '', '',
              'Yes', 'L2', '1_year', 0,
-             '', 'No', 'No', '',
+             '', 0, 'No', '',
              '', '', '', '',
              '', '', '', 'Performing well', 'Strong leader'],
             [2, 'EMP002', 'Priya Singh', 'Sr Executive', '',
@@ -905,7 +912,7 @@ class PMSTemplateView(APIView):
              560000, 96,
              '', '', '', '',
              'Yes', 'L1', 'ready_now', 0,
-             '', 'Yes', 'Yes', '',
+             '', 25000, 'Yes', '',
              '', '', '', '',
              '', '', '', 'Excellent performance', 'Promotion ready'],
             [3, 'EMP003', 'Amit Kumar', 'Associate', '',
@@ -920,7 +927,7 @@ class PMSTemplateView(APIView):
              320000, 68,
              '', '', '', '',
              'No', 'L3', 'not_ready', 0,
-             0, 'No', 'No', '',
+             0, 0, 'No', '',
              '', 0, '', '',
              '', '', '', 'Adequate performance', 'New employee'],
         ]
