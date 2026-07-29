@@ -667,6 +667,17 @@ class PMSImportView(APIView):
                 except:
                     return None
 
+            def norm_readiness(val):
+                """Map free-text sheet values ("2_year", "Ready in 2 Years", "Not Ready", ...)
+                onto the canonical set the UI/graph key off: ready_now/1_year/2_years/not_ready."""
+                v = str(val or '').strip().lower()
+                if not v: return ''
+                if 'now' in v: return 'ready_now'
+                if 'not' in v: return 'not_ready'
+                if '1' in v: return '1_year'
+                if '2' in v: return '2_years'
+                return v
+
             reward_amt = sf(data.get('reward_amount'), 0) or 0
 
             obj, was_created = PMSEmployee.objects.update_or_create(
@@ -728,7 +739,7 @@ class PMSImportView(APIView):
                     # NOTE: promotion % is NOT imported — it comes strictly from the policy table.
                     # promoted / redesignation / sustained_performance are set ONLY on first import
                     # (below) so re-importing does not wipe management's UI decisions.
-                    'promotion_readiness': str(data.get('promotion_readiness') or '').strip(),
+                    'promotion_readiness': norm_readiness(data.get('promotion_readiness')),
                     'manager_remarks': str(data.get('manager_remarks') or '').strip(),
                     'hod_remarks': str(data.get('hod_remarks') or '').strip(),
                 }
