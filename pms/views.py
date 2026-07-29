@@ -259,6 +259,7 @@ def build_summary(employees):
     total_inc     = total_new_ctc - total_ctc
     promoted      = sum(1 for e in employees if e.promoted)
     rewarded      = sum(1 for e in employees if e.on_time_reward)
+    corrected     = sum(1 for e in employees if e.salary_correction_amount)
     avg_score     = sum(e.final_score for e in employees) / total
 
     # Component-wise cost of the total hike
@@ -412,6 +413,7 @@ def build_summary(employees):
         'avg_score': round(avg_score, 2),
         'promoted_count': promoted,
         'reward_count': rewarded,
+        'correction_count': corrected,
         'sustained_count': sustained_count,
         'worker_count': worker_count,
         'cost_increment': cost_increment,
