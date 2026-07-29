@@ -976,7 +976,7 @@ class PMSExportView(APIView):
         ws.title = 'Appraisal Sheet'
 
         groups = [
-            ('EMPLOYEE & ORGANISATION', 18, '1F4E79'),
+            ('EMPLOYEE & ORGANISATION', 21, '1F4E79'),
             ('PERFORMANCE', 4, '548235'),
             ('CTC HISTORY', 4, '7F6000'),
             ('INCREMENT COMPONENTS', 16, 'C55A11'),
@@ -986,7 +986,8 @@ class PMSExportView(APIView):
         headers = [
             'Emp ID', 'Name', 'Gender', 'Designation', 'New Designation',
             'Cadre', 'Grade', 'Category', 'Department', 'Cost Centre', 'Location', 'HQ',
-            'Reporting Manager', 'HOD Name', 'DOJ', 'Age', 'Tenure (Yrs)', 'Merit Eligible',
+            'Reporting Manager', 'HOD Name', 'DOB', 'DOJ', 'Age', 'Tenure (Yrs)', 'Tenure (Y/M)',
+            'Last Promotion (YR)', 'Merit Eligible',
             'Final Score', 'Perf Grade', 'Rating Label', 'Increment Category',
             'FY 22-23 CTC', 'FY 23-24 CTC', 'FY 24-25 CTC', 'Current CTC',
             'Merit Increment %', 'Merit Increment Rs',
@@ -1027,8 +1028,9 @@ class PMSExportView(APIView):
             row = [
                 e.employee_id, e.name, e.gender, e.designation, e.new_designation,
                 e.cadre, e.band, e.category, e.effective_department, e.cost_centre, e.location, e.hq_location,
-                e.reporting_manager, e.hod_name, str(e.date_of_joining or ''), e.age or '',
-                e.tenure_years if e.tenure_years is not None else '', 'Yes' if e.merit_eligible else 'No',
+                e.reporting_manager, e.hod_name, str(e.date_of_birth or ''), str(e.date_of_joining or ''), e.age or '',
+                e.tenure_years if e.tenure_years is not None else '', e.tenure_display or '',
+                e.last_promotion_year or '', 'Yes' if e.merit_eligible else 'No',
                 e.final_score, e.effective_grade, e.grade_config['label'], e.increment_group,
                 X(e.fy_2223_ctc), X(e.fy_2324_ctc), X(e.fy_2425_ctc), X(e.current_ctc),
                 e.effective_increment_pct, X(e.increment_amount),
@@ -1069,7 +1071,7 @@ class PMSExportView(APIView):
             cell.border = border
 
         ws.freeze_panes = 'C3'
-        colw = ([10, 22, 8, 20, 20, 8, 8, 12, 18, 12, 14, 10, 20, 20, 12, 6, 10, 12] +
+        colw = ([10, 22, 8, 20, 20, 8, 8, 12, 18, 12, 14, 10, 20, 20, 12, 12, 6, 10, 12, 14, 12] +
                 [11, 10, 16, 16] + [14, 14, 14, 14] +
                 [13, 15, 9, 12, 14, 10, 11, 13, 16, 12, 15, 14, 16] +
                 [11, 15, 16, 16] + [12, 18, 26, 26, 26])
