@@ -203,13 +203,35 @@ class ExcelUploadView(APIView):
                         return s.replace(' 00:00:00', '')
                     return s
 
+            def _first_non_empty(row, cols):
+                """First non-blank value across candidate columns, in order.
+                The raw form asks several fields twice (conditional sections),
+                so a value may sit in any one of them."""
+                for c in cols or ():
+                    if c is None:
+                        continue
+                    v = row[c]
+                    if v is None:
+                        continue
+                    if isinstance(v, float) and pd.isna(v):
+                        continue
+                    if str(v).strip() == '':
+                        continue
+                    return v
+                return ''
+
             def compute_age(dob_val):
                 """Fallback when the sheet has no (or a blank) Age column: derive
                 age in whole years from Date Of Birth, as of today."""
                 if dob_val is None or (isinstance(dob_val, float) and pd.isna(dob_val)) or str(dob_val).strip() == '':
                     return ''
                 try:
-                    dob = pd.to_datetime(dob_val, dayfirst=True)
+                    # dayfirst=True for DD-MM-YYYY sheets; warnings suppressed so a
+                    # 500-row upload doesn't spam the log once per parsed cell.
+                    import warnings
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('ignore')
+                        dob = pd.to_datetime(dob_val, dayfirst=True)
                     if pd.isna(dob):
                         return ''
                     today = pd.Timestamp.now()
@@ -268,33 +290,44 @@ class ExcelUploadView(APIView):
                 ]
                 
                 for pat, rel_name in family_patterns:
-                    pat_name_col = None
-                    pat_dob_col = None
-                    pat_gender_col = None
-                    pat_age_col = None
-                    
+                    # The raw form asks some relations TWICE ("Father Name" and
+                    # "Father Name 2", same for Mother) because of conditional
+                    # form sections — different employees fill different ones.
+                    # Collect EVERY matching column and take the first non-empty
+                    # value per row. Previously each match overwrote the last, so
+                    # only the final column ("Father Name 2") was ever read and
+                    # anyone who filled the first one silently lost their father.
+                    name_cols_f = []
+                    dob_cols_f = []
+                    gender_cols_f = []
+                    age_cols_f = []
+                    fallback_cols_f = []
+
                     for col in df.columns:
                         col_lower = str(col).lower()
                         pat_lower = pat.lower()
-                        
+
                         if re.search(r'\b' + re.escape(pat_lower) + r'\b', col_lower):
                             if 'email' in col_lower or 'mail' in col_lower:
                                 continue # Skip email columns so they aren't incorrectly mapped as names
                             if 'name' in col_lower:
-                                pat_name_col = col
+                                name_cols_f.append(col)
                             elif 'dob' in col_lower or 'birth' in col_lower:
-                                pat_dob_col = col
+                                dob_cols_f.append(col)
                             elif 'gender' in col_lower or 'sex' in col_lower:
-                                pat_gender_col = col
+                                gender_cols_f.append(col)
                             elif 'age' in col_lower:
-                                pat_age_col = col
-                            elif not pat_name_col:
-                                pat_name_col = col # Fallback if it just says "Spouse"
-                                
-                    if pat_name_col:
-                        member_name = row[pat_name_col]
+                                age_cols_f.append(col)
+                            else:
+                                fallback_cols_f.append(col) # e.g. a bare "Spouse" column
+
+                    if not name_cols_f:
+                        name_cols_f = fallback_cols_f
+
+                    if name_cols_f:
+                        member_name = _first_non_empty(row, name_cols_f)
                         if member_name != '' and pd.notna(member_name):
-                            computed_gender = infer_gender(rel_name, row[pat_gender_col] if pat_gender_col and pd.notna(row[pat_gender_col]) else "")
+                            computed_gender = infer_gender(rel_name, _first_non_empty(row, gender_cols_f))
                             computed_relation = rel_name
                             if rel_name in ['CHILD', 'DEPENDANT']:
                                 if str(computed_gender).strip().upper() == 'MALE':
@@ -308,8 +341,8 @@ class ExcelUploadView(APIView):
                                 "Name Of Member": str(member_name).strip(),
                                 "Relation": computed_relation,
                                 "Gender": computed_gender,
-                                "Date Of Birth": format_date(row[pat_dob_col] if pat_dob_col else ""),
-                                "Age": (row[pat_age_col] if pat_age_col else "") or compute_age(row[pat_dob_col] if pat_dob_col else ""),
+                                "Date Of Birth": format_date(_first_non_empty(row, dob_cols_f)),
+                                "Age": _first_non_empty(row, age_cols_f) or compute_age(_first_non_empty(row, dob_cols_f)),
                                 "Sum Insured": "",
                                 "GPA": "",
                                 "DOJ": "",
@@ -359,7 +392,9 @@ class ExcelUploadView(APIView):
                 'S No': None,
                 'Employee Code': ('employee code', 'emp code', 'employee id'),
                 'Name': None,
-                'Father Name': ('father name',),
+                # The form asks for the father TWICE (conditional sections), so
+                # list both — the first non-blank one wins per employee.
+                'Father Name': ('father name', 'father name 2'),
                 'Designation': ('designation',),
                 'Date of Joining': ('date of joining', 'doj'),
                 'Date of Birth': ('date of birth', 'dob'),
@@ -400,36 +435,39 @@ class ExcelUploadView(APIView):
             # column) can't silently reuse it — leaving the 2nd blank instead,
             # rather than the New-Department/New-Function-style clobbering bug
             # this app hit before.
+            # Each target collects ALL columns matching its aliases (in alias
+            # order) so duplicated form fields — "Father Name" / "Father Name 2"
+            # — coalesce to the first non-blank value per employee, instead of
+            # one arbitrarily winning and the other's data disappearing.
             pool = list(df.columns)  # order preserved; items removed as matched
-            sales_col_for_target = []
+            sales_cols_for_target = []
             for t in SALES_COLUMNS:
                 aliases = SALES_ALIASES.get(t)
                 if not aliases:
-                    sales_col_for_target.append(None)
+                    sales_cols_for_target.append([])
                     continue
-                match = None
-                # Pass 1: exact normalised equality (avoids e.g. "Date of Birth"
-                # matching "Father Date of Birth" via substring).
+                # Pass 1: exact normalised equality, collecting every alias hit.
+                # Exact-only here is deliberate: a loose substring pass would let
+                # "Date of Birth" also swallow "Father/Mother/Spouse Date of
+                # Birth" and silently fall back to a relative's DOB.
+                matches = []
                 for alias in aliases:
                     for col in pool:
-                        if _norm(col) == alias:
-                            match = col
-                            break
-                    if match:
-                        break
-                # Pass 2: word-boundary substring, in alias priority order.
-                if not match:
+                        if _norm(col) == alias and col not in matches:
+                            matches.append(col)
+                # Pass 2: word-boundary substring — only when nothing matched
+                # exactly (e.g. "Headquarter- District", "Name Of Bank (EXCEPT
+                # CANARA BANK )"). Takes the single best hit, not all of them.
+                if not matches:
                     for alias in aliases:
                         pat = r'\b' + re.escape(alias) + r'\b'
-                        for col in pool:
-                            if re.search(pat, _norm(col)):
-                                match = col
-                                break
-                        if match:
+                        hit = next((c for c in pool if re.search(pat, _norm(c))), None)
+                        if hit:
+                            matches.append(hit)
                             break
-                if match:
-                    pool.remove(match)
-                sales_col_for_target.append(match)
+                for m in matches:
+                    pool.remove(m)
+                sales_cols_for_target.append(matches)
 
             name_cols = {}
             for key, aliases in (('first', ('first name',)), ('middle', ('middle name',)), ('last', ('last name',))):
@@ -444,18 +482,18 @@ class ExcelUploadView(APIView):
             sales_rows = []
             for s_no, (idx, row) in enumerate(df.iterrows(), 1):
                 out = {}
-                for t, rc in zip(SALES_COLUMNS, sales_col_for_target):
+                for t, rcs in zip(SALES_COLUMNS, sales_cols_for_target):
                     if t == 'S No':
                         out[t] = s_no
                     elif t == 'Name':
                         parts = [str(row[name_cols[k]]).strip() for k in ('first', 'middle', 'last') if k in name_cols and str(row[name_cols[k]]).strip()]
                         out[t] = ' '.join(parts)
-                    elif rc is None:
+                    elif not rcs:
                         out[t] = ''
                     elif t in DATE_SALES_COLS:
-                        out[t] = format_date(row[rc])
+                        out[t] = format_date(_first_non_empty(row, rcs))
                     else:
-                        out[t] = row[rc]
+                        out[t] = _first_non_empty(row, rcs)
                 sales_rows.append(out)
 
             return Response({
