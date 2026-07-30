@@ -199,17 +199,21 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
     def subtotal(label, m, a, bg):
         i = row([Paragraph(label, pST), Paragraph(_amt(m), pAmtW), Paragraph(_amt(a), pAmtW)])
         cmds.append(('BACKGROUND', (0, i), (2, i), bg))
+        return i
 
     e_m, e_a = add_section('earnings')
     subtotal('GROSS EARNINGS', e_m, e_a, _DGREY)
     r_m, r_a = add_section('reimb', peach=True)
     gs_m, gs_a = e_m + r_m, e_a + r_a
-    subtotal('Gross Salary', gs_m, gs_a, _DGREY)
+    # Skip this line when there are no reimbursement components — it would be
+    # an exact duplicate of GROSS EARNINGS just above.
+    if r_m or r_a:
+        subtotal('Gross Salary', gs_m, gs_a, _DGREY)
     band('Annual Benefits', _CYAN)
     b_m, b_a = add_section('benefits')
     subtotal('Total Annual Benefits', b_m, b_a, _DGREY)
     tc_m, tc_a = gs_m + b_m, gs_a + b_a
-    subtotal('TOTAL Salary/ Compensation ( Per Month)', tc_m, tc_a, _LGREEN)
+    tc_row = subtotal('TOTAL Salary/ Compensation ( Per Month)', tc_m, tc_a, _LGREEN)
     band('Other Payments (Payout on Quarterly Basis)', _CYAN)
     o_m, o_a = add_section('other')
     subtotal('TOTAL  CTC ( Per Annum)', tc_m + o_m, tc_a + o_a, _LGREEN)
@@ -221,6 +225,9 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
         ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5 * s),
         ('LEFTPADDING', (0, 0), (-1, -1), 5),
         ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+        # Extra breathing room below the monthly total, before "Other Payments"
+        # starts — added after the uniform padding above so it overrides it.
+        ('BOTTOMPADDING', (0, tc_row), (2, tc_row), 11 * s),
     ])
     tbl = Table(data, colWidths=[c0, c1, c2], repeatRows=0)
     tbl.setStyle(TableStyle(cmds))
@@ -337,9 +344,8 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         reward_val = 0
     reward_para = None
     if reward_val > 0:
-        note_clause = f" ({_esc(special_reward_note.strip())})" if (special_reward_note or '').strip() else ""
         reward_para = ("In addition, in recognition of your exceptional contribution, we are pleased "
-                       f"to award you a <b>one-time Special Reward of {_rs(reward_val)}</b>{note_clause}. "
+                       f"to award you a <b>one-time Special Reward of {_rs(reward_val)}</b>. "
                        "This amount is a one-time payout and does not form part of your recurring "
                        "annual CTC.")
     terms_para = ("All other terms and conditions of your employment shall remain unchanged and "
@@ -459,7 +465,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         f.append(HRFlowable(width='100%', thickness=0.8, color=colors.grey, dash=(2, 2), spaceAfter=5 * s))
         f.append(Paragraph(
             "Note: This is a computer generated Compensation Component Break-up Structure. In case of "
-            "any discrepancy, please contact your HR Dept.",
+            "any discrepancy, please contact your People and Culture Dept.",
             ParagraphStyle('fnote', parent=fn, fontName='Helvetica-Oblique')))
         f.append(Spacer(1, 4 * s))
         f.append(Paragraph('APIS --Approved_P &amp; C', ParagraphStyle(
