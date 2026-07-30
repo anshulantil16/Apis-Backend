@@ -1482,14 +1482,28 @@ class OfferLetterUploadView(APIView):
             return None
 
         # ── Fast parse: turn every valid row into a plain dict (no PDF/DB yet) ──
+        # Every row that is dropped or altered is recorded and reported back —
+        # silently skipping rows in a 500-employee run means people simply never
+        # get their letter and nobody notices.
         rows = []
-        for row in ws.iter_rows(min_row=2, values_only=True):
+        skipped_rows = []        # missing Employee ID or Name
+        date_fallback_rows = []  # Effective Date missing/unreadable -> today
+        missing_email_rows = []  # no email address (only matters when sending)
+        duplicate_codes = []     # same Employee ID appearing twice in the file
+        seen_codes = {}
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row):
                 continue
             emp_id = str(get_val(row, 'employee_id') or '').strip()
             name = str(get_val(row, 'name') or '').strip()
             if not emp_id or not name:
+                skipped_rows.append(row_idx)
                 continue
+            code_key = emp_id.lower()
+            if code_key in seen_codes:
+                duplicate_codes.append(f'{emp_id} (rows {seen_codes[code_key]} & {row_idx})')
+            else:
+                seen_codes[code_key] = row_idx
             increment_pct = sf(get_val(row, 'increment_pct'))
             promotion_pct = sf(get_val(row, 'promotion_pct'))
             current_designation = str(get_val(row, 'current_designation') or '').strip()
@@ -1512,9 +1526,20 @@ class OfferLetterUploadView(APIView):
             if increment_pct > 0 and promotion_pct > 0:
                 letter_type = 'combined'
 
+            # An appraisal letter states WHEN the revision takes effect, so a
+            # silently-wrong date is a serious error — record the fallback.
+            eff_date = format_date(get_val(row, 'effective_date'))
+            if eff_date is None:
+                date_fallback_rows.append(row_idx)
+                eff_date = date.today()
+
+            row_email = str(get_val(row, 'email') or '').strip()
+            if not row_email:
+                missing_email_rows.append(row_idx)
+
             rows.append({
                 'emp_id': emp_id, 'name': name,
-                'email': str(get_val(row, 'email') or '').strip(),
+                'email': row_email,
                 'current_ctc': sf(get_val(row, 'current_ctc')),
                 'new_ctc': sf(get_val(row, 'new_ctc')),
                 'increment_pct': increment_pct, 'promotion_pct': promotion_pct,
@@ -1528,7 +1553,7 @@ class OfferLetterUploadView(APIView):
                 'date_of_joining': date_of_joining, 'work_location': work_location,
                 'special_reward': sf(get_val(row, 'special_reward')),
                 'special_reward_note': str(get_val(row, 'special_reward_note') or '').strip(),
-                'effective_date': format_date(get_val(row, 'effective_date')) or date.today(),
+                'effective_date': eff_date,
                 'salary_breakup': salary_breakup,
                 'emp_details': {'function': function, 'cadre': cadre, 'grade': grade,
                                 'date_of_joining': date_of_joining, 'work_location': work_location},
@@ -1548,9 +1573,31 @@ class OfferLetterUploadView(APIView):
         threading.Thread(target=_process_offer_batch, args=(rows, batch_id, send_emails),
                          daemon=True).start()
 
+        def _rowlist(nums, limit=15):
+            head = ', '.join(str(n) for n in nums[:limit])
+            return head + (f' …and {len(nums) - limit} more' if len(nums) > limit else '')
+
+        warnings = []
+        if skipped_rows:
+            warnings.append(f'{len(skipped_rows)} row(s) SKIPPED — no Employee ID or Name '
+                            f'(sheet row {_rowlist(skipped_rows)}). These employees get NO letter.')
+        if duplicate_codes:
+            warnings.append(f'{len(duplicate_codes)} duplicate Employee ID(s) — a separate letter '
+                            f'and email is produced for each occurrence: '
+                            f'{"; ".join(duplicate_codes[:10])}'
+                            + (' …' if len(duplicate_codes) > 10 else ''))
+        if date_fallback_rows:
+            warnings.append(f'{len(date_fallback_rows)} row(s) had a missing/unreadable Effective Date '
+                            f'— today\'s date was used instead (sheet row {_rowlist(date_fallback_rows)}). '
+                            f'Check these before sending.')
+        if send_emails and missing_email_rows:
+            warnings.append(f'{len(missing_email_rows)} row(s) have no email address — the letter is '
+                            f'generated but cannot be emailed (sheet row {_rowlist(missing_email_rows)}).')
+
         return Response({
             'message': f'Processing {len(rows)} letter(s) in the background…',
             'batch_id': batch_id, 'total': len(rows), 'send_emails': send_emails,
+            'warnings': warnings,
         })
 
 
