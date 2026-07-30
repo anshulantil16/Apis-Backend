@@ -45,11 +45,15 @@ def _logo_image(width_in):
     return Image(io.BytesIO(_LOGO_BYTES), width=width_in * inch, height=width_in * inch * 109 / 198)
 
 
-def _signature_image(width_in):
-    """Fresh reportlab Image of the signatory's signature (482x198 source, ~2.43:1)."""
+def _signature_image(width_in, align='LEFT'):
+    """Fresh reportlab Image of the signatory's signature (482x198 source, ~2.43:1).
+    Image defaults to CENTER alignment in reportlab, which looks off-position
+    against left-aligned text — always set explicitly per call site."""
     if not _SIGNATURE_BYTES:
         return None
-    return Image(io.BytesIO(_SIGNATURE_BYTES), width=width_in * inch, height=width_in * inch * 198 / 482)
+    img = Image(io.BytesIO(_SIGNATURE_BYTES), width=width_in * inch, height=width_in * inch * 198 / 482)
+    img.hAlign = align
+    return img
 
 
 def _esc(v):
@@ -478,7 +482,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         f.append(Spacer(1, 0.13 * inch * s))
         note_l = ParagraphStyle('nL', fontName='Helvetica', fontSize=9.5 * s, alignment=TA_LEFT)
         note_r = ParagraphStyle('nR', fontName='Helvetica-Bold', fontSize=9.5 * s, alignment=TA_RIGHT)
-        sig_img = _signature_image(1.15 * s)
+        sig_img = _signature_image(1.15 * s, align='RIGHT')
         sig_rows = [[Paragraph(f"Date : {date_str}", note_l),
                      Paragraph('Signature of Head People &amp; Culture', note_r)]]
         sig_style = [('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0)]
