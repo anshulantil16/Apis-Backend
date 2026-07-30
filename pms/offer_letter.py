@@ -231,17 +231,26 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
     b_m, b_a = add_section('benefits')
     subtotal('Total Annual Benefits', b_m, b_a, _DGREY)
     tc_m, tc_a = gs_m + b_m, gs_a + b_a
-    subtotal('TOTAL Salary/ Compensation ( Per Month)', tc_m, tc_a, _LGREEN)
+    subtotal('TOTAL Salary/ Compensation', tc_m, tc_a, _LGREEN)
 
-    # Blank spacer row separating the monthly total from "Other Payments" —
-    # a real gap, not just extra padding inside the coloured total row (which
-    # only makes that row taller, not an actual space between sections).
-    spacer_row = row(['', '', ''])
-    cmds.append(('SPAN', (0, spacer_row), (2, spacer_row)))
+    # "Other Payments" (Variable/Gift) is quarterly-payout, not part of the
+    # recurring monthly/annual structure above. Skip the whole band + its
+    # total when the employee has none — otherwise it shows an empty section
+    # header immediately followed by a "TOTAL CTC" row that exactly repeats
+    # the "TOTAL Salary/ Compensation" figures just above it.
+    has_other = any(comp_val(key, basis) is not None
+                    for key, sec, _l, _h, basis in SALARY_COMPONENTS if sec == 'other')
+    if has_other:
+        # Blank spacer row separating the monthly total from "Other Payments" —
+        # a real gap, not just extra padding inside the coloured total row
+        # (which only makes that row taller, not an actual space between
+        # sections).
+        spacer_row = row(['', '', ''])
+        cmds.append(('SPAN', (0, spacer_row), (2, spacer_row)))
 
-    band('Other Payments (Payout on Quarterly Basis)', _CYAN)
-    o_m, o_a = add_section('other')
-    subtotal('TOTAL  CTC ( Per Annum)', tc_m + o_m, tc_a + o_a, _LGREEN)
+        band('Other Payments (Payout on Quarterly Basis)', _CYAN)
+        o_m, o_a = add_section('other')
+        subtotal('TOTAL  CTC ( Per Annum)', tc_m + o_m, tc_a + o_a, _LGREEN)
 
     cmds.extend([
         ('GRID', (0, 0), (-1, -1), 0.6, colors.black),
@@ -250,16 +259,19 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
         ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5 * s),
         ('LEFTPADDING', (0, 0), (-1, -1), 5),
         ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+    ])
+    if has_other:
         # Whiten out the spacer row's borders/background — added after GRID
         # above so it overrides the grid lines that would otherwise box it in.
-        ('BACKGROUND', (0, spacer_row), (2, spacer_row), colors.white),
-        ('LINEABOVE', (0, spacer_row), (2, spacer_row), 0, colors.white),
-        ('LINEBELOW', (0, spacer_row), (2, spacer_row), 0, colors.white),
-        ('LINEBEFORE', (0, spacer_row), (2, spacer_row), 0, colors.white),
-        ('LINEAFTER', (0, spacer_row), (2, spacer_row), 0, colors.white),
-        ('TOPPADDING', (0, spacer_row), (2, spacer_row), 5 * s),
-        ('BOTTOMPADDING', (0, spacer_row), (2, spacer_row), 5 * s),
-    ])
+        cmds.extend([
+            ('BACKGROUND', (0, spacer_row), (2, spacer_row), colors.white),
+            ('LINEABOVE', (0, spacer_row), (2, spacer_row), 0, colors.white),
+            ('LINEBELOW', (0, spacer_row), (2, spacer_row), 0, colors.white),
+            ('LINEBEFORE', (0, spacer_row), (2, spacer_row), 0, colors.white),
+            ('LINEAFTER', (0, spacer_row), (2, spacer_row), 0, colors.white),
+            ('TOPPADDING', (0, spacer_row), (2, spacer_row), 5 * s),
+            ('BOTTOMPADDING', (0, spacer_row), (2, spacer_row), 5 * s),
+        ])
     tbl = Table(data, colWidths=[c0, c1, c2], repeatRows=0)
     tbl.setStyle(TableStyle(cmds))
     return tbl
