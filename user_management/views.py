@@ -176,20 +176,14 @@ class ExcelUploadView(APIView):
             df = df[df.apply(lambda r: any(str(v).strip() != '' for v in r), axis=1)]
             rows_in_file = len(df)
 
-            # Filter rows where 'HR Remarks' contains 'Done'.
-            # NOTE: this is the ONLY row-reducing step, and it is applied here —
-            # ABOVE both the Medical and the Sales projections — so the two
-            # reports are always built from the identical row set and can never
-            # disagree on employee count. Rows whose HR Remarks is blank, or
-            # says anything other than "done" (e.g. "Pending", "Not Done"), are
-            # excluded from BOTH. The count is reported back as
-            # stats.excluded_not_done so this is visible instead of silent.
+            # NOTE: there is deliberately NO HR-Remarks filter here. Both
+            # reports must cover EVERY employee in the uploaded sheet.
+            # A previous version kept only rows whose "HR Remarks" contained
+            # "Done", which silently dropped anyone with a blank/"Pending"
+            # remark from both reports (and from insurance enrolment). Do not
+            # re-introduce row filtering above these projections — the only
+            # rows removed are fully-blank sheet rows, handled above.
             excluded_not_done = 0
-            if 'HR Remarks' in df.columns:
-                remarks = df['HR Remarks'].astype(str).str.lower()
-                is_done = remarks.str.contains(r'\bdone\b', regex=True, na=False) & ~remarks.str.contains('not done', na=False)
-                df = df[is_done]
-                excluded_not_done = rows_in_file - len(df)
 
             df = df.fillna('')
             
