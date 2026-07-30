@@ -219,6 +219,34 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
         cmds.append(('BACKGROUND', (0, i), (2, i), bg))
         return i
 
+    def finalize(no_top_border=False, no_bottom_border=False):
+        """Apply the uniform grid/padding to whatever is currently in data/cmds
+        and return it as a standalone Table. When this table sits right above
+        or below the gap to another table, its outer edge on that side is
+        omitted from construction — NOT overridden with an invisible line
+        after the fact, because a later LINE command does not cancel an
+        earlier GRID/BOX command for the same edge; reportlab draws both, so
+        the black border still shows through regardless. Built from INNERGRID
+        + individual LINE commands (GRID's own components) instead of the
+        GRID shorthand, so a given outer edge can be left out entirely."""
+        cmds.append(('INNERGRID', (0, 0), (-1, -1), 0.6, colors.black))
+        cmds.append(('LINEBEFORE', (0, 0), (0, -1), 0.6, colors.black))
+        cmds.append(('LINEAFTER', (-1, 0), (-1, -1), 0.6, colors.black))
+        if not no_top_border:
+            cmds.append(('LINEABOVE', (0, 0), (-1, 0), 0.6, colors.black))
+        if not no_bottom_border:
+            cmds.append(('LINEBELOW', (0, -1), (-1, -1), 0.6, colors.black))
+        cmds.extend([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 3.5 * s),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5 * s),
+            ('LEFTPADDING', (0, 0), (-1, -1), 5),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+        ])
+        tbl = Table(data, colWidths=[c0, c1, c2], repeatRows=0)
+        tbl.setStyle(TableStyle(cmds))
+        return tbl
+
     e_m, e_a = add_section('earnings')
     subtotal('GROSS EARNINGS', e_m, e_a, _DGREY)
     r_m, r_a = add_section('reimb', peach=True)
@@ -240,41 +268,21 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
     # the "TOTAL Salary/ Compensation" figures just above it.
     has_other = any(comp_val(key, basis) is not None
                     for key, sec, _l, _h, basis in SALARY_COMPONENTS if sec == 'other')
-    if has_other:
-        # Blank spacer row separating the monthly total from "Other Payments" —
-        # a real gap, not just extra padding inside the coloured total row
-        # (which only makes that row taller, not an actual space between
-        # sections).
-        spacer_row = row(['', '', ''])
-        cmds.append(('SPAN', (0, spacer_row), (2, spacer_row)))
 
-        band('Other Payments (Payout on Quarterly Basis)', _CYAN)
-        o_m, o_a = add_section('other')
-        subtotal('TOTAL  CTC ( Per Annum)', tc_m + o_m, tc_a + o_a, _LGREEN)
+    if not has_other:
+        return finalize()
 
-    cmds.extend([
-        ('GRID', (0, 0), (-1, -1), 0.6, colors.black),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3.5 * s),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5 * s),
-        ('LEFTPADDING', (0, 0), (-1, -1), 5),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-    ])
-    if has_other:
-        # Whiten out the spacer row's borders/background — added after GRID
-        # above so it overrides the grid lines that would otherwise box it in.
-        cmds.extend([
-            ('BACKGROUND', (0, spacer_row), (2, spacer_row), colors.white),
-            ('LINEABOVE', (0, spacer_row), (2, spacer_row), 0, colors.white),
-            ('LINEBELOW', (0, spacer_row), (2, spacer_row), 0, colors.white),
-            ('LINEBEFORE', (0, spacer_row), (2, spacer_row), 0, colors.white),
-            ('LINEAFTER', (0, spacer_row), (2, spacer_row), 0, colors.white),
-            ('TOPPADDING', (0, spacer_row), (2, spacer_row), 5 * s),
-            ('BOTTOMPADDING', (0, spacer_row), (2, spacer_row), 5 * s),
-        ])
-    tbl = Table(data, colWidths=[c0, c1, c2], repeatRows=0)
-    tbl.setStyle(TableStyle(cmds))
-    return tbl
+    # Render as TWO separate Table objects with a plain (non-table) Spacer
+    # between them — a real gap that cannot show a grid line, unlike trying
+    # to override GRID's border colour on a blank row inside one Table.
+    table1 = finalize(no_bottom_border=True)
+    data.clear()
+    cmds.clear()
+    band('Other Payments (Payout on Quarterly Basis)', _CYAN)
+    o_m, o_a = add_section('other')
+    subtotal('TOTAL  CTC ( Per Annum)', tc_m + o_m, tc_a + o_a, _LGREEN)
+    table2 = finalize(no_top_border=True)
+    return [table1, Spacer(1, 4 * s), table2]
 
 
 def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, promotion_pct,
@@ -487,11 +495,15 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
                                  ('RIGHTPADDING', (0, 0), (-1, -1), 0)]))
         f.append(top)
         f.append(Spacer(1, 5 * s))
-        f.append(_annexure_table(
+        annexure = _annexure_table(
             emp_name, emp_id, emp_dept, _esc(ed.get('function', '')), annx_desig,
             _esc(ed.get('cadre', '')), _esc(ed.get('grade', '')), _esc(ed.get('date_of_joining', '')),
-            _esc(ed.get('work_location', '')), salary_breakup, scale=s))
-        f.append(Spacer(1, 0.13 * inch * s))
+            _esc(ed.get('work_location', '')), salary_breakup, scale=s)
+        f.extend(annexure if isinstance(annexure, list) else [annexure])
+        # Kept minimal deliberately — a large blank gap here is easy to alter
+        # (insert content, cut/paste a different footer) without it looking
+        # tampered with. Signature sits right after the table.
+        f.append(Spacer(1, 0.03 * inch * s))
         note_l = ParagraphStyle('nL', fontName='Helvetica', fontSize=9.5 * s, alignment=TA_LEFT)
         note_r = ParagraphStyle('nR', fontName='Helvetica-Bold', fontSize=9.5 * s, alignment=TA_RIGHT)
         sig_img = _signature_image(1.15 * s, align='RIGHT')
