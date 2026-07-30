@@ -332,11 +332,60 @@ class ExcelUploadView(APIView):
                 return Response({"headers": [], "data": []})
 
             headers = list(final_rows[0].keys())
-            
+
+            # ── Sales Report: same raw upload, different column projection ──
+            # Reuses the same parsed sheet so one upload can produce BOTH the
+            # Medical Report (above) and this Sales Report without re-uploading.
+            SALES_COLUMNS = [
+                'S No', 'Employee Code', 'Name', 'Father Name', 'Designation',
+                'Date of Joining', 'Date of Birth', 'UAN Number', 'Reporting Emp Name',
+                'HQ.', 'STATE', 'Gender', 'Department', 'Mobile', 'PAN No', 'Aadhaar',
+                'Address 1', 'City', 'Pincode', 'State', 'Official E Mail', 'Personal E Mail',
+                'Employee  Name IN BANK', 'BANK NAME', 'Employee Bank Account No', 'IFSC CODE',
+                'CURRENT MONTHLY CTC', 'CURRENT YEARLY CTC', 'IN WORDS', 'GROSS/CTC',
+                'Medical', 'Conveyance', 'Special Allowance',
+            ]
+            DATE_SALES_COLS = {'Date of Joining', 'Date of Birth'}
+
+            def _norm(s):
+                return ' '.join(str(s).replace('.', '').split()).lower()
+
+            # Some target columns repeat the same name (STATE appears twice —
+            # once for HQ state, once for address state). Matching purely by
+            # normalised name would let the 2nd raw "state" column silently
+            # clobber the 1st (the exact New-Department/New-Function bug from
+            # the PMS import). Instead, match positionally: raw columns sharing
+            # a normalised name are consumed in the order they appear, paired
+            # with target columns sharing that name in the order THEY appear.
+            from collections import defaultdict, deque
+            raw_by_name = defaultdict(deque)
+            for col in df.columns:
+                raw_by_name[_norm(col)].append(col)
+
+            sales_col_for_target = []
+            for t in SALES_COLUMNS:
+                key = _norm(t)
+                bucket = raw_by_name.get(key)
+                sales_col_for_target.append(bucket.popleft() if bucket else None)
+
+            sales_rows = []
+            for idx, row in df.iterrows():
+                out = {}
+                for t, rc in zip(SALES_COLUMNS, sales_col_for_target):
+                    if rc is None:
+                        out[t] = ''
+                    elif t in DATE_SALES_COLS:
+                        out[t] = format_date(row[rc])
+                    else:
+                        out[t] = row[rc]
+                sales_rows.append(out)
+
             return Response({
                 "message": "File processed successfully",
                 "headers": headers,
-                "data": final_rows
+                "data": final_rows,
+                "sales_headers": SALES_COLUMNS,
+                "sales_data": sales_rows,
             })
             
         except Exception as e:
