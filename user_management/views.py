@@ -191,14 +191,48 @@ class ExcelUploadView(APIView):
             sr_no = 1
             
             import re
+
+            def _clean_value(v):
+                """Excel numeric cells arrive as floats, so identity numbers come
+                out as '9876500001.0' / '111122223333.0'. Render whole numbers as
+                plain integers so Aadhaar, UAN, mobile, pincode and bank account
+                numbers are exact — a trailing '.0' in a bank A/C or Aadhaar makes
+                the row unusable for payroll and insurance enrolment.
+                Genuine decimals (e.g. a salary) are left untouched."""
+                if v is None:
+                    return ''
+                if isinstance(v, float):
+                    if pd.isna(v):
+                        return ''
+                    if v.is_integer():
+                        return str(int(v))
+                return v
+
+            # Columns describing somebody OTHER than the employee. get_val must
+            # never read these: it returns the first NON-EMPTY match, so without
+            # this guard a blank employee field silently falls through to a
+            # relative's value — e.g. an employee with no Gender would inherit
+            # "Gender of Child 1", or no DOB would inherit "Father Date of Birth".
+            _OTHER_PERSON_WORDS = (
+                'father', 'mother', 'spouse', 'wife', 'husband', 'child', 'children',
+                'son', 'daughter', 'dependant', 'dependent', 'emergency', 'nominee',
+                'reporting', 'manager',
+            )
+
+            def _is_other_person_col(col_lower):
+                return any(re.search(r'\b' + w + r'\b', col_lower) for w in _OTHER_PERSON_WORDS)
+
             def get_val(row, *substrings):
+                """The EMPLOYEE'S OWN value for the first matching column."""
                 for col in df.columns:
                     col_lower = str(col).lower()
+                    if _is_other_person_col(col_lower):
+                        continue
                     for sub in substrings:
                         if re.search(r'\b' + re.escape(sub.lower()) + r'\b', col_lower):
                             val = row[col]
                             if val != '':
-                                return val
+                                return _clean_value(val)
                 return ''
 
             def format_date(val):
@@ -227,7 +261,7 @@ class ExcelUploadView(APIView):
                         continue
                     if str(v).strip() == '':
                         continue
-                    return v
+                    return _clean_value(v)
                 return ''
 
             def compute_age(dob_val):
@@ -290,11 +324,16 @@ class ExcelUploadView(APIView):
                 final_rows.append(primary_row)
                 
                 # Dynamically extract family members
-                # Common patterns in HR forms for family
+                # Common patterns in HR forms for family.
+                # A generic "Spouse" column doesn't say wife-or-husband, so derive
+                # it from the EMPLOYEE'S gender — hardcoding WIFE mislabelled every
+                # female employee's husband (and flipped his gender to FEMALE).
+                _emp_gender = str(primary_row["Gender"]).strip().upper()
+                _spouse_rel = 'HUSBAND' if _emp_gender.startswith('F') else 'WIFE'
                 family_patterns = [
-                    ('Spouse', 'WIFE'), ('Wife', 'WIFE'), ('Husband', 'HUSBAND'), 
-                    ('Child 1', 'CHILD'), ('Child 2', 'CHILD'), ('Child 3', 'CHILD'), 
-                    ('Son', 'SON'), ('Daughter', 'DAUGHTER'), 
+                    ('Spouse', _spouse_rel), ('Wife', 'WIFE'), ('Husband', 'HUSBAND'),
+                    ('Child 1', 'CHILD'), ('Child 2', 'CHILD'), ('Child 3', 'CHILD'),
+                    ('Son', 'SON'), ('Daughter', 'DAUGHTER'),
                     ('Father', 'FATHER'), ('Mother', 'MOTHER'),
                     ('Dependant 1', 'DEPENDANT'), ('Dependant 2', 'DEPENDANT')
                 ]
