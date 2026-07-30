@@ -203,6 +203,21 @@ class ExcelUploadView(APIView):
                         return s.replace(' 00:00:00', '')
                     return s
 
+            def compute_age(dob_val):
+                """Fallback when the sheet has no (or a blank) Age column: derive
+                age in whole years from Date Of Birth, as of today."""
+                if dob_val is None or (isinstance(dob_val, float) and pd.isna(dob_val)) or str(dob_val).strip() == '':
+                    return ''
+                try:
+                    dob = pd.to_datetime(dob_val, dayfirst=True)
+                    if pd.isna(dob):
+                        return ''
+                    today = pd.Timestamp.now()
+                    years = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+                    return years if years >= 0 else ''
+                except Exception:
+                    return ''
+
             def infer_gender(relation, explicit_gender):
                 if explicit_gender and str(explicit_gender).strip() != '':
                     return explicit_gender
@@ -231,7 +246,7 @@ class ExcelUploadView(APIView):
                     "Relation": "SELF",
                     "Gender": get_val(row, 'gender', 'sex'),
                     "Date Of Birth": format_date(get_val(row, 'dob', 'date of birth')),
-                    "Age": get_val(row, 'age'),
+                    "Age": get_val(row, 'age') or compute_age(get_val(row, 'dob', 'date of birth')),
                     "Sum Insured": "",
                     "GPA": "",
                     "DOJ": format_date(get_val(row, 'doj', 'date of joining')),
@@ -294,7 +309,7 @@ class ExcelUploadView(APIView):
                                 "Relation": computed_relation,
                                 "Gender": computed_gender,
                                 "Date Of Birth": format_date(row[pat_dob_col] if pat_dob_col else ""),
-                                "Age": row[pat_age_col] if pat_age_col else "",
+                                "Age": (row[pat_age_col] if pat_age_col else "") or compute_age(row[pat_dob_col] if pat_dob_col else ""),
                                 "Sum Insured": "",
                                 "GPA": "",
                                 "DOJ": "",
