@@ -30,12 +30,26 @@ try:
 except OSError:
     _LOGO_BYTES = None
 
+SIGNATURE_PATH = os.path.join(os.path.dirname(__file__), 'assets', 'signature_pankaj.png')
+try:
+    with open(SIGNATURE_PATH, 'rb') as _sf:
+        _SIGNATURE_BYTES = _sf.read()
+except OSError:
+    _SIGNATURE_BYTES = None
+
 
 def _logo_image(width_in):
     """Fresh reportlab Image from the cached logo bytes (avoids per-letter disk I/O)."""
     if not _LOGO_BYTES:
         return None
     return Image(io.BytesIO(_LOGO_BYTES), width=width_in * inch, height=width_in * inch * 109 / 198)
+
+
+def _signature_image(width_in):
+    """Fresh reportlab Image of the signatory's signature (482x198 source, ~2.43:1)."""
+    if not _SIGNATURE_BYTES:
+        return None
+    return Image(io.BytesIO(_SIGNATURE_BYTES), width=width_in * inch, height=width_in * inch * 198 / 482)
 
 
 def _esc(v):
@@ -213,7 +227,14 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
     b_m, b_a = add_section('benefits')
     subtotal('Total Annual Benefits', b_m, b_a, _DGREY)
     tc_m, tc_a = gs_m + b_m, gs_a + b_a
-    tc_row = subtotal('TOTAL Salary/ Compensation ( Per Month)', tc_m, tc_a, _LGREEN)
+    subtotal('TOTAL Salary/ Compensation ( Per Month)', tc_m, tc_a, _LGREEN)
+
+    # Blank spacer row separating the monthly total from "Other Payments" —
+    # a real gap, not just extra padding inside the coloured total row (which
+    # only makes that row taller, not an actual space between sections).
+    spacer_row = row(['', '', ''])
+    cmds.append(('SPAN', (0, spacer_row), (2, spacer_row)))
+
     band('Other Payments (Payout on Quarterly Basis)', _CYAN)
     o_m, o_a = add_section('other')
     subtotal('TOTAL  CTC ( Per Annum)', tc_m + o_m, tc_a + o_a, _LGREEN)
@@ -225,9 +246,15 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
         ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5 * s),
         ('LEFTPADDING', (0, 0), (-1, -1), 5),
         ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-        # Extra breathing room below the monthly total, before "Other Payments"
-        # starts — added after the uniform padding above so it overrides it.
-        ('BOTTOMPADDING', (0, tc_row), (2, tc_row), 11 * s),
+        # Whiten out the spacer row's borders/background — added after GRID
+        # above so it overrides the grid lines that would otherwise box it in.
+        ('BACKGROUND', (0, spacer_row), (2, spacer_row), colors.white),
+        ('LINEABOVE', (0, spacer_row), (2, spacer_row), 0, colors.white),
+        ('LINEBELOW', (0, spacer_row), (2, spacer_row), 0, colors.white),
+        ('LINEBEFORE', (0, spacer_row), (2, spacer_row), 0, colors.white),
+        ('LINEAFTER', (0, spacer_row), (2, spacer_row), 0, colors.white),
+        ('TOPPADDING', (0, spacer_row), (2, spacer_row), 5 * s),
+        ('BOTTOMPADDING', (0, spacer_row), (2, spacer_row), 5 * s),
     ])
     tbl = Table(data, colWidths=[c0, c1, c2], repeatRows=0)
     tbl.setStyle(TableStyle(cmds))
@@ -418,7 +445,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         f.append(KeepTogether([
             Paragraph("With Best Wishes,", t_sign),
             Paragraph("For <b>APIS India Limited</b>", t_sign),
-            Spacer(1, 0.32 * inch * s),
+            (_signature_image(1.3 * s) or Spacer(1, 0.32 * inch * s)),
             Paragraph(f"<b>{SIGNATORY_NAME}</b>", t_sign),
             Paragraph(SIGNATORY_TITLE, t_sign),
         ]))
@@ -451,10 +478,15 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         f.append(Spacer(1, 0.13 * inch * s))
         note_l = ParagraphStyle('nL', fontName='Helvetica', fontSize=9.5 * s, alignment=TA_LEFT)
         note_r = ParagraphStyle('nR', fontName='Helvetica-Bold', fontSize=9.5 * s, alignment=TA_RIGHT)
-        sig = Table([[Paragraph(f"Date : {date_str}", note_l),
-                      Paragraph('Signature of Head People &amp; Culture', note_r)]],
-                    colWidths=[avail_w * 0.5, avail_w * 0.5])
-        sig.setStyle(TableStyle([('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0)]))
+        sig_img = _signature_image(1.15 * s)
+        sig_rows = [[Paragraph(f"Date : {date_str}", note_l),
+                     Paragraph('Signature of Head People &amp; Culture', note_r)]]
+        sig_style = [('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0)]
+        if sig_img:
+            sig_rows.insert(0, ['', sig_img])
+            sig_style.append(('ALIGN', (1, 0), (1, 0), 'RIGHT'))
+        sig = Table(sig_rows, colWidths=[avail_w * 0.5, avail_w * 0.5])
+        sig.setStyle(TableStyle(sig_style))
         f.append(sig)
         f.append(Spacer(1, 0.1 * inch * s))
         fn = ParagraphStyle('fn', fontName='Helvetica', fontSize=8 * s, leading=11 * s, alignment=TA_LEFT,
