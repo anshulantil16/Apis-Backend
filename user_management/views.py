@@ -336,6 +336,13 @@ class ExcelUploadView(APIView):
             # ── Sales Report: same raw upload, different column projection ──
             # Reuses the same parsed sheet so one upload can produce BOTH the
             # Medical Report (above) and this Sales Report without re-uploading.
+            # The raw sheet is a Google-Forms-style joining form whose headers
+            # ("Reporting Manager Name", "Bank Account Number", "Aadhar No", ...)
+            # do NOT match the target column names verbatim, so matching is by
+            # alias substring, not exact name. Fields the raw form has no
+            # equivalent for (Employee Code, Department, City/Pincode, CTC
+            # breakdown, Medical/Conveyance/Special Allowance) are left blank
+            # for manual entry, per requirement.
             SALES_COLUMNS = [
                 'S No', 'Employee Code', 'Name', 'Father Name', 'Designation',
                 'Date of Joining', 'Date of Birth', 'UAN Number', 'Reporting Emp Name',
@@ -346,33 +353,104 @@ class ExcelUploadView(APIView):
                 'Medical', 'Conveyance', 'Special Allowance',
             ]
             DATE_SALES_COLS = {'Date of Joining', 'Date of Birth'}
+            # target column -> ordered alias phrases to try (first match wins).
+            # None = composed/generated field, handled separately below.
+            SALES_ALIASES = {
+                'S No': None,
+                'Employee Code': ('employee code', 'emp code', 'employee id'),
+                'Name': None,
+                'Father Name': ('father name',),
+                'Designation': ('designation',),
+                'Date of Joining': ('date of joining', 'doj'),
+                'Date of Birth': ('date of birth', 'dob'),
+                'UAN Number': ('uan number', 'uan no'),
+                'Reporting Emp Name': ('reporting manager name', 'reporting emp name'),
+                'HQ.': ('headquarter', 'hq'),
+                'STATE': ('state',),
+                'Gender': ('gender',),
+                'Department': ('department',),
+                'Mobile': ('mobile number', 'mobile', 'contact number'),
+                'PAN No': ('pan no', 'pan number'),
+                'Aadhaar': ('aadhar no', 'aadhaar no', 'aadhar', 'aadhaar'),
+                'Address 1': ('present address', 'permanent address', 'address'),
+                'City': ('city',),
+                'Pincode': ('pincode', 'pin code'),
+                'State': ('state',),
+                'Official E Mail': ('email address', 'official email'),
+                'Personal E Mail': ('personal email id', 'personal email'),
+                'Employee  Name IN BANK': ('your name in bank', 'name in bank'),
+                'BANK NAME': ('name of bank', 'bank name'),
+                'Employee Bank Account No': ('bank account number', 'bank account no', 'account number'),
+                'IFSC CODE': ('ifsc code', 'ifsc'),
+                'CURRENT MONTHLY CTC': None,
+                'CURRENT YEARLY CTC': None,
+                'IN WORDS': None,
+                'GROSS/CTC': None,
+                'Medical': None,
+                'Conveyance': None,
+                'Special Allowance': None,
+            }
 
             def _norm(s):
                 return ' '.join(str(s).replace('.', '').split()).lower()
 
-            # Some target columns repeat the same name (STATE appears twice —
-            # once for HQ state, once for address state). Matching purely by
-            # normalised name would let the 2nd raw "state" column silently
-            # clobber the 1st (the exact New-Department/New-Function bug from
-            # the PMS import). Instead, match positionally: raw columns sharing
-            # a normalised name are consumed in the order they appear, paired
-            # with target columns sharing that name in the order THEY appear.
-            from collections import defaultdict, deque
-            raw_by_name = defaultdict(deque)
-            for col in df.columns:
-                raw_by_name[_norm(col)].append(col)
-
+            # Consume-from-pool matching: once a raw column is used for one
+            # target, it's removed from the pool so a later target sharing the
+            # same alias (e.g. two "state"-like targets, but only one raw State
+            # column) can't silently reuse it — leaving the 2nd blank instead,
+            # rather than the New-Department/New-Function-style clobbering bug
+            # this app hit before.
+            pool = list(df.columns)  # order preserved; items removed as matched
             sales_col_for_target = []
             for t in SALES_COLUMNS:
-                key = _norm(t)
-                bucket = raw_by_name.get(key)
-                sales_col_for_target.append(bucket.popleft() if bucket else None)
+                aliases = SALES_ALIASES.get(t)
+                if not aliases:
+                    sales_col_for_target.append(None)
+                    continue
+                match = None
+                # Pass 1: exact normalised equality (avoids e.g. "Date of Birth"
+                # matching "Father Date of Birth" via substring).
+                for alias in aliases:
+                    for col in pool:
+                        if _norm(col) == alias:
+                            match = col
+                            break
+                    if match:
+                        break
+                # Pass 2: word-boundary substring, in alias priority order.
+                if not match:
+                    for alias in aliases:
+                        pat = r'\b' + re.escape(alias) + r'\b'
+                        for col in pool:
+                            if re.search(pat, _norm(col)):
+                                match = col
+                                break
+                        if match:
+                            break
+                if match:
+                    pool.remove(match)
+                sales_col_for_target.append(match)
+
+            name_cols = {}
+            for key, aliases in (('first', ('first name',)), ('middle', ('middle name',)), ('last', ('last name',))):
+                for alias in aliases:
+                    for col in df.columns:
+                        if re.search(r'\b' + re.escape(alias) + r'\b', _norm(col)):
+                            name_cols[key] = col
+                            break
+                    if key in name_cols:
+                        break
 
             sales_rows = []
-            for idx, row in df.iterrows():
+            for s_no, (idx, row) in enumerate(df.iterrows(), 1):
                 out = {}
                 for t, rc in zip(SALES_COLUMNS, sales_col_for_target):
-                    if rc is None:
+                    if t == 'S No':
+                        out[t] = s_no
+                    elif t == 'Name':
+                        parts = [str(row[name_cols[k]]).strip() for k in ('first', 'middle', 'last') if k in name_cols and str(row[name_cols[k]]).strip()]
+                        out[t] = ' '.join(parts)
+                    elif rc is None:
                         out[t] = ''
                     elif t in DATE_SALES_COLS:
                         out[t] = format_date(row[rc])
