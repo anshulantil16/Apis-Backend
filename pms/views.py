@@ -1268,8 +1268,19 @@ def _process_offer_batch(rows, batch_id, send_emails):
     from django.utils import timezone
     from django.db import connections
     from django.core.mail import get_connection
+    from django.conf import settings
     from .offer_letter import generate_offer_letter_pdf, send_offer_letter_email
     from .models import OfferLetterBatch
+
+    def _offer_mail_connection():
+        """SMTP connection using the dedicated offer-letter account (separate
+        from the account used for PMS login OTPs)."""
+        return get_connection(
+            host=settings.EMAIL_HOST, port=settings.EMAIL_PORT,
+            username=settings.OFFER_LETTER_EMAIL_HOST_USER,
+            password=settings.OFFER_LETTER_EMAIL_HOST_PASSWORD,
+            use_tls=settings.EMAIL_USE_TLS, timeout=30,
+        )
 
     batch = None
     mail_conn = None
@@ -1279,7 +1290,7 @@ def _process_offer_batch(rows, batch_id, send_emails):
         # batch (no EMAIL_TIMEOUT is configured globally).
         if send_emails:
             try:
-                mail_conn = get_connection(timeout=30)
+                mail_conn = _offer_mail_connection()
                 mail_conn.open()
             except Exception:
                 mail_conn = None
@@ -1296,7 +1307,7 @@ def _process_offer_batch(rows, batch_id, send_emails):
                         mail_conn.close()
                 except Exception:
                     pass
-                mail_conn = get_connection(timeout=30)
+                mail_conn = _offer_mail_connection()
                 mail_conn.open()
                 pdf_io.seek(0)
                 send_offer_letter_email(email, name, pdf_io, eff_date, oid, connection=mail_conn)

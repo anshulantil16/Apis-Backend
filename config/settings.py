@@ -180,3 +180,8 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.getenv('EMAIL_HOST_USER', '')
+
+# Dedicated sender for offer/appraisal letters — separate account from the one
+# used for PMS login OTPs. Falls back to the shared account above if unset.
+OFFER_LETTER_EMAIL_HOST_USER = os.getenv('OFFER_LETTER_EMAIL_HOST_USER') or EMAIL_HOST_USER
+OFFER_LETTER_EMAIL_HOST_PASSWORD = os.getenv('OFFER_LETTER_EMAIL_HOST_PASSWORD') or EMAIL_HOST_PASSWORD

@@ -535,7 +535,7 @@ def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective
     email = EmailMessage(
         subject=subject,
         body=body,
-        from_email=settings.EMAIL_HOST_USER,
+        from_email=settings.OFFER_LETTER_EMAIL_HOST_USER,
         to=[employee_email],
         connection=connection,
     )
