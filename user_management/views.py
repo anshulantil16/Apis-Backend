@@ -139,7 +139,7 @@ class ExcelUploadView(APIView):
                 data = df.to_dict(orient='records')
                 return Response({"message": "File processed successfully", "headers": headers, "data": data})
 
-            # ── Generic read for all other non-joining tools ─────────────────
+            # ── Generic read for all other non-medical tools ─────────────────
             if file_name.endswith('.csv'):
                 try:
                     df = pd.read_csv(file)
@@ -151,7 +151,15 @@ class ExcelUploadView(APIView):
 
             df.columns = df.columns.astype(str).str.replace('\n', ' ', regex=False).str.replace('\r', '', regex=False).str.strip()
 
-            if tool != 'joining':
+            # NOTE: this branch's column-mapping/family-extraction logic below produces
+            # exactly the Medical Report columns (Sr. No / Employee Number / Name Of
+            # Member / Relation / Gender / DOB / Age / Sum Insured / GPA / DOJ /
+            # Designation Name / Location / Contact number / Email details), so it must
+            # run for the 'medical' tool — NOT 'joining' (a separate, unrelated tool:
+            # "Joining Form Processor"). Previously this was gated on 'joining' by
+            # mistake, so Medical Reports silently fell through to the generic
+            # unprocessed passthrough below.
+            if tool != 'medical':
                 df = df.fillna('')
                 headers = list(df.columns)
                 data = df.to_dict(orient='records')
