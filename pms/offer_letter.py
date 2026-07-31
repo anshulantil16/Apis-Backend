@@ -62,7 +62,7 @@ def _esc(v):
 
 # Fixed signatory (same on every letter)
 SIGNATORY_NAME = 'Pankaj Tripathi'
-SIGNATORY_TITLE = 'General Manager HR &amp; Head IT &amp; Admin'
+SIGNATORY_TITLE = 'General Manager – People &amp; Culture &amp; Head IT &amp; Admin'
 
 NAVY = HexColor('#1e3a5f')
 BLUE = HexColor('#2d5f8d')
@@ -76,6 +76,48 @@ def _rs(v):
         return f"Rs. {float(v):,.2f}"
     except (TypeError, ValueError):
         return "Rs. 0.00"
+
+
+_ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+         'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
+         'Seventeen', 'Eighteen', 'Nineteen']
+_TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety']
+
+
+def _two_digit_words(n):
+    if n < 20:
+        return _ONES[n]
+    return (_TENS[n // 10] + ('-' + _ONES[n % 10] if n % 10 else '')).strip()
+
+
+def _three_digit_words(n):
+    if n >= 100:
+        rest = _two_digit_words(n % 100)
+        return _ONES[n // 100] + ' Hundred' + (' ' + rest if rest else '')
+    return _two_digit_words(n)
+
+
+def _amount_in_words(v):
+    """Whole-rupee amount in words, Indian numbering (Crore/Lakh/Thousand)."""
+    try:
+        n = int(round(float(v)))
+    except (TypeError, ValueError):
+        n = 0
+    if n == 0:
+        return 'Zero'
+    parts = []
+    crore, n = divmod(n, 10000000)
+    if crore:
+        parts.append(_three_digit_words(crore) + ' Crore')
+    lakh, n = divmod(n, 100000)
+    if lakh:
+        parts.append(_three_digit_words(lakh) + ' Lakh')
+    thousand, n = divmod(n, 1000)
+    if thousand:
+        parts.append(_three_digit_words(thousand) + ' Thousand')
+    if n:
+        parts.append(_three_digit_words(n))
+    return ' '.join(parts)
 
 
 def _fy_context(effective_date):
@@ -337,6 +379,17 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     letter_title = ('Annual Compensation Review &amp; Promotion Letter' if is_promotion
                     else 'Annual Compensation Review &amp; Salary Revision Letter')
 
+    try:
+        _new_ctc_val = float(new_ctc or 0)
+    except (TypeError, ValueError):
+        _new_ctc_val = 0
+    ctc_para = (
+        "Based on your performance and the Annual Compensation Review, your revised Annual "
+        f"Cost to Company (CTC) has been increased to <b>{_rs(_new_ctc_val)}</b> "
+        f"(Rupees {_esc(_amount_in_words(_new_ctc_val))} only) per annum, effective "
+        f"<b>{eff_str}</b>."
+    )
+
     # ── Body text (conditional) ──────────────────────────────────────────────
     intro = ("At APIS India Limited, we recognize that our organization's sustained growth "
              "&amp; success is made possible through the consistent commitment and performance "
@@ -348,6 +401,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
             f"Following the completion of the performance review cycle for the year {reviewed_fy}, "
             f"we are pleased to inform that you have been assessed as {article} <b>{phrase}</b>, "
             "demonstrating dependable results &amp; meeting the expectations set for your role.",
+            ctc_para,
             "In recognition of your consistent performance and valuable contribution to the "
             f"organization, we are delighted to inform you that you are promoted from "
             f"<b>{emp_desig}</b> to <b>{new_desig}</b> with effect from <b>{eff_str}</b>. The details of "
@@ -360,12 +414,11 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
             "Your promotion reflects the confidence that the Management places in your ability to "
             "take on broader responsibilities and contribute meaningfully to the continued growth "
             "and success of APIS India Limited. We are confident that you will continue to lead by "
-            "example, uphold the APIS UPLIFT Values, and deliver excellence in your new role.",
-            "As we continue building a stronger and future-ready organization, we encourage you to "
-            "embrace new opportunities, strengthen collaboration, foster innovation, and create "
-            "lasting value for our customers, colleagues, business partners and stakeholders. We "
-            "are confident that your continued contribution will help us achieve new milestones "
-            f"together. Your next performance review is scheduled for <b>{next_review}</b>.",
+            "example, uphold the &quot;APIS UPLIFT&quot; Values and deliver excellence in your new role.",
+            "As we continue building a stronger &amp; future-ready organization, we encourage you to "
+            "embrace new opportunities, collaborate, innovate, and continue creating value through "
+            "your contributions. Your next performance review is scheduled for "
+            f"<b>{next_review}</b>.",
             "Congratulations on your well-deserved compensation revision and promotion. We thank "
             "you for your commitment and look forward to your continued partnership in creating a "
             "stronger future for APIS India Limited. <b>Together, We UPLIFT. Together, We Grow.</b>",
@@ -374,6 +427,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         body_paras = [
             f"Following the completion of the performance review cycle for the year {reviewed_fy}, "
             f"we are pleased to inform that you have been assessed as {article} <b>{phrase}</b>.",
+            ctc_para,
             f"We are pleased to inform you that your compensation has been revised effective "
             f"<b>{eff_str}</b>. The details of your revised salary structure are enclosed as "
             "<b>Annexure–A</b>, which forms an integral part of this letter. This revision reflects "
@@ -405,12 +459,13 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     confid_para = ("<b>Confidentiality:</b> Please treat this communication and your compensation "
                    "details as strictly confidential. Disclosure or discussion of your package with "
                    "others will be considered a violation of company policy. Your compensation is "
-                   "uniquely determined and should not be compared with that of other employees.")
+                   "uniquely determined &amp; should not be compared with other employees.")
     nda_para = ("<b>Non-Disclosure &amp; Non-Compete:</b> As part of our evolving business practices, "
-                "certain roles may require additional confidentiality and compliance measures. Based "
-                "on the criticality and sensitivity of your role, you may be asked to sign a "
-                "Non-Disclosure and Non-Compete Agreement, as assessed by your HR representative. "
-                "This process may be initiated at any point during the year.")
+                "certain grades/ roles may require additional confidentiality and compliance "
+                "safeguards. Depending on the criticality and sensitivity of your role, you may be "
+                "asked to sign a Non-Disclosure and Non-Compete Agreement, as assessed by People "
+                "&amp; Culture department. This process may be initiated at any point during the "
+                "year as per the business exigencies.")
     ack_para = ("I acknowledge receipt of this Salary Revision Letter and accept the revised "
                 f"compensation effective <b>{eff_str}</b>.")
     sign_line = ("Employee Signature: ______________________ &nbsp;&nbsp; "
@@ -576,23 +631,74 @@ def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective
     bulk so the whole batch reuses a single SMTP connection instead of opening
     one per email — a major speed-up for hundreds of letters."""
     from django.conf import settings
+    from html import escape as _hesc
 
     subject = f"APIS India — Compensation Review Letter (Effective {effective_date.strftime('%d %B %Y')})"
 
+    safe_name = _hesc(employee_name or 'Employee')
+    FONT = "font-family: Aptos, Calibri, Arial, sans-serif;"
     body = f"""
 <html>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-<div style="max-width: 600px; margin: 0 auto; background-color: #f9f9f9; padding: 20px; border-radius: 8px;">
-    <p>Dear <b>{employee_name}</b>,</p>
-    <p>Please find attached your <b>Annual Compensation Review Letter</b> from APIS India Limited,
-    detailing your revised compensation effective <b>{effective_date.strftime('%d %B %Y')}</b>,
-    along with <b>Annexure-A</b> (revised salary structure).</p>
-    <p>Kindly review the attached letter carefully. This communication is
-    <b>Private &amp; Confidential</b>.</p>
-    <p style="color: #666; font-size: 12px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd;">
-        For any questions, please reach out to the HR department.<br>
-        <b>APIS India Limited — Human Resources</b>
+<body style="{FONT} font-size: 11pt; line-height: 1.6; color: #222;">
+<div style="max-width: 640px; margin: 0 auto;">
+    <p>Dear {safe_name}</p>
+
+    <p>For more than a century, APIS India Limited has stood as a symbol of Trust, Quality and
+    Well-being in households across India and global markets. This enduring legacy is anchored in
+    our core values, the very foundation of every APISian:</p>
+
+    <p style="margin: 4px 0 4px 16px;">
+        <b>A</b> &ndash; Achievement through excellence, innovation &amp; continuous growth mindset.<br>
+        <b>P</b> &ndash; Purpose in every goal we pursue.<br>
+        <b>I</b> &ndash; Integrity in all our actions and relationships.<br>
+        <b>S</b> &ndash; Sustainability for our business, community and environment.
     </p>
+
+    <p>Over the past year, the FMCG sector has transformed rapidly due to shifting consumer
+    behaviours, emerging technologies, supply chain complexities &amp; broader economic
+    disruptions. To stay ahead of these dynamic conditions, APIS India is actively evolving how we
+    operate, innovate and create long-term value.</p>
+
+    <p>Meaningful transformation begins from within. As APIS India continues its journey towards
+    becoming a more agile, digitally enabled, and future-ready organization, we are delighted to
+    introduce another important milestone in our transformation journey. In line with our
+    commitment to modernizing processes, accelerating operational excellence and embracing
+    sustainable, paperless practices, we are pleased to deliver your Performance Management System
+    (PMS) Letter for FY 2025&ndash;26 digitally for the very first time. This reflects our vision of
+    creating a progressive workplace that combines technology, efficiency and employee-centric
+    practices.</p>
+
+    <p>Please find attached your official documents for review, acknowledge &amp; confirm the
+    details.</p>
+    <p style="margin: 4px 0 4px 16px;">
+        &#128196; Performance Management System (PMS) Letter &ndash; FY 2025&ndash;26<br>
+        &#128202; Revised Compensation Break-up
+    </p>
+
+    <p>To sustain our momentum and achieve our ambitious Annual Operating Plan (AOP) targets for
+    FY 2026&ndash;27, leadership expects high ownership, discipline and accountability across every
+    department. Each employee plays a vital role in our collective progress across three core
+    pillars:</p>
+
+    <p style="margin: 4px 0 4px 16px;">
+        <b>Ownership of KPIs:</b> Taking direct accountability for delivering measurable,
+        high-impact outcomes.<br>
+        <b>Agility &amp; Innovation:</b> Proactively adapting to market shifts and resolving
+        operational bottlenecks with smart solutions.<br>
+        <b>Result-Oriented Execution:</b> Driving success through disciplined habits, seamless
+        teamwork, and a relentless focus on organizational goals.
+    </p>
+
+    <p>We sincerely acknowledge your dedication, professionalism and meaningful contribution to
+    APIS India Limited. It is the effort and commitment of our people that allow us to foster a
+    true high-performance culture.</p>
+
+    <p>Let us step into FY 2026&ndash;27 with renewed energy, purpose, and resolve&mdash;working
+    together to make it a landmark year of growth, excellence and shared success!</p>
+
+    <p>Warm Regards,<br>
+    Pankaj Tripathi<br>
+    General Manager &ndash; People &amp; Culture &amp; Head IT &amp; Admin</p>
 </div>
 </body>
 </html>
