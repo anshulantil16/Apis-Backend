@@ -3,7 +3,7 @@ from .views import (
     PMSListView, PMSImportView, PMSEmployeeUpdateView, PMSTemplateView,
     PMSExportView, PMSSettingsView, OfferLetterTemplateView,
     OfferLetterUploadView, OfferLetterPDFView, OfferLetterBatchStatusView,
-    OfferLetterHistoryView, PMSLoginView,
+    OfferLetterHistoryView, OfferLetterDownloadAllView, PMSLoginView,
 )
 
 urlpatterns = [
@@ -19,4 +19,5 @@ urlpatterns = [
     path('offer-letter/batch/<str:batch_id>/', OfferLetterBatchStatusView.as_view()),
     path('offer-letter/<int:offer_letter_id>/pdf/', OfferLetterPDFView.as_view()),
     path('offer-letter/history/',   OfferLetterHistoryView.as_view()),
+    path('offer-letter/download-all/', OfferLetterDownloadAllView.as_view()),
 ]

@@ -1601,6 +1601,21 @@ class OfferLetterUploadView(APIView):
         })
 
 
+def _letter_filename(offer):
+    """<EMPCODE>_PMS <FY>.pdf, e.g. "EMP0001_PMS 2025-2026.pdf" — searchable by
+    employee code when hundreds of letters are archived together. FY matches
+    the same reviewed-year calendar used in the letter body (_fy_context in
+    offer_letter.py): effective date's year Y -> reviewed FY "(Y-1)-Y"."""
+    code = offer.employee_code or (offer.employee.employee_id if offer.employee else str(offer.id))
+    safe_code = re.sub(r'[^A-Za-z0-9_-]', '_', str(code))[:40] or str(offer.id)
+    if offer.effective_date:
+        ey = offer.effective_date.year
+        fy = f"{ey - 1}-{ey}"
+    else:
+        fy = "PMS"
+    return f"{safe_code}_PMS {fy}.pdf"
+
+
 class OfferLetterPDFView(APIView):
     """Download/view a generated offer-letter PDF."""
     def get(self, request, offer_letter_id):
@@ -1611,9 +1626,58 @@ class OfferLetterPDFView(APIView):
             return Response({'error': 'Not found'}, status=404)
         if not offer.pdf_file:
             return Response({'error': 'No PDF generated for this letter'}, status=404)
-        code = offer.employee_code or (offer.employee.employee_id if offer.employee else offer.id)
         return FileResponse(offer.pdf_file.open('rb'), content_type='application/pdf',
-                            filename=f'OfferLetter_{code}.pdf')
+                            filename=_letter_filename(offer))
+
+
+class OfferLetterDownloadAllView(APIView):
+    """Bulk-download every (optionally filtered) stored letter as one ZIP,
+    each PDF named via _letter_filename() for easy searching once archived."""
+    def get(self, request):
+        import zipfile
+        from django.http import HttpResponse
+        from django.db.models import Q
+
+        qs = OfferLetter.objects.exclude(pdf_file='').exclude(pdf_file__isnull=True).order_by('employee_code')
+
+        search = (request.query_params.get('search') or '').strip()
+        if search:
+            qs = qs.filter(Q(employee_name__icontains=search) | Q(employee_code__icontains=search) |
+                           Q(email_address__icontains=search) | Q(department__icontains=search))
+        status_filter = (request.query_params.get('status') or '').strip()
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        batch_id = (request.query_params.get('batch_id') or '').strip()
+        if batch_id:
+            qs = qs.filter(batch_id=batch_id)
+
+        letters = list(qs)
+        if not letters:
+            return Response({'error': 'No letters with a stored PDF match this filter.'}, status=404)
+
+        buf = io.BytesIO()
+        used_names = {}
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for o in letters:
+                name = _letter_filename(o)
+                # Disambiguate if the same filename would occur twice (e.g. a
+                # re-imported/duplicate employee code) instead of one entry
+                # silently overwriting the other inside the zip.
+                if name in used_names:
+                    used_names[name] += 1
+                    base, ext = name.rsplit('.', 1)
+                    name = f"{base} ({used_names[name]}).{ext}"
+                else:
+                    used_names[name] = 0
+                try:
+                    o.pdf_file.open('rb')
+                    zf.writestr(name, o.pdf_file.read())
+                finally:
+                    o.pdf_file.close()
+        buf.seek(0)
+        resp = HttpResponse(buf.read(), content_type='application/zip')
+        resp['Content-Disposition'] = f'attachment; filename="APIS_Offer_Letters_{len(letters)}.zip"'
+        return resp
 
 
 class OfferLetterBatchStatusView(APIView):
