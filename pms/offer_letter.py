@@ -575,6 +575,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         f.append(Spacer(1, 0.05 * inch * s))
         f.append(HRFlowable(width='100%', thickness=0.8, color=colors.grey, dash=(2, 2), spaceAfter=5 * s))
         fnote_style = ParagraphStyle('fnote', parent=fn, fontName='Helvetica-Oblique')
+        f.append(Paragraph("<b>NOTE:</b>", ParagraphStyle('fnoteHdr', parent=fn, fontName='Helvetica-BoldOblique')))
         f.append(Paragraph(
             "1. This is a computer generated Compensation Component Break-up Structure. In case of "
             "any discrepancy, please contact your People and Culture Dept.",
