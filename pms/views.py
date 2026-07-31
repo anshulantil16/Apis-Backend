@@ -1295,12 +1295,12 @@ def _process_offer_batch(rows, batch_id, send_emails):
             except Exception:
                 mail_conn = None
 
-        def _send_with_retry(email, name, pdf_io, eff_date, oid):
+        def _send_with_retry(email, name, pdf_io, eff_date, oid, attach_name):
             """Send via the shared SMTP connection; if it has dropped mid-batch
             (common on 500+ sends), reopen a fresh connection once and retry."""
             nonlocal mail_conn
             try:
-                send_offer_letter_email(email, name, pdf_io, eff_date, oid, connection=mail_conn)
+                send_offer_letter_email(email, name, pdf_io, eff_date, oid, connection=mail_conn, filename=attach_name)
             except Exception:
                 try:
                     if mail_conn is not None:
@@ -1310,7 +1310,7 @@ def _process_offer_batch(rows, batch_id, send_emails):
                 mail_conn = _offer_mail_connection()
                 mail_conn.open()
                 pdf_io.seek(0)
-                send_offer_letter_email(email, name, pdf_io, eff_date, oid, connection=mail_conn)
+                send_offer_letter_email(email, name, pdf_io, eff_date, oid, connection=mail_conn, filename=attach_name)
 
         gen = eml = fail = proc = 0
         errs = []
@@ -1358,7 +1358,7 @@ def _process_offer_batch(rows, batch_id, send_emails):
                     else:
                         try:
                             _send_with_retry(r['email'], r['name'], _io.BytesIO(pdf_bytes),
-                                             r['effective_date'], offer.id)
+                                             r['effective_date'], offer.id, _letter_filename(offer))
                             offer.status = 'sent'
                             offer.email_sent = True
                             offer.email_sent_at = timezone.now()

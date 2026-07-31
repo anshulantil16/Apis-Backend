@@ -625,8 +625,13 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
 
 
 def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective_date,
-                            offer_letter_id=None, connection=None):
+                            offer_letter_id=None, connection=None, filename=None):
     """Send the compensation review letter PDF via email.
+
+    `filename` should match the same "<EMPCODE>_PMS <FY>.pdf" pattern used for
+    downloads (see _letter_filename in views.py) so the attachment name is
+    identical whether the employee got it by email or downloaded it later.
+    Falls back to a name-based filename if not provided.
 
     Pass a shared `connection` (django.core.mail.get_connection) when sending in
     bulk so the whole batch reuses a single SMTP connection instead of opening
@@ -715,6 +720,6 @@ def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective
     email.content_subtype = 'html'
 
     pdf_buffer.seek(0)
-    email.attach(f'APIS_Compensation_Letter_{employee_name.replace(" ", "_")}.pdf',
-                 pdf_buffer.read(), 'application/pdf')
+    attach_name = filename or f'APIS_Compensation_Letter_{employee_name.replace(" ", "_")}.pdf'
+    email.attach(attach_name, pdf_buffer.read(), 'application/pdf')
     email.send(fail_silently=False)
