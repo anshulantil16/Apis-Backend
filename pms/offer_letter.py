@@ -193,14 +193,14 @@ _PEACH = HexColor('#FCE4D6')
 
 
 def _amt(v):
-    """Format an amount with thousands separators; blank string for empty/zero."""
+    """Format an amount with Indian-style comma grouping; blank string for empty/zero."""
     try:
         v = float(v)
     except (TypeError, ValueError):
         return ''
     if not v:
         return ''
-    return f"{round(v):,}"
+    return _indian_grouping(round(v))
 
 
 def _annexure_table(emp_name, emp_id, department, function, designation,
@@ -220,8 +220,8 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
     pDL = ParagraphStyle('anxDL', fontName='Helvetica-Bold', fontSize=9 * s, leading=10.5 * s, alignment=TA_LEFT)
     pDV = ParagraphStyle('anxDV', fontName='Helvetica', fontSize=9 * s, leading=10.5 * s, alignment=TA_LEFT)
     pST = ParagraphStyle('anxST', fontName='Helvetica-Bold', fontSize=9 * s, leading=10.5 * s, alignment=TA_LEFT, textColor=colors.white)
-    pAmt = ParagraphStyle('anxAmt', fontName='Helvetica', fontSize=9 * s, leading=10.5 * s, alignment=TA_RIGHT)
-    pAmtW = ParagraphStyle('anxAmtW', fontName='Helvetica-Bold', fontSize=9 * s, leading=10.5 * s, alignment=TA_RIGHT, textColor=colors.white)
+    pAmt = ParagraphStyle('anxAmt', fontName='Helvetica', fontSize=9 * s, leading=10.5 * s, alignment=TA_CENTER)
+    pAmtW = ParagraphStyle('anxAmtW', fontName='Helvetica-Bold', fontSize=9 * s, leading=10.5 * s, alignment=TA_CENTER, textColor=colors.white)
 
     data, cmds = [], []
 
