@@ -659,14 +659,21 @@ class PMSImportView(APIView):
                 return str(val).lower().strip() in ('y', 'yes', 'true', '1')
 
             def parse_date(val):
-                if val is None or str(val).strip() == '': return None
+                """Accepts an Excel native date/datetime, or free-text in almost
+                any common format (YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY,
+                '10 June 2002', '20-Jan-2018', etc.) — dayfirst=True since
+                sheets in this context are Indian-format (DD-MM-YYYY)."""
+                from datetime import datetime as _dt, date as _d
+                if val is None or str(val).strip() == '':
+                    return None
+                if isinstance(val, _dt):
+                    return val.date()
+                if isinstance(val, _d):
+                    return val
                 try:
-                    from datetime import datetime
-                    if isinstance(val, str):
-                        return datetime.strptime(val, '%Y-%m-%d').date()
-                    else:
-                        return val.date() if hasattr(val, 'date') else val
-                except:
+                    from dateutil import parser as _dateparser
+                    return _dateparser.parse(str(val).strip(), dayfirst=True).date()
+                except Exception:
                     return None
 
             def norm_readiness(val):
