@@ -1319,19 +1319,29 @@ def _process_offer_batch(rows, batch_id, send_emails):
             offer = None
             try:
                 offer = OfferLetter.objects.create(
-                    employee=None, employee_code=r['emp_id'], employee_name=r['name'],
+                    employee=None,
+                    employee_code=_clip_to_field(OfferLetter, 'employee_code', r['emp_id']),
+                    employee_name=_clip_to_field(OfferLetter, 'employee_name', r['name']),
                     letter_type=r['letter_type'],
                     current_ctc=r['current_ctc'], new_ctc=r['new_ctc'],
                     increment_pct=r['increment_pct'], promotion_pct=r['promotion_pct'],
                     effective_date=r['effective_date'],
-                    old_designation=r['current_designation'], new_designation=r['new_designation'],
-                    performance_rating=r['performance_rating'], grade_label=r['grade_label'],
-                    salutation=r['salutation'], assessment=r['assessment'],
-                    function=r['function'], cadre=r['cadre'], grade=r['grade'],
-                    date_of_joining=r['date_of_joining'], work_location=r['work_location'],
+                    old_designation=_clip_to_field(OfferLetter, 'old_designation', r['current_designation']),
+                    new_designation=_clip_to_field(OfferLetter, 'new_designation', r['new_designation']),
+                    performance_rating=_clip_to_field(OfferLetter, 'performance_rating', r['performance_rating']),
+                    grade_label=_clip_to_field(OfferLetter, 'grade_label', r['grade_label']),
+                    salutation=_clip_to_field(OfferLetter, 'salutation', r['salutation']),
+                    assessment=_clip_to_field(OfferLetter, 'assessment', r['assessment']),
+                    function=_clip_to_field(OfferLetter, 'function', r['function']),
+                    cadre=_clip_to_field(OfferLetter, 'cadre', r['cadre']),
+                    grade=_clip_to_field(OfferLetter, 'grade', r['grade']),
+                    date_of_joining=_clip_to_field(OfferLetter, 'date_of_joining', r['date_of_joining']),
+                    work_location=_clip_to_field(OfferLetter, 'work_location', r['work_location']),
                     salary_breakup=r['salary_breakup'],
-                    special_reward=r['special_reward'], special_reward_note=r['special_reward_note'],
-                    email_address=r['email'], department=r['department'],
+                    special_reward=r['special_reward'],
+                    special_reward_note=_clip_to_field(OfferLetter, 'special_reward_note', r['special_reward_note']),
+                    email_address=r['email'],
+                    department=_clip_to_field(OfferLetter, 'department', r['department']),
                     batch_id=batch_id, status='pending',
                 )
                 pdf_bytes = generate_offer_letter_pdf(
@@ -1630,6 +1640,20 @@ class OfferLetterUploadView(APIView):
             'batch_id': batch_id, 'total': len(rows), 'send_emails': send_emails,
             'warnings': warnings,
         })
+
+
+def _clip_to_field(model, field_name, value):
+    """Defensively truncate a string to the model field's actual max_length so
+    a long free-text value from an Excel column (e.g. "Performance Rating")
+    can never crash the whole letter with a DB "Data too long" error — it is
+    safely cut off instead of losing the letter and vanishing from history."""
+    if not isinstance(value, str) or not value:
+        return value
+    try:
+        max_len = model._meta.get_field(field_name).max_length
+    except Exception:
+        max_len = None
+    return value[:max_len] if max_len and len(value) > max_len else value
 
 
 def _letter_filename(offer):

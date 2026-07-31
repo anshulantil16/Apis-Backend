@@ -472,7 +472,7 @@ class OfferLetter(models.Model):
     effective_date = models.DateField()
     old_designation = models.CharField(max_length=200, blank=True)
     new_designation = models.CharField(max_length=200, blank=True)
-    performance_rating = models.CharField(max_length=10, blank=True)
+    performance_rating = models.CharField(max_length=100, blank=True)
     grade_label    = models.CharField(max_length=100, blank=True)
     salutation     = models.CharField(max_length=20, blank=True)   # Mr./Ms./Mr/Ms/Mrs
     assessment     = models.CharField(max_length=100, blank=True)  # e.g. "Strong Performer"
