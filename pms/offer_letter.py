@@ -70,12 +70,32 @@ GOLD = HexColor('#d99a00')
 GREY = HexColor('#666666')
 
 
+def _indian_grouping(n):
+    """Whole-number digit grouping, Indian style: last 3 digits, then pairs of 2
+    (e.g. 660000 -> "6,60,000", 725104 -> "7,25,104")."""
+    s = str(abs(int(n)))
+    if len(s) <= 3:
+        grouped = s
+    else:
+        last3, rest = s[-3:], s[:-3]
+        groups = []
+        while len(rest) > 2:
+            groups.insert(0, rest[-2:])
+            rest = rest[:-2]
+        if rest:
+            groups.insert(0, rest)
+        grouped = ','.join(groups) + ',' + last3
+    return ('-' if n < 0 else '') + grouped
+
+
 def _rs(v):
-    """Format an amount as Rs. with Indian-style grouping (reliable in reportlab)."""
+    """Format an amount as Rs. with Indian-style grouping, whole rupees only
+    (no decimals — payroll amounts in this letter are always whole numbers)."""
     try:
-        return f"Rs. {float(v):,.2f}"
+        n = round(float(v))
     except (TypeError, ValueError):
-        return "Rs. 0.00"
+        n = 0
+    return f"Rs. {_indian_grouping(n)}"
 
 
 _ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
@@ -581,7 +601,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
             "any discrepancy, please contact your People and Culture Dept.",
             fnote_style))
         f.append(Paragraph(
-            "2. Management reserves the right to amend, modify, or restructure the Compensation "
+            "2. The Management reserves the right to amend, modify, or restructure the Compensation "
             "Break-up Structure in line with statutory compliances, organizational policies, and "
             "business requirements.",
             fnote_style))
@@ -653,12 +673,12 @@ def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective
     body = f"""
 <html>
 <body style="{FONT} font-size: 11pt; line-height: 1.6; color: #222;">
-<div style="max-width: 640px;">
+<div style="max-width: 640px; padding: 0 12px;">
     <p>Dear {safe_name}</p>
 
-    <p>For more than a century, APIS India Limited has stood as a symbol of Trust, Quality and
+    <p>For more than a century, <b>APIS INDIA LIMITED</b> has stood as a symbol of Trust, Quality and
     Well-being in households across India and global markets. This enduring legacy is anchored in
-    our core values, the very foundation of every APISian:</p>
+    our core values, the very foundation of every <b>APISIAN</b>:</p>
 
     <p style="margin: 4px 0 4px 16px;">
         <b>A</b> &ndash; Achievement through excellence, innovation &amp; continuous growth mindset.<br>
@@ -676,15 +696,15 @@ def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective
     becoming a more agile, digitally enabled, and future-ready organization, we are delighted to
     introduce another important milestone in our transformation journey. In line with our
     commitment to modernizing processes, accelerating operational excellence and embracing
-    sustainable, paperless practices, we are pleased to deliver your Performance Management System
-    (PMS) Letter for FY 2025&ndash;26 digitally for the very first time. This reflects our vision of
+    sustainable, paperless practices, we are pleased to deliver your Compensation Review Letter for
+    FY 2025&ndash;26 digitally for the very first time. This reflects our vision of
     creating a progressive workplace that combines technology, efficiency and employee-centric
     practices.</p>
 
     <p>Please find attached your official documents for review, acknowledge &amp; confirm the
     details.</p>
     <p style="margin: 4px 0 4px 16px;">
-        &#128196; Performance Management System (PMS) Letter &ndash; FY 2025&ndash;26<br>
+        &#128196; Compensation Review Letter &ndash; FY 2025&ndash;26<br>
         &#128202; Revised Compensation Break-up
     </p>
 
@@ -703,7 +723,7 @@ def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective
     </p>
 
     <p>We sincerely acknowledge your dedication, professionalism and meaningful contribution to
-    APIS India Limited. It is the effort and commitment of our people that allow us to foster a
+    <b>APIS INDIA LIMITED</b>. It is the effort and commitment of our people that allow us to foster a
     true high-performance culture.</p>
 
     <p>Let us step into FY 2026&ndash;27 with renewed energy, purpose, and resolve&mdash;working
