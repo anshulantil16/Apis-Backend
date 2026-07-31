@@ -298,7 +298,7 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
     # an exact duplicate of GROSS EARNINGS just above.
     if r_m or r_a:
         subtotal('Gross Salary', gs_m, gs_a, _DGREY)
-    band('Annual Benefits', _CYAN)
+    band('Annual Benefits', _CYAN, pHdr)
     b_m, b_a = add_section('benefits')
     subtotal('Total Annual Benefits', b_m, b_a, _DGREY)
     tc_m, tc_a = gs_m + b_m, gs_a + b_a
@@ -321,9 +321,9 @@ def _annexure_table(emp_name, emp_id, department, function, designation,
     table1 = finalize(no_bottom_border=True)
     data.clear()
     cmds.clear()
-    band('Other Payments (Payout on Quarterly Basis)', _CYAN)
+    band('Other Payments (Payout on Quarterly Basis)', _CYAN, pHdr)
     o_m, o_a = add_section('other')
-    subtotal('TOTAL  CTC ( Per Annum)', tc_m + o_m, tc_a + o_a, _LGREEN)
+    subtotal('TOTAL CTC', tc_m + o_m, tc_a + o_a, _LGREEN)
     table2 = finalize(no_top_border=True)
     return [table1, Spacer(1, 4 * s), table2]
 
@@ -415,7 +415,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
             "Your promotion reflects the confidence that the Management places in your ability to "
             "take on broader responsibilities and contribute meaningfully to the continued growth "
             "and success of APIS India Limited. We are confident that you will continue to lead by "
-            "example, uphold the &quot;APIS UPLIFT&quot; Values and deliver excellence in your new role.",
+            "example, uphold the <b>&quot;APIS UPLIFT&quot;</b> Values and deliver excellence in your new role.",
             "As we continue building a stronger &amp; future-ready organization, we encourage you to "
             "embrace new opportunities, collaborate, innovate, and continue creating value through "
             "your contributions. Your next performance review is scheduled for "
@@ -467,8 +467,6 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
                 "asked to sign a Non-Disclosure and Non-Compete Agreement, as assessed by People "
                 "&amp; Culture department. This process may be initiated at any point during the "
                 "year as per the business exigencies.")
-    ack_para = ("I acknowledge receipt of this Salary Revision Letter and accept the revised "
-                f"compensation effective <b>{eff_str}</b>.")
     sign_line = ("Employee Signature: ______________________ &nbsp;&nbsp; "
                  "Name: ______________________ &nbsp;&nbsp; Date: ________________")
 
@@ -478,7 +476,6 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         "# Tax applicability as per Income Tax Act &amp; shall be borne by the employee",
         "$ Variable pay is paid as per company's variable pay policy on quarterly basis",
         "@ Children Education Allowance is applicable for a maximum 2 children only",
-        "Car Lease as per car lease policy",
         "NPS : Max contribution up to 10 % of Basic in old tax regime &amp; 14 % in new tax regime",
         "Gratuity amount payment as per Code on Social Security, 2020 (PGA 1972)",
         "Your Compensation Break-up Structure have been determined based on your cadre and grade, "
@@ -527,15 +524,13 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
             Paragraph("For <b>APIS India Limited</b>", t_sign),
             (_signature_image(1.3 * s) or Spacer(1, 0.32 * inch * s)),
             Paragraph(f"<b>{SIGNATORY_NAME}</b>", t_sign),
-            Paragraph(SIGNATORY_TITLE, t_sign),
+            Paragraph(f"<b>{SIGNATORY_TITLE}</b>", t_sign),
         ]))
         f.append(Spacer(1, 0.08 * inch * s))
         f.append(HRFlowable(width='100%', thickness=0.7, color=colors.grey, spaceAfter=7 * s))
         f.append(Paragraph(confid_para, t_small))
         f.append(Paragraph(nda_para, t_small))
-        f.append(Spacer(1, 0.04 * inch * s))
-        f.append(Paragraph(ack_para, t_ack))
-        f.append(Spacer(1, 0.14 * inch * s))
+        f.append(Spacer(1, 0.1 * inch * s))
         f.append(Paragraph(sign_line, t_ack))
         return f
 
@@ -579,10 +574,16 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
             f.append(Paragraph(note, fn))
         f.append(Spacer(1, 0.05 * inch * s))
         f.append(HRFlowable(width='100%', thickness=0.8, color=colors.grey, dash=(2, 2), spaceAfter=5 * s))
+        fnote_style = ParagraphStyle('fnote', parent=fn, fontName='Helvetica-Oblique')
         f.append(Paragraph(
-            "Note: This is a computer generated Compensation Component Break-up Structure. In case of "
+            "1. This is a computer generated Compensation Component Break-up Structure. In case of "
             "any discrepancy, please contact your People and Culture Dept.",
-            ParagraphStyle('fnote', parent=fn, fontName='Helvetica-Oblique')))
+            fnote_style))
+        f.append(Paragraph(
+            "2. Management reserves the right to amend, modify, or restructure the Compensation "
+            "Break-up Structure in line with statutory compliances, organizational policies, and "
+            "business requirements.",
+            fnote_style))
         f.append(Spacer(1, 4 * s))
         f.append(Paragraph('APIS --Approved_P &amp; C', ParagraphStyle(
             'tag', fontName='Helvetica', fontSize=8 * s, alignment=TA_RIGHT, textColor=HexColor('#555555'))))
@@ -609,7 +610,12 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         return total
 
     def _fit(builder, scales):
-        limit = avail_h * 0.96  # small slack for wrap/rounding
+        # _measure() approximates a Table's wrapped height via Flowable.wrap(),
+        # which can slightly underpredict the real SimpleDocTemplate layout for
+        # table-heavy content. 0.90 (rather than a razor-thin 0.96) leaves real
+        # margin so a borderline case (e.g. a very long custom note) doesn't
+        # pass the estimate by a hair's breadth and then genuinely overflow.
+        limit = avail_h * 0.90
         for sc in scales:
             if _measure(builder(sc)) <= limit:
                 return sc
