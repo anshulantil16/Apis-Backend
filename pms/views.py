@@ -1657,3 +1657,86 @@ class OfferLetterBatchStatusView(APIView):
                 for o in OfferLetter.objects.filter(batch_id=b.batch_id).order_by('id')
             ]
         return Response(data)
+
+
+class OfferLetterHistoryView(APIView):
+    """Persistent dashboard of every generated letter — survives page refresh,
+    unlike the in-memory batch-results view which resets once you navigate
+    away. Every letter that OfferLetterUploadView ever queued lives in the
+    OfferLetter table regardless of email/send outcome, so this is simply
+    a browsable window onto that table."""
+    def get(self, request):
+        from django.db.models import Q
+
+        qs = OfferLetter.objects.all().order_by('-created_at')
+
+        search = (request.query_params.get('search') or '').strip()
+        if search:
+            qs = qs.filter(Q(employee_name__icontains=search) |
+                           Q(employee_code__icontains=search) |
+                           Q(email_address__icontains=search) |
+                           Q(department__icontains=search))
+
+        status_filter = (request.query_params.get('status') or '').strip()
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        batch_id = (request.query_params.get('batch_id') or '').strip()
+        if batch_id:
+            qs = qs.filter(batch_id=batch_id)
+
+        total_count = qs.count()
+        try:
+            limit = max(1, min(500, int(request.query_params.get('limit', 100))))
+        except (TypeError, ValueError):
+            limit = 100
+        try:
+            offset = max(0, int(request.query_params.get('offset', 0)))
+        except (TypeError, ValueError):
+            offset = 0
+
+        page = qs[offset:offset + limit]
+        results = [{
+            'id': o.id, 'employee_id': o.employee_code, 'name': o.employee_name,
+            'department': o.department, 'email': o.email_address,
+            'letter_type': o.letter_type, 'status': o.status,
+            'email_sent': o.email_sent,
+            'email_sent_at': o.email_sent_at.isoformat() if o.email_sent_at else None,
+            'batch_id': o.batch_id, 'created_at': o.created_at.isoformat(),
+            'pdf_url': f'/api/pms/offer-letter/{o.id}/pdf/' if o.pdf_file else None,
+        } for o in page]
+
+        # Summary counts (over the FULL filtered set, not just this page).
+        summary = {
+            'total': total_count,
+            'sent': qs.filter(status='sent').count(),
+            'failed': qs.filter(status='failed').count(),
+            'pending': qs.filter(status='pending').count(),
+        }
+
+        return Response({
+            'results': results, 'count': total_count,
+            'limit': limit, 'offset': offset, 'summary': summary,
+        })
+
+    def delete(self, request):
+        """Clear DB: permanently deletes every stored letter record, its PDF
+        file on disk, and every batch record. Irreversible — the frontend
+        must confirm with the user before calling this."""
+        letters = list(OfferLetter.objects.all())
+        deleted_files = 0
+        for o in letters:
+            if o.pdf_file:
+                try:
+                    o.pdf_file.delete(save=False)
+                    deleted_files += 1
+                except Exception:
+                    pass
+        deleted_count = len(letters)
+        OfferLetter.objects.all().delete()
+        from .models import OfferLetterBatch
+        OfferLetterBatch.objects.all().delete()
+        return Response({
+            'message': f'Cleared {deleted_count} letter record(s) and {deleted_files} PDF file(s).',
+            'deleted': deleted_count,
+        })
