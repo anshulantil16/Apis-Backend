@@ -641,7 +641,7 @@ def send_offer_letter_email(employee_email, employee_name, pdf_buffer, effective
     body = f"""
 <html>
 <body style="{FONT} font-size: 11pt; line-height: 1.6; color: #222;">
-<div style="max-width: 640px; margin: 0 auto;">
+<div style="max-width: 640px;">
     <p>Dear {safe_name}</p>
 
     <p>For more than a century, APIS India Limited has stood as a symbol of Trust, Quality and
