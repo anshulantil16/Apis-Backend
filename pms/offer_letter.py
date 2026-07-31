@@ -401,7 +401,17 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     raw_title = (salutation_title or 'Mr./Ms.').strip()
     raw_phrase = (assessment or grade_label or 'Strong Performer').strip()
 
-    is_promotion = bool(raw_new and raw_new.lower() != raw_desig.strip().lower())
+    designation_changed = bool(raw_new and raw_new.lower() != raw_desig.strip().lower())
+    try:
+        _promo_pct_val = float(promotion_pct or 0)
+    except (TypeError, ValueError):
+        _promo_pct_val = 0
+    # A designation change is only a PROMOTION letter when it comes with an
+    # actual promotion %. A designation change with no promotion % is a
+    # REDESIGNATION — same role-level move/reorg, not a step up — and gets
+    # its own, much shorter letter body (see Pankaj Tripathi, 31 Jul 2026).
+    is_promotion = designation_changed and _promo_pct_val > 0
+    is_redesignation = designation_changed and not is_promotion
 
     emp_name = _esc(raw_name)
     emp_id = _esc(raw_id)
@@ -416,8 +426,12 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     eff_str = effective_date.strftime('%d %B %Y')
     date_str = datetime.now().strftime('%d %B %Y')
 
-    letter_title = ('Annual Compensation Review &amp; Promotion Letter' if is_promotion
-                    else 'Annual Compensation Review &amp; Salary Revision Letter')
+    if is_promotion:
+        letter_title = 'Annual Compensation Review &amp; Promotion Letter'
+    elif is_redesignation:
+        letter_title = 'Redesignation Letter'
+    else:
+        letter_title = 'Annual Compensation Review &amp; Salary Revision Letter'
 
     # Per instruction: the CTC stated on page 1 must be the SAME figure as the
     # Annexure-A "TOTAL CTC" total (sum of every salary_breakup component) —
@@ -462,6 +476,14 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
             "Congratulations on your well-deserved compensation revision and promotion. We thank "
             "you for your commitment and look forward to your continued partnership in creating a "
             "stronger future for APIS India Limited. <b>Together, We UPLIFT. Together, We Grow.</b>",
+        ]
+    elif is_redesignation:
+        body_paras = [
+            f"We are pleased to inform you that you have been redesignated from "
+            f"<b>{emp_desig}</b> to <b>{new_desig}</b>, effective <b>{eff_str}</b>.",
+            "This redesignation reflects the evolving responsibilities of your role and the "
+            "organizational requirements. The details of your revised compensation structure "
+            "are enclosed as <b>Annexure–A</b>, which forms an integral part of this letter.",
         ]
     else:
         body_paras = [
@@ -510,7 +532,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
                  "Name: ______________________ &nbsp;&nbsp; Date: ________________")
 
     ed = emp_details or {}
-    annx_desig = new_desig if is_promotion else (emp_desig or '')
+    annx_desig = new_desig if (is_promotion or is_redesignation) else (emp_desig or '')
     notes = [
         "# Tax applicability as per Income Tax Act &amp; shall be borne by the employee",
         "$ Variable pay is paid as per company's variable pay policy on quarterly basis",
