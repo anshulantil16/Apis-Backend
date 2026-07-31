@@ -155,6 +155,7 @@ SALARY_COMPONENTS = [
     ('gift',      'other',    'Gift Reimbursement',                                            'Gift Reimbursement (Monthly)',  'M'),
 ]
 
+
 # Extra Annexure employee-detail columns: (excel_header, model/dict key, annexure label)
 ANNEXURE_EMP_FIELDS = [
     ('Function',        'function',        'Function'),
