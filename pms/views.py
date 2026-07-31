@@ -1529,6 +1529,22 @@ class OfferLetterUploadView(APIView):
                     pass
             return None
 
+        def format_doj_display(val):
+            """Clean "06 May 2024" display string for the Annexure's Date of
+            Joining. Avoids the " 00:00:00" artifact that appears when the
+            Excel cell is a native datetime object and gets naively str()'d,
+            and normalises whatever date format was typed in the sheet."""
+            if val is None or str(val).strip() == '':
+                return ''
+            if isinstance(val, (datetime, date)):
+                return val.strftime('%d %B %Y')
+            s = str(val).strip()
+            try:
+                from dateutil import parser as _dateparser
+                return _dateparser.parse(s, dayfirst=True).strftime('%d %B %Y')
+            except Exception:
+                return s  # not a recognisable date — show the original text as-is
+
         # ── Fast parse: turn every valid row into a plain dict (no PDF/DB yet) ──
         # Every row that is dropped or altered is recorded and reported back —
         # silently skipping rows in a 500-employee run means people simply never
@@ -1559,7 +1575,7 @@ class OfferLetterUploadView(APIView):
             function = str(get_val(row, 'function') or '').strip()
             cadre = str(get_val(row, 'cadre') or '').strip()
             grade = str(get_val(row, 'grade') or '').strip()
-            date_of_joining = str(get_val(row, 'date_of_joining') or '').strip()
+            date_of_joining = format_doj_display(get_val(row, 'date_of_joining'))
             work_location = str(get_val(row, 'work_location') or '').strip()
 
             salary_breakup = {}
