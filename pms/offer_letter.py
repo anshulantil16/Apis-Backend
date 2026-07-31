@@ -176,6 +176,25 @@ SALARY_COMPONENTS = [
 ]
 
 
+def _compute_total_ctc(breakup):
+    """Annual total computed EXACTLY the way _annexure_table's "TOTAL CTC" row
+    computes it — sum of every component across every section, annualising
+    monthly-basis ones. Single source of truth: the letter body's headline
+    CTC figure and the Annexure-A total are always the same number, by
+    construction, because both come from calling this same function."""
+    breakup = breakup or {}
+    total = 0.0
+    for key, _sec, _label, _h, basis in SALARY_COMPONENTS:
+        try:
+            v = float(breakup.get(key))
+        except (TypeError, ValueError):
+            continue
+        if not v:
+            continue
+        total += v * 12 if basis == 'M' else v
+    return round(total, 2)
+
+
 # Extra Annexure employee-detail columns: (excel_header, model/dict key, annexure label)
 ANNEXURE_EMP_FIELDS = [
     ('Function',        'function',        'Function'),
@@ -400,10 +419,10 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     letter_title = ('Annual Compensation Review &amp; Promotion Letter' if is_promotion
                     else 'Annual Compensation Review &amp; Salary Revision Letter')
 
-    try:
-        _new_ctc_val = float(new_ctc or 0)
-    except (TypeError, ValueError):
-        _new_ctc_val = 0
+    # Per instruction: the CTC stated on page 1 must be the SAME figure as the
+    # Annexure-A "TOTAL CTC" total (sum of every salary_breakup component) —
+    # not the separately-passed new_ctc value, which could disagree with it.
+    _new_ctc_val = _compute_total_ctc(salary_breakup)
     ctc_para = (
         "Based on your performance and the Annual Compensation Review, your revised Annual "
         f"Cost to Company (CTC) has been increased to <b>{_rs(_new_ctc_val)}</b> "
