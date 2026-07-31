@@ -1316,6 +1316,7 @@ def _process_offer_batch(rows, batch_id, send_emails):
         errs = []
         total = len(rows)
         for r in rows:
+            offer = None
             try:
                 offer = OfferLetter.objects.create(
                     employee=None, employee_code=r['emp_id'], employee_name=r['name'],
@@ -1372,6 +1373,36 @@ def _process_offer_batch(rows, batch_id, send_emails):
             except Exception as e:
                 fail += 1
                 errs.append(f"{r['emp_id']} ({r.get('name','')}): {e}")
+                # Whenever we count a failure, an OfferLetter row with
+                # status='failed' must exist — otherwise the batch summary
+                # and the Letters History dashboard disagree (batch says N
+                # failed, History shows none) because History is just a
+                # filtered view of this same table.
+                if offer is not None:
+                    # Row was created but something after that (PDF gen,
+                    # pdf_file.save) blew up — it's otherwise stuck at the
+                    # 'pending' default forever.
+                    try:
+                        offer.status = 'failed'
+                        offer.save(update_fields=['status'])
+                    except Exception:
+                        pass
+                else:
+                    # OfferLetter.objects.create() itself failed (bad/oversized
+                    # data for some field) — no row exists yet at all. Persist a
+                    # minimal one so this employee still shows up as failed
+                    # instead of vanishing without a trace.
+                    try:
+                        OfferLetter.objects.create(
+                            employee=None, employee_code=r.get('emp_id', ''),
+                            employee_name=r.get('name', ''),
+                            current_ctc=0, new_ctc=0,
+                            effective_date=r.get('effective_date') or timezone.now().date(),
+                            email_address=r.get('email', ''), department=r.get('department', ''),
+                            batch_id=batch_id, status='failed',
+                        )
+                    except Exception:
+                        pass  # last resort — if even this can't be saved, nothing more we can do
 
             proc += 1
             if proc % 5 == 0 or proc == total:  # flush progress periodically
