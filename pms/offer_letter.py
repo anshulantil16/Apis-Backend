@@ -428,9 +428,10 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
 
     if is_promotion:
         letter_title = 'Annual Compensation Review &amp; Promotion Letter'
-    elif is_redesignation:
-        letter_title = 'Annual Compensation Review &amp; Redesignation Letter'
     else:
+        # Redesignation (no promotion %) uses the same plain title as a normal
+        # salary revision letter -- the word "Redesignation" is deliberately
+        # kept out of the letterhead.
         letter_title = 'Annual Compensation Review &amp; Salary Revision Letter'
 
     # Per instruction: the CTC stated on page 1 must be the SAME figure as the
