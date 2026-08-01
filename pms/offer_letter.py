@@ -479,11 +479,30 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
         ]
     elif is_redesignation:
         body_paras = [
-            f"We are pleased to inform you that you have been redesignated from "
-            f"<b>{emp_desig}</b> to <b>{new_desig}</b>, effective <b>{eff_str}</b>.",
-            "This redesignation reflects the evolving responsibilities of your role and the "
-            "organizational requirements. The details of your revised compensation structure "
-            "are enclosed as <b>Annexure–A</b>, which forms an integral part of this letter.",
+            f"Following the completion of the performance review cycle for the year {reviewed_fy}, "
+            f"we are pleased to inform that you have been assessed as {article} <b>{phrase}</b>, "
+            "demonstrating dependable results &amp; meeting the expectations set for your role.",
+            ctc_para,
+            "In recognition of your consistent performance and valuable contribution to the "
+            f"organization, we are pleased to inform you that you have been redesignated from "
+            f"<b>{emp_desig}</b> to <b>{new_desig}</b> with effect from <b>{eff_str}</b>. The details "
+            "of your revised salary structure are enclosed as <b>Annexure–A</b>, which forms an "
+            "integral part of this letter.",
+            "Your compensation and redesignation have been determined after considering your "
+            "overall performance, demonstrated capabilities, evolving responsibilities, market "
+            "competitiveness, internal equity and the Company's overall business performance.",
+            "Your redesignation reflects the confidence that the Management places in your ability "
+            "to take on your evolving responsibilities and contribute meaningfully to the continued "
+            "growth and success of APIS India Limited. We are confident that you will continue to "
+            "lead by example, uphold the <b>&quot;APIS UPLIFT&quot;</b> Values and deliver excellence "
+            "in your role.",
+            "As we continue building a stronger &amp; future-ready organization, we encourage you to "
+            "embrace new opportunities, collaborate, innovate, and continue creating value through "
+            "your contributions. Your next performance review is scheduled for "
+            f"<b>{next_review}</b>.",
+            "Congratulations on your redesignation. We thank you for your commitment and look "
+            "forward to your continued partnership in creating a stronger future for APIS India "
+            "Limited. <b>Together, We UPLIFT. Together, We Grow.</b>",
         ]
     else:
         body_paras = [
