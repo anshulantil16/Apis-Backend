@@ -429,7 +429,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
     if is_promotion:
         letter_title = 'Annual Compensation Review &amp; Promotion Letter'
     elif is_redesignation:
-        letter_title = 'Redesignation Letter'
+        letter_title = 'Annual Compensation Review &amp; Redesignation Letter'
     else:
         letter_title = 'Annual Compensation Review &amp; Salary Revision Letter'
 
