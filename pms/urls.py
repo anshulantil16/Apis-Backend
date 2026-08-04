@@ -4,6 +4,9 @@ from .views import (
     PMSExportView, PMSSettingsView, OfferLetterTemplateView,
     OfferLetterUploadView, OfferLetterPDFView, OfferLetterBatchStatusView,
     OfferLetterHistoryView, OfferLetterDownloadAllView, PMSLoginView,
+    WarningLetterTemplateView, WarningLetterUploadView, WarningLetterCreateView,
+    WarningLetterPDFView, WarningLetterBatchStatusView, WarningLetterHistoryView,
+    WarningLetterDownloadAllView,
 )
 
 urlpatterns = [
@@ -20,4 +23,13 @@ urlpatterns = [
     path('offer-letter/<int:offer_letter_id>/pdf/', OfferLetterPDFView.as_view()),
     path('offer-letter/history/',   OfferLetterHistoryView.as_view()),
     path('offer-letter/download-all/', OfferLetterDownloadAllView.as_view()),
+
+    # Warning / disciplinary letters (Letters Generator component #2)
+    path('warning-letter/template/',  WarningLetterTemplateView.as_view()),
+    path('warning-letter/create/',    WarningLetterCreateView.as_view()),
+    path('warning-letter/upload/',    WarningLetterUploadView.as_view()),
+    path('warning-letter/batch/<str:batch_id>/', WarningLetterBatchStatusView.as_view()),
+    path('warning-letter/history/',   WarningLetterHistoryView.as_view()),
+    path('warning-letter/download-all/', WarningLetterDownloadAllView.as_view()),
+    path('warning-letter/<int:warning_letter_id>/pdf/', WarningLetterPDFView.as_view()),
 ]

@@ -504,6 +504,112 @@ class OfferLetter(models.Model):
         return f"{who} - {self.letter_type.title()}"
 
 
+class WarningLetter(models.Model):
+    """Tracks generated disciplinary/warning letters.
+
+    Second component of the Letters Generator (alongside OfferLetter, which
+    handles appraisal/CTC-revision letters). Deliberately a SEPARATE table
+    rather than a shared one: warning letters carry entirely different fields
+    (incident, corrective action, response deadline) and must never be mixed
+    into appraisal history or the appraisal ZIP export.
+
+    Standalone — employee data comes straight from the form/uploaded Excel.
+    The optional FK is kept only for convenience linking."""
+    WARNING_TYPE_CHOICES = [
+        ('verbal',      'Verbal Warning'),
+        ('first',       'First Written Warning'),
+        ('second',      'Second Written Warning'),
+        ('final',       'Final Warning'),
+        ('show_cause',  'Show Cause Notice'),
+    ]
+
+    employee        = models.ForeignKey(PMSEmployee, on_delete=models.SET_NULL,
+                                        related_name='warning_letters', null=True, blank=True)
+    employee_code   = models.CharField(max_length=50, blank=True)
+    employee_name   = models.CharField(max_length=200, blank=True)
+    salutation      = models.CharField(max_length=20, blank=True)     # Mr./Ms.
+    designation     = models.CharField(max_length=200, blank=True)
+    department      = models.CharField(max_length=200, blank=True, db_index=True)
+    function        = models.CharField(max_length=200, blank=True)
+    grade           = models.CharField(max_length=100, blank=True)
+    cadre           = models.CharField(max_length=100, blank=True)
+    date_of_joining = models.CharField(max_length=50, blank=True)
+    work_location   = models.CharField(max_length=200, blank=True)
+    reporting_manager = models.CharField(max_length=200, blank=True)
+
+    warning_type    = models.CharField(max_length=20, choices=WARNING_TYPE_CHOICES, default='first')
+    # Free-text override — set when HR needs a heading the fixed choices above
+    # don't cover. Takes precedence over warning_type in the rendered letter.
+    warning_type_label = models.CharField(max_length=150, blank=True)
+    subject         = models.CharField(max_length=300, blank=True)
+    incident_date   = models.CharField(max_length=50, blank=True)
+    incident_description = models.TextField(blank=True)
+    previous_warning_ref = models.CharField(max_length=300, blank=True)
+    corrective_action = models.TextField(blank=True)
+    response_due_days = models.IntegerField(default=0)   # 0 = no response deadline
+    letter_date     = models.DateField()
+    issued_by       = models.CharField(max_length=200, blank=True)
+    issued_by_designation = models.CharField(max_length=300, blank=True)
+    remarks         = models.TextField(blank=True)
+    # Anything the final approved format needs that isn't a column above —
+    # avoids a migration per wording tweak while the format is being finalised.
+    extra_fields    = models.JSONField(default=dict, blank=True)
+
+    pdf_file        = models.FileField(upload_to='warning_letters/', null=True, blank=True)
+    email_sent      = models.BooleanField(default=False)
+    email_sent_at   = models.DateTimeField(null=True, blank=True)
+    email_address   = models.EmailField(blank=True)
+    # Comma/semicolon-separated CC recipients (reporting manager, HOD, P&C...).
+    # Plain text rather than a related table: it is per-letter, free-form, and
+    # never queried on — a join would buy nothing.
+    cc_emails       = models.TextField(blank=True)
+    status          = models.CharField(max_length=20, default='pending',
+                                       choices=[('pending', 'Pending'), ('sent', 'Sent'), ('failed', 'Failed')])
+    batch_id        = models.CharField(max_length=50, blank=True, db_index=True)
+    created_at      = models.DateTimeField(auto_now_add=True)
+    updated_at      = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    @property
+    def cc_list(self):
+        """cc_emails split into a clean list of addresses."""
+        raw = (self.cc_emails or '').replace(';', ',').replace('\n', ',')
+        return [e.strip() for e in raw.split(',') if e.strip()]
+
+    @property
+    def type_label(self):
+        """Heading shown on the letter — free-text override wins over the choice."""
+        return self.warning_type_label.strip() or self.get_warning_type_display()
+
+    def __str__(self):
+        who = self.employee_name or self.employee_code
+        return f"{who} - {self.type_label}"
+
+
+class WarningLetterBatch(models.Model):
+    """Bulk warning-letter run progress — mirrors OfferLetterBatch so the UI can
+    poll the same way while letters are produced in a background thread."""
+    batch_id    = models.CharField(max_length=50, unique=True, db_index=True)
+    total       = models.IntegerField(default=0)
+    processed   = models.IntegerField(default=0)
+    generated   = models.IntegerField(default=0)
+    emailed     = models.IntegerField(default=0)
+    failed      = models.IntegerField(default=0)
+    send_emails = models.BooleanField(default=False)
+    status      = models.CharField(max_length=20, default='running')  # running / completed / error
+    errors      = models.JSONField(default=list, blank=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"WarningBatch {self.batch_id} — {self.processed}/{self.total} ({self.status})"
+
+
 class OfferLetterBatch(models.Model):
     """Tracks a bulk offer-letter generation run so the UI can poll progress
     while the letters are produced in a background thread."""
