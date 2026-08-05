@@ -798,6 +798,7 @@ class PMSEmployeeUpdateView(APIView):
         logs = []
 
         fields_to_update = [
+            'current_ctc',
             'final_score_value', 'override_increment_pct',
             'override_grade', 'promoted', 'promotion_pct', 'management_discretion_pct',
             'on_time_reward', 'reward_amount', 'promotion_readiness', 'notes',
@@ -814,6 +815,25 @@ class PMSEmployeeUpdateView(APIView):
                     new_val = float(v) if v not in (None, '', 'null') else None
                     if new_val is not None:
                         new_val = max(0.0, min(115.0, new_val))  # % of target; A+ up to 115%
+                elif field == 'current_ctc':
+                    # Editable after the master upload — sheets routinely carry a
+                    # stale or wrong CTC for a few employees. Every increment /
+                    # promotion / new-CTC figure is a computed property off this
+                    # value, so they all recalculate the moment it is saved.
+                    #
+                    # UNIT: current_ctc is stored MONTHLY and serialize_emp sends
+                    # it back annualised (x12, see CTC_ANNUAL_MULT). The UI shows
+                    # and edits the ANNUAL figure, so divide by 12 on the way in —
+                    # otherwise a saved value comes back 12x too large.
+                    v = d[field]
+                    try:
+                        annual = float(str(v).replace(',', '').strip()) if v not in (None, '', 'null') else 0.0
+                    except (TypeError, ValueError):
+                        return Response(
+                            {'error': f'Current CTC must be a number (got {v!r}).'}, status=400)
+                    if annual < 0:
+                        annual = 0.0
+                    new_val = round(annual / CTC_ANNUAL_MULT, 2)
                 elif field in ('override_increment_pct', 'promotion_pct', 'management_discretion_pct', 'salary_correction', 'reward_amount'):
                     v = d[field]
                     new_val = float(v) if v not in (None, '', 'null') else (0 if field in ('promotion_pct', 'management_discretion_pct', 'salary_correction', 'reward_amount') else None)
