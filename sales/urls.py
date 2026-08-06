@@ -6,9 +6,11 @@ from .views import (
     SalesParetoView, SalesMatrixView, SalesMoversView, SalesAnomaliesView,
     SalesSeasonalityView, SalesHeatmapView, SalesRFMView, SalesCohortsView,
     SalesNewRepeatView, SalesYoYView, SalesPacingView, SalesPriceView,
+    SalesLoginView,
 )
 
 urlpatterns = [
+    path('login/',     SalesLoginView.as_view()),
     # core
     path('template/',  SalesTemplateView.as_view()),
     path('upload/',    SalesUploadView.as_view()),
