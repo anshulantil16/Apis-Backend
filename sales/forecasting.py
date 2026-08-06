@@ -132,16 +132,29 @@ def forecast_series(points, periods=6):
         note = 'Only one month of data — the last value is carried forward.'
         confidence = 'low'
 
-    # Band from in-sample residuals. Widening with sqrt(horizon) reflects that
-    # uncertainty compounds the further out you project.
+    # ── Confidence band ──────────────────────────────────────────────────
+    # Built from in-sample residuals, with two corrections that matter:
+    #
+    # 1. MAE is not a standard deviation. For normally distributed errors
+    #    sigma = MAE * sqrt(pi/2) ~= 1.2533 * MAE. Using MAE directly as sigma
+    #    understates the interval by ~25%.
+    # 2. A floor of 5% of the series mean. A model can fit its own history
+    #    almost perfectly (a clean seasonal series drives MAE to ~0), but that
+    #    is not evidence the future is certain — an unfloored band would render
+    #    as a hairline and imply precision no sales forecast has.
+    #
+    # sqrt(horizon) widening reflects uncertainty compounding as you project
+    # further out (the random-walk variance result).
     resid = [abs(a - f) for a, f in zip(series, fitted)]
     mae = _mean(resid) if resid else 0.0
     base = _mean(series) or 1.0
     mape = (mae / base) * 100 if base else 0.0
 
+    sigma = max(mae * 1.2533, base * 0.05)
+
     out = []
     for i, v in enumerate(fc):
-        spread = mae * 1.96 * math.sqrt(i + 1)
+        spread = sigma * 1.96 * math.sqrt(i + 1)
         out.append({
             'period': _add_months(last_date, i + 1).isoformat(),
             'value': round(v, 2),

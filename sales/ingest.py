@@ -6,6 +6,7 @@ headers are matched against an alias table rather than required verbatim, and
 anything unrecognised is reported back instead of silently dropped.
 """
 import io
+import re
 from datetime import datetime, date
 
 import openpyxl
@@ -100,7 +101,18 @@ def map_headers(header_row):
     return col_map, unknown
 
 
+_ISO_RE = re.compile(r'^\d{4}-\d{1,2}-\d{1,2}(?:[T ]|$)')
+
+
 def parse_date(v):
+    """Parse a date from Excel cells OR API query params.
+
+    ISO (YYYY-MM-DD) is checked FIRST and parsed strictly. dateutil with
+    dayfirst=True reads "2026-02-01" as 2 January, not 1 February — which
+    silently corrupted every date-range filter coming from an <input type=
+    "date"> whenever the day was <= 12. Indian sheets still need dayfirst for
+    "05-04-2026", so both rules coexist: ISO wins when the shape is ISO.
+    """
     if v is None or str(v).strip() == '':
         return None
     if isinstance(v, datetime):
@@ -108,6 +120,11 @@ def parse_date(v):
     if isinstance(v, date):
         return v
     s = str(v).strip()
+    if _ISO_RE.match(s):
+        try:
+            return date.fromisoformat(s[:10])
+        except ValueError:
+            pass    # e.g. 2026-13-45 — fall through to the tolerant parser
     try:
         from dateutil import parser as _p
         return _p.parse(s, dayfirst=True).date()
