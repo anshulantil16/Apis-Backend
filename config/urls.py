@@ -29,6 +29,7 @@ urlpatterns = [
     path('api/eom/',         include('eom.urls')),
     path('api/pms/',         include('pms.urls')),
     path('api/tada/',        include('tada.urls')),
+    path('api/sales/',       include('sales.urls')),
     # Always serve media files (works in both DEBUG and production mode)
     re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
-]
+]

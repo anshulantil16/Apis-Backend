@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     'eom',
     'pms',
     'tada',
+    'sales',
 ]
 
 MIDDLEWARE = [
