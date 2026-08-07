@@ -523,8 +523,16 @@ class WarningLetter(models.Model):
         ('show_cause',  'Show Cause Notice'),
     ]
 
+    # db_constraint=False: PMSEmployee.id is a plain int in the live DB but a
+    # historical migration-state mismatch means Django wants to create this FK
+    # as bigint, which MySQL 8 rejects (error 3780) since column types must
+    # match under a real constraint. This field is never actually written
+    # (every create() call passes employee=None; identity comes from
+    # employee_code/employee_name copied straight from the upload), so there
+    # is nothing to lose by making it a logical-only relation.
     employee        = models.ForeignKey(PMSEmployee, on_delete=models.SET_NULL,
-                                        related_name='warning_letters', null=True, blank=True)
+                                        related_name='warning_letters', null=True, blank=True,
+                                        db_constraint=False)
     employee_code   = models.CharField(max_length=50, blank=True)
     employee_name   = models.CharField(max_length=200, blank=True)
     salutation      = models.CharField(max_length=20, blank=True)     # Mr./Ms.

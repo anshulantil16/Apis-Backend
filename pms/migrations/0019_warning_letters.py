@@ -73,7 +73,7 @@ class Migration(migrations.Migration):
                 ('batch_id', models.CharField(blank=True, db_index=True, max_length=50)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
-                ('employee', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='warning_letters', to='pms.pmsemployee')),
+                ('employee', models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='warning_letters', to='pms.pmsemployee')),
             ],
             options={
                 'ordering': ['-created_at'],
