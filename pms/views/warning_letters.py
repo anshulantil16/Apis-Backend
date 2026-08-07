@@ -475,6 +475,12 @@ class WarningLetterUploadView(APIView):
             'issued by designation': 'issued_by_designation', 'remarks': 'remarks',
         }
         header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+        # Raw header text as typed in the sheet — kept separately from col_map
+        # (which stores our internal field names) so an error message can show
+        # the user their ACTUAL column names, not our internal vocabulary.
+        # This is what lets someone immediately recognise "oh, I uploaded the
+        # wrong template" instead of just being told a name doesn't match.
+        raw_headers = [str(c).strip() for c in header_row if c is not None and str(c).strip()]
         col_map = {}
         for ci, cell in enumerate(header_row):
             if cell is None:
@@ -483,10 +489,20 @@ class WarningLetterUploadView(APIView):
             if key in HEADER_MAP:
                 col_map[HEADER_MAP[key]] = ci
 
-        if not all(f in col_map for f in ('employee_id', 'name')):
-            return Response({'error': 'Missing required columns',
-                             'required': ['Employee ID', 'Employee Name'],
-                             'mapped': list(col_map.keys())}, status=400)
+        REQUIRED = [('employee_id', 'Employee ID'), ('name', 'Employee Name')]
+        missing = [label for field, label in REQUIRED if field not in col_map]
+        if missing:
+            shown = ', '.join(raw_headers[:15]) + (' …' if len(raw_headers) > 15 else '')
+            return Response({
+                'error': (f'Missing required column(s): {", ".join(missing)}. '
+                          f'Your file has: {shown or "(no headers found)"}. '
+                          f'Make sure you downloaded the Warning Letter template — '
+                          f'this looks like it might be a different sheet.'),
+                'missing_columns': missing,
+                'required_columns': [label for _, label in REQUIRED],
+                'detected_columns': raw_headers,
+                'mapped_columns': list(col_map.keys()),
+            }, status=400)
 
         def get_val(row, field, default=None):
             if field not in col_map:
