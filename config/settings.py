@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'pms',
     'tada',
     'sales',
+    'roompulse',
 ]
 
 MIDDLEWARE = [
