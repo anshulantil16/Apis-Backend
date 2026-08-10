@@ -6,6 +6,7 @@
     employees.py     Super Admin employee-directory template/upload/list
     admins.py        Super Admin admin-roster management
     analytics.py      utilisation stats for Admin/Super Admin
+    reset.py          Super Admin full database reset
 
 Re-exported here so urls.py sees one flat namespace.
 """
@@ -15,5 +16,6 @@ from .bookings import *      # noqa: F401,F403
 from .employees import *     # noqa: F401,F403
 from .admins import *        # noqa: F401,F403
 from .analytics import *     # noqa: F401,F403
+from .reset import *         # noqa: F401,F403
 
 from .auth import resolve_role, SUPER_ADMIN_EMAIL

@@ -3,7 +3,7 @@ from .views import (
     RoomPulseLoginView, RoomListView, RoomDetailView,
     BookingListView, BookingActionView, RoomCalendarView,
     EmployeeTemplateView, EmployeeUploadView, EmployeeListView,
-    AdminRosterView, AnalyticsView,
+    AdminRosterView, AnalyticsView, ResetDatabaseView,
 )
 
 urlpatterns = [
@@ -23,4 +23,6 @@ urlpatterns = [
     path('admins/', AdminRosterView.as_view()),
 
     path('analytics/', AnalyticsView.as_view()),
+
+    path('reset/', ResetDatabaseView.as_view()),
 ]
