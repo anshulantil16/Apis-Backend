@@ -6,9 +6,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
-from ..models import Employee
-from ..ingest import map_headers, build_template
-from .perms import require_role
+from ..models import Employee, AdminUser
+from ..ingest import map_headers, build_template, is_admin_value
+from .perms import require_role, actor_role
+from .auth import SUPER_ADMIN_EMAIL
 
 
 class EmployeeTemplateView(APIView):
@@ -27,6 +28,7 @@ class EmployeeUploadView(APIView):
     def post(self, request):
         if (err := require_role(request, 'super_admin')):
             return err
+        _, acting_email = actor_role(request)
         f = request.FILES.get('file')
         if not f:
             return Response({'error': 'No file provided.'}, status=400)
@@ -59,7 +61,7 @@ class EmployeeUploadView(APIView):
             v = row[ci]
             return str(v).strip() if v is not None else ''
 
-        created = updated = skipped = 0
+        created = updated = skipped = admins_granted = 0
         skipped_rows = []
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if not any(v is not None and str(v).strip() != '' for v in row):
@@ -70,6 +72,13 @@ class EmployeeUploadView(APIView):
                 skipped += 1
                 skipped_rows.append(row_idx)
                 continue
+
+            # Role column GRANTS admin access, never revokes it — a blank or
+            # "Employee" cell on someone already admin leaves them untouched.
+            # Revoking admin access stays a deliberate action in the Team tab.
+            wants_admin = is_admin_value(cell(row, 'role')) and email != SUPER_ADMIN_EMAIL
+            role = 'admin' if wants_admin else None  # None = "don't change existing role"
+
             obj, was_created = Employee.objects.update_or_create(
                 email=email,
                 defaults={
@@ -79,10 +88,17 @@ class EmployeeUploadView(APIView):
                     'designation': (cell(row, 'designation') or '')[:150],
                     'location': (cell(row, 'location') or '')[:150],
                     'reporting_manager': (cell(row, 'reporting_manager') or '')[:200],
+                    **({'role': 'admin'} if wants_admin else {}),
                 },
             )
             created += was_created
             updated += not was_created
+
+            if wants_admin:
+                _, was_new_admin = AdminUser.objects.get_or_create(
+                    email=email, defaults={'name': name[:200],
+                                           'added_by': f'employee upload by {acting_email}'})
+                admins_granted += was_new_admin
 
         warnings = []
         if skipped_rows:
@@ -91,10 +107,14 @@ class EmployeeUploadView(APIView):
                             f'(sheet row {head}{"…" if len(skipped_rows) > 15 else ""}).')
         if unknown:
             warnings.append(f'{len(unknown)} column(s) not recognised: {", ".join(unknown[:10])}.')
+        if admins_granted:
+            warnings.append(f'{admins_granted} employee(s) granted Admin access via the Role column.')
 
         return Response({
-            'message': f'{created} added, {updated} updated.',
+            'message': f'{created} added, {updated} updated.'
+                       + (f' {admins_granted} granted Admin access.' if admins_granted else ''),
             'created': created, 'updated': updated, 'skipped': skipped,
+            'admins_granted': admins_granted,
             'detected_columns': raw_headers, 'warnings': warnings,
         })
 
@@ -115,7 +135,7 @@ class EmployeeListView(APIView):
         results = [{
             'id': e.id, 'employee_code': e.employee_code, 'name': e.name, 'email': e.email,
             'department': e.department, 'designation': e.designation, 'location': e.location,
-            'reporting_manager': e.reporting_manager,
+            'reporting_manager': e.reporting_manager, 'role': e.role,
         } for e in qs[:limit]]
         return Response({'results': results, 'count': total})
 

@@ -89,7 +89,17 @@ class Employee(models.Model):
     """Employee directory, bulk-uploaded by Super Admin via Excel (mirrors the
     SalesIQ/PMS upload pattern). Used to auto-fill booking requester details
     and to power department-level analytics — not an auth mechanism; login
-    is still open to any @apisindia.com address per RoomPulse's role rules."""
+    is still open to any @apisindia.com address per RoomPulse's role rules.
+
+    `role` is a convenience mirror of AdminUser, not the source of truth —
+    resolve_role() in views/auth.py always checks AdminUser directly. This
+    field exists purely so the directory can display who has Admin access
+    without a second query, and so the bulk upload can GRANT admin access via
+    a Role column (see views/employees.py) instead of adding people one at a
+    time in the Team tab.
+    """
+    ROLE_CHOICES = [('employee', 'Employee'), ('admin', 'Admin')]
+
     employee_code = models.CharField(max_length=50, blank=True, db_index=True)
     name          = models.CharField(max_length=200)
     email         = models.EmailField(unique=True)
@@ -97,6 +107,7 @@ class Employee(models.Model):
     designation   = models.CharField(max_length=150, blank=True)
     location      = models.CharField(max_length=150, blank=True)
     reporting_manager = models.CharField(max_length=200, blank=True)
+    role          = models.CharField(max_length=20, choices=ROLE_CHOICES, default='employee')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
