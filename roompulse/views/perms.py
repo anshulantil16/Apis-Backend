@@ -1,4 +1,4 @@
-"""RoomPulse permission helper.
+"""AdminPulse permission helper.
 
 There is no server-side session/token here — like SalesIQ and the PMS
 Simulator, the "session" is just a client-remembered email after OTP

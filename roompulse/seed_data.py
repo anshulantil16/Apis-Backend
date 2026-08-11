@@ -1,5 +1,5 @@
 """The real APIS conference rooms — single source of truth for what "a fresh
-RoomPulse database" looks like.
+AdminPulse database" looks like.
 
 Deliberately duplicated (not imported) from migrations/0002_seed_rooms.py:
 that migration already ran successfully everywhere, and migrations should

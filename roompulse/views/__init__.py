@@ -1,4 +1,4 @@
-"""RoomPulse views package.
+"""AdminPulse views package.
 
     auth.py        email OTP login, role resolution (employee/admin/super_admin)
     rooms.py        room CRUD (Super Admin) + live status grid (everyone)

@@ -18,7 +18,7 @@ class EmployeeTemplateView(APIView):
         resp = HttpResponse(
             buf.read(),
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        resp['Content-Disposition'] = 'attachment; filename="RoomPulse_Employee_Template.xlsx"'
+        resp['Content-Disposition'] = 'attachment; filename="AdminPulse_Employee_Template.xlsx"'
         return resp
 
 

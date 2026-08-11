@@ -161,7 +161,7 @@ class Employee(models.Model):
     """Employee directory, bulk-uploaded by Super Admin via Excel (mirrors the
     SalesIQ/PMS upload pattern). Used to auto-fill booking requester details
     and to power department-level analytics — not an auth mechanism; login
-    is still open to any @apisindia.com address per RoomPulse's role rules.
+    is still open to any @apisindia.com address per AdminPulse's role rules.
 
     `role` is a convenience mirror of AdminUser, not the source of truth —
     resolve_role() in views/auth.py always checks AdminUser directly. This
@@ -192,7 +192,7 @@ class Employee(models.Model):
 
 class AdminUser(models.Model):
     """Email allowlist for the Admin role, managed by Super Admin from the UI
-    (unlike SalesIQ's env-var allowlist — RoomPulse expects the roster to
+    (unlike SalesIQ's env-var allowlist — AdminPulse expects the roster to
     change often enough that a redeploy per change would be impractical)."""
     email      = models.EmailField(unique=True)
     name       = models.CharField(max_length=200, blank=True)

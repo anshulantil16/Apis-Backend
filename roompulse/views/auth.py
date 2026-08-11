@@ -1,4 +1,4 @@
-"""RoomPulse access control — email OTP login with three roles.
+"""AdminPulse access control — email OTP login with three roles.
 
 Role resolution order: SUPER_ADMIN_EMAIL constant > AdminUser table > default
 Employee. Any @apisindia.com address may log in (as at least Employee) —
@@ -62,10 +62,10 @@ class RoomPulseLoginView(APIView):
                 from django.core.mail import send_mail
                 from django.conf import settings
                 send_mail(
-                    subject='RoomPulse — Login Code',
-                    message=(f"Your RoomPulse login code is:\n\n    {code}\n\n"
+                    subject='AdminPulse — Login Code',
+                    message=(f"Your AdminPulse login code is:\n\n    {code}\n\n"
                             f"Valid for 5 minutes. Do not share it with anyone.\n\n"
-                            f"— APIS RoomPulse"),
+                            f"— APIS AdminPulse"),
                     from_email=(getattr(settings, 'OFFER_LETTER_EMAIL_HOST_USER', None)
                                or settings.EMAIL_HOST_USER or settings.DEFAULT_FROM_EMAIL),
                     recipient_list=[email],

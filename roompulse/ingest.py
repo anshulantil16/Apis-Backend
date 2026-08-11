@@ -102,7 +102,7 @@ def build_template():
         ('Employee (default)', 'Leave blank, or write "Employee" / "No" — no change to their access.'),
         ('Important', 'This upload only GRANTS admin access, it never removes it. A blank or '
                       '"Employee" cell on someone who is already an Admin does NOT revoke them — '
-                      'remove an admin from the Team tab in RoomPulse instead.'),
+                      'remove an admin from the Team tab in AdminPulse instead.'),
         ('Super Admin', 'The Super Admin account is fixed in the system and cannot be changed '
                         'via this column.'),
     ]
