@@ -46,7 +46,6 @@ INSTALLED_APPS = [
 
     'accounts',
     'user_management',
-    'core',
     'performance',
     'appraisal',
     'eom',

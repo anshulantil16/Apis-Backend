@@ -14,9 +14,18 @@ tada/              TA/DA portal                           /api/tada/
 eom/               Employee of the Month                  /api/eom/
 performance/       Performance hub                        /api/performance/
 appraisal/         Appraisal hub                          /api/appraisal/
-user_management/   Excel extractor tools                  /api/user_management/
-accounts/          auth                                   /api/accounts/
+roompulse/         AdminPulse — room booking + admin item requests   /api/roompulse/
+user_management/   Excel extractor tools (upload/export)  /api/user_management/
+accounts/          registration                           /api/accounts/
 ```
+
+**One Django app per product.** Before adding a new top-level directory, check this
+table is still accurate — an app that stops being wired into `config/urls.py` and
+`INSTALLED_APPS` becomes dead weight fast (this repo has had that happen twice:
+`authentication`, `users` and `core` were all untouched `startapp` scaffolds with
+no urls, no real models, and nothing importing them — removed in August 2026).
+If you `startapp` something and don't finish wiring it up in the same change,
+delete it rather than leaving it half-registered.
 
 ---
 
@@ -100,6 +109,42 @@ a 108-assertion audit that checks every one against hand-computed values.
 | Change the forecast model | `forecasting.py` |
 | Add a new endpoint | `views/advanced.py` + `urls.py` |
 | Who can log in to SalesIQ | `views/auth.py` |
+
+---
+
+## roompulse/ — AdminPulse (rooms + admin item requests)
+
+Internal app/module name stayed `roompulse` when the product was rebranded and
+expanded to "AdminPulse" — renaming a Django app means renaming a live
+`app_label` and every `roompulse_*` table already in production, so the brand
+name and the app name are allowed to diverge. Don't rename the app to match a
+future brand change; just update user-facing text.
+
+```
+roompulse/
+  models.py         Room, BookingRequest, ResourceRequest, Employee, AdminUser
+  seed_data.py       SEED_ROOMS — source of truth for a fresh database
+  status.py           room_status() / overlaps() / find_conflicts()
+  ingest.py            employee directory Excel template + parsing
+  urls.py               every /api/roompulse/ route
+  views/
+    auth.py             OTP login, resolve_role()
+    perms.py            require_role() / actor_role() — re-resolves role from
+                         email server-side; there is no server session, so a
+                         client-sent role must NEVER be trusted
+    rooms.py, bookings.py, resource_requests.py, employees.py, admins.py,
+    analytics.py, reset.py
+```
+
+**Where do I change...**
+
+| Task | File |
+|---|---|
+| Room / booking business logic | `status.py` |
+| Add a resource-request category or urgency level | `models.py` (`CATEGORY_CHOICES` / `URGENCY_CHOICES`) |
+| Who can log in / what role they get | `views/auth.py` |
+| Any privileged action's permission check | `views/perms.py` |
+| What a fresh/reset database looks like | `seed_data.py` (**and** `migrations/0002_seed_rooms.py`, kept in sync by hand) |
 
 ---
 
