@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     RoomPulseLoginView, RoomListView, RoomDetailView,
     BookingListView, BookingActionView, RoomCalendarView,
+    ResourceRequestListView, ResourceRequestActionView,
     EmployeeTemplateView, EmployeeUploadView, EmployeeListView,
     AdminRosterView, AnalyticsView, ResetDatabaseView,
 )
@@ -15,6 +16,9 @@ urlpatterns = [
 
     path('bookings/', BookingListView.as_view()),
     path('bookings/<int:booking_id>/', BookingActionView.as_view()),
+
+    path('resource-requests/', ResourceRequestListView.as_view()),
+    path('resource-requests/<int:request_id>/', ResourceRequestActionView.as_view()),
 
     path('employees/template/', EmployeeTemplateView.as_view()),
     path('employees/upload/', EmployeeUploadView.as_view()),

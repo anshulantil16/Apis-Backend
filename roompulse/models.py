@@ -1,8 +1,16 @@
-"""RoomPulse — conference room booking & live availability.
+"""AdminPulse (Django app: roompulse) — room booking + any other resource an
+employee needs to request from Admin (stationery, IT equipment, etc.).
+
+The app is still named `roompulse` internally — renaming a Django app means
+renaming its migrations' app_label and every `roompulse_*` table already
+live on QA/Live, which is far riskier than the cost of an internal name that
+no longer matches the product's public name. AdminPulse is the brand;
+`roompulse` is the implementation detail, same as how the `pms` app now also
+hosts the unrelated Letters Generator — see STRUCTURE.md.
 
 Standalone app: no models, tables or imports shared with pms/sales/eom. Owns
-four tables (Room, BookingRequest, Employee, AdminUser) and its own URL
-namespace.
+five tables (Room, BookingRequest, ResourceRequest, Employee, AdminUser) and
+its own URL namespace.
 """
 from django.db import models
 
@@ -83,6 +91,70 @@ class BookingRequest(models.Model):
 
     def __str__(self):
         return f"{self.room} {self.date} {self.start_time}-{self.end_time} ({self.status})"
+
+
+class ResourceRequest(models.Model):
+    """A request for anything Admin provides that ISN'T a room — stationery,
+    IT equipment, furniture, housekeeping, printing, etc.
+
+    Deliberately a separate model from BookingRequest rather than a unified
+    polymorphic "Request" table: room bookings are time-slot + conflict-
+    checked against a Room; resource requests are quantity + fulfilment
+    checked with no time dimension at all. Forcing both shapes into one table
+    would mean a pile of nullable fields that only make sense for one type —
+    two narrow models are simpler to reason about than one wide one here.
+
+    Status has an extra step rooms don't need: 'fulfilled'. Approving a room
+    booking IS the outcome (the room is now yours at that time); approving a
+    stationery request only means "yes, get them a stapler" — it isn't done
+    until someone actually hands it over.
+    """
+    STATUS_CHOICES = [
+        ('pending',   'Pending'),
+        ('approved',  'Approved'),
+        ('rejected',  'Rejected'),
+        ('fulfilled', 'Fulfilled'),
+        ('cancelled', 'Cancelled'),
+    ]
+    CATEGORY_CHOICES = [
+        ('stationery',   'Stationery'),
+        ('it_equipment', 'IT Equipment'),
+        ('furniture',    'Furniture'),
+        ('pantry',       'Pantry / Housekeeping'),
+        ('printing',     'Printing / Stationery Print'),
+        ('other',        'Other'),
+    ]
+    URGENCY_CHOICES = [
+        ('low', 'Low'), ('normal', 'Normal'), ('urgent', 'Urgent'),
+    ]
+
+    requested_by_name  = models.CharField(max_length=200)
+    requested_by_email = models.EmailField()
+    department          = models.CharField(max_length=150, blank=True)
+
+    category    = models.CharField(max_length=30, choices=CATEGORY_CHOICES, default='other', db_index=True)
+    item_name   = models.CharField(max_length=200)          # "A4 paper", "Wireless mouse"
+    quantity    = models.IntegerField(default=1)
+    urgency     = models.CharField(max_length=10, choices=URGENCY_CHOICES, default='normal')
+    reason      = models.CharField(max_length=300, blank=True)
+    needed_by   = models.DateField(null=True, blank=True)
+
+    status         = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    reviewed_by    = models.CharField(max_length=200, blank=True)
+    reviewed_at    = models.DateTimeField(null=True, blank=True)
+    admin_remarks  = models.CharField(max_length=300, blank=True)
+    fulfilled_by   = models.CharField(max_length=200, blank=True)
+    fulfilled_at   = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['status', 'category'])]
+
+    def __str__(self):
+        return f"{self.item_name} x{self.quantity} ({self.status})"
 
 
 class Employee(models.Model):

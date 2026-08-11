@@ -9,7 +9,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from ..models import Room, BookingRequest, Employee, AdminUser
+from ..models import Room, BookingRequest, ResourceRequest, Employee, AdminUser
 from .perms import require_role
 
 
@@ -57,6 +57,14 @@ class AnalyticsView(APIView):
         if decided:
             approval_rate = round(by_status.get('approved', 0) / decided * 100, 1)
 
+        # ── resource (non-room) requests over the same window ──
+        rqs = ResourceRequest.objects.filter(created_at__date__gte=since)
+        r_total = rqs.count()
+        r_by_status = {row['status']: row['n'] for row in
+                      rqs.values('status').annotate(n=Count('id'))}
+        r_by_category = list(rqs.exclude(status='cancelled').values('category')
+                             .annotate(n=Count('id')).order_by('-n'))
+
         return Response({
             'period_days': days,
             'total_bookings': total,
@@ -68,9 +76,16 @@ class AnalyticsView(APIView):
                          for r in by_room],
             'top_departments': [{'department': r['department'], 'bookings': r['n']} for r in by_dept],
             'by_purpose': by_purpose,
+            'resource_requests': {
+                'total': r_total,
+                'by_status': r_by_status,
+                'by_category': r_by_category,
+                'pending': r_by_status.get('pending', 0),
+            },
             'totals': {
                 'rooms': Room.objects.filter(is_active=True).count(),
                 'employees': Employee.objects.count(),
                 'admins': AdminUser.objects.count(),
+                'resource_requests': ResourceRequest.objects.count(),
             },
         })
