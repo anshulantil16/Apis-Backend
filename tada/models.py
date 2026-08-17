@@ -82,6 +82,17 @@ class TravelRequest(models.Model):
     travel_mode      = models.CharField(max_length=100, blank=True)
     local_travel_type = models.CharField(max_length=100, blank=True)   # Outdoor Duty, etc.
 
+    # ── Ticket booking preference for the chosen travel mode ──────────────────
+    TIME_PREF_CHOICES = [
+        ('early_morning', 'Early Morning (12 AM – 6 AM)'),
+        ('morning',       'Morning (6 AM – 12 PM)'),
+        ('afternoon',     'Afternoon (12 PM – 4 PM)'),
+        ('evening',       'Evening (4 PM – 8 PM)'),
+        ('night',         'Night (8 PM – 12 AM)'),
+    ]
+    travel_mode_date      = models.DateField(null=True, blank=True)   # date to book the ticket for
+    travel_mode_time_pref = models.CharField(max_length=20, choices=TIME_PREF_CHOICES, blank=True)
+
     # ── Totals ───────────────────────────────────────────────────────────────
     total_claimed  = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total_approved = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -102,6 +113,12 @@ class TravelRequest(models.Model):
 
     def __str__(self):
         return f"{self.get_request_type_display()} · {self.user.name} · {self.status}"
+
+    @property
+    def number_of_days(self):
+        if not self.from_date or not self.to_date:
+            return None
+        return (self.to_date - self.from_date).days + 1
 
 
 class ExpenseItem(models.Model):
