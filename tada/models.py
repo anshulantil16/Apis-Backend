@@ -90,8 +90,10 @@ class TravelRequest(models.Model):
         ('evening',       'Evening (4 PM – 8 PM)'),
         ('night',         'Night (8 PM – 12 AM)'),
     ]
-    travel_mode_date      = models.DateField(null=True, blank=True)   # date to book the ticket for
+    travel_mode_date      = models.DateField(null=True, blank=True)   # onward ticket date
     travel_mode_time_pref = models.CharField(max_length=20, choices=TIME_PREF_CHOICES, blank=True)
+    return_mode_date      = models.DateField(null=True, blank=True)   # return ticket date
+    return_mode_time_pref = models.CharField(max_length=20, choices=TIME_PREF_CHOICES, blank=True)
 
     # ── Totals ───────────────────────────────────────────────────────────────
     total_claimed  = models.DecimalField(max_digits=12, decimal_places=2, default=0)

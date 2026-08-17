@@ -78,6 +78,9 @@ def serialize_request(r, detail=False):
         'travel_mode_date': str(r.travel_mode_date) if r.travel_mode_date else None,
         'travel_mode_time_pref': r.travel_mode_time_pref,
         'travel_mode_time_pref_label': r.get_travel_mode_time_pref_display() if r.travel_mode_time_pref else None,
+        'return_mode_date': str(r.return_mode_date) if r.return_mode_date else None,
+        'return_mode_time_pref': r.return_mode_time_pref,
+        'return_mode_time_pref_label': r.get_return_mode_time_pref_display() if r.return_mode_time_pref else None,
         'total_claimed': float(r.total_claimed), 'total_approved': float(r.total_approved),
         'manager_remarks': r.manager_remarks, 'hr_remarks': r.hr_remarks, 'finance_remarks': r.finance_remarks,
         'created_at': r.created_at.strftime('%Y-%m-%d %H:%M'),
@@ -383,6 +386,8 @@ class CreateTourSanctionView(APIView):
             estimate_amount=_sf(d.get('estimate_amount')), travel_mode=d.get('travel_mode', ''),
             travel_mode_date=_parse_date(d.get('travel_mode_date')),
             travel_mode_time_pref=d.get('travel_mode_time_pref', ''),
+            return_mode_date=_parse_date(d.get('return_mode_date')),
+            return_mode_time_pref=d.get('return_mode_time_pref', ''),
             submitted_at=timezone.now(),
         )
         ApprovalLog.objects.create(request=r, stage='employee', action='submitted', by_name=u.name)
