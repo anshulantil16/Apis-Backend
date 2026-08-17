@@ -78,7 +78,7 @@ class TravelRequest(models.Model):
     city_grade       = models.CharField(max_length=1, blank=True)   # A / B / C
     contact_number   = models.CharField(max_length=20, blank=True)
     sanction_number  = models.CharField(max_length=100, blank=True)
-    estimate_amount  = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    estimate_amount  = models.DecimalField(max_digits=12, decimal_places=2, default=0)  # total of the est_* lines below
     travel_mode      = models.CharField(max_length=100, blank=True)
     local_travel_type = models.CharField(max_length=100, blank=True)   # Outdoor Duty, etc.
 
@@ -94,6 +94,22 @@ class TravelRequest(models.Model):
     travel_mode_time_pref = models.CharField(max_length=20, choices=TIME_PREF_CHOICES, blank=True)
     return_mode_date      = models.DateField(null=True, blank=True)   # return ticket date
     return_mode_time_pref = models.CharField(max_length=20, choices=TIME_PREF_CHOICES, blank=True)
+
+    # ── Pre-travel estimate, broken down by head ─────────────────────────────
+    # Lodging / food / local are seeded from the policy matrices (band × city
+    # grade × days); ticket and misc are entered by the employee. estimate_amount
+    # above holds the total that goes for approval.
+    est_ticket_amount  = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    est_lodging_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    est_food_amount    = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    est_local_amount   = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    est_misc_amount    = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # Advance drawn before departure; settled against the actual claim later.
+    advance_amount   = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # Policy breaches recorded at submission so the approver sees them (newline-separated).
+    policy_flags     = models.TextField(blank=True)
 
     # ── Totals ───────────────────────────────────────────────────────────────
     total_claimed  = models.DecimalField(max_digits=12, decimal_places=2, default=0)

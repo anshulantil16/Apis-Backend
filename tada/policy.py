@@ -151,6 +151,119 @@ def vehicle_amount(mode, km):
     return 0.0
 
 
+def trip_days(from_date, to_date):
+    """Inclusive day count for a trip. None if either date is missing/invalid."""
+    if not from_date or not to_date:
+        return None
+    days = (to_date - from_date).days + 1
+    return days if days > 0 else None
+
+
+def mode_entitlement(level, mode):
+    """Check a chosen travel mode against the band's approved class.
+
+    Returns (within_entitlement, entitled_mode, flags[]). Nothing is hard-blocked
+    here — a sanction is a *request*, and genuine exceptions (no train available,
+    urgent travel) are the approver's call. Flags travel with the request so the
+    manager sees exactly what is out of policy.
+    """
+    band = band_for_level(level)
+    entitled = DA_MATRIX.get(band, {}).get('mode')
+    flags = []
+    m = (mode or '').strip().lower()
+    if not m or not entitled:
+        return True, entitled, flags
+
+    ent = entitled.lower()
+    within = True
+
+    if 'flight' in m or 'air' in m:
+        # Air is M1+ only, and needs the distance/duration justification at claim time.
+        if not air_travel_allowed(level, distance_km=AIR_MIN_DISTANCE_KM):
+            within = False
+            flags.append(f'Air travel is not in the approved class for this level ({entitled})')
+        else:
+            flags.append(f'Air travel needs ≥{AIR_MIN_DISTANCE_KM} km or >{AIR_MIN_TRAIN_HOURS} h by train — justify at claim')
+    elif 'train' in m:
+        pass                      # class (AC tier) is checked on the actual ticket, not here
+    elif 'cab' in m or 'taxi' in m:
+        if 'taxi' not in ent:
+            within = False
+            flags.append(f'Taxi is not in the approved class for this level ({entitled})')
+    elif 'own car' in m or 'own two' in m or 'two-wheeler' in m:
+        letter, n = level_number(level)
+        if 'own car' in m and not (letter == 'M' and n >= 1):
+            within = False
+            flags.append('Own 4-wheeler reimbursement is M1 and above only')
+    return within, entitled, flags
+
+
+def estimate_breakdown(level, city, days, misc=0, ticket=0):
+    """Policy-driven cost estimate for a tour sanction.
+
+    Ticket fare is NOT derived — the policy defines an entitled *class*, not
+    rupee fares, so the employee supplies the fare and we surface the class they
+    are entitled to. Lodging / food / local conveyance all come straight from
+    the approved matrices.
+
+    Lodging is charged per NIGHT (days - 1); DA and local conveyance per DAY.
+    """
+    grade = city_grade(city)
+    band = band_for_level(level)
+    days = int(days or 0)
+    nights = max(0, days - 1)
+
+    stay = stay_cap(level, grade)
+    da = da_cap(level, grade)
+    local_daily = LOCAL_CONVEYANCE.get(band, {}).get('daily')
+
+    # 'actual' bands (M7+) have no ceiling — nothing to pre-compute.
+    stay_rate = None if stay == 'actual' else stay
+    da_rate = None if da == 'actual' else da
+
+    lodging_amt = round(stay_rate * nights, 2) if stay_rate is not None else 0.0
+    food_amt = round(da_rate * days, 2) if da_rate is not None else 0.0
+    local_amt = round(local_daily * days, 2) if local_daily is not None else 0.0
+    ticket_amt = float(ticket or 0)
+    misc_amt = float(misc or 0)
+
+    return {
+        'level': level, 'band': band, 'city': city, 'city_grade': grade,
+        'days': days, 'nights': nights,
+        'entitled_mode': DA_MATRIX.get(band, {}).get('mode'),
+        'rates': {
+            'stay_per_night': stay, 'da_per_day': da, 'local_per_day': local_daily,
+        },
+        'lines': {
+            'ticket': ticket_amt, 'lodging': lodging_amt,
+            'food': food_amt, 'local': local_amt, 'misc': misc_amt,
+        },
+        'caps': {
+            'lodging': lodging_amt if stay_rate is not None else None,
+            'food': food_amt if da_rate is not None else None,
+            'local': local_amt if local_daily is not None else None,
+        },
+        'total': round(ticket_amt + lodging_amt + food_amt + local_amt + misc_amt, 2),
+    }
+
+
+def validate_estimate(level, city, days, lodging=0, food=0, local=0, advance=0, total=0):
+    """Flag an employee-adjusted estimate against policy ceilings."""
+    base = estimate_breakdown(level, city, days)
+    caps = base['caps']
+    flags = []
+    for key, label, val in (
+        ('lodging', 'Lodging', lodging), ('food', 'Food / DA', food),
+        ('local', 'Local conveyance', local),
+    ):
+        cap = caps.get(key)
+        if cap is not None and float(val or 0) > cap:
+            flags.append(f'{label} estimate ₹{float(val):,.0f} exceeds policy ceiling ₹{cap:,.0f}')
+    if float(advance or 0) > float(total or 0):
+        flags.append('Advance requested is more than the total estimated expense')
+    return flags
+
+
 def validate_expense_item(user_level, category, city_grade_val, claimed, has_bill, mode='', km=0, date_val=None):
     """Return (approved_cap, flags[]) for an expense line against policy."""
     flags = []

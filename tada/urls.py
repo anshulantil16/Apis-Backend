@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import (
     SendOTPView, VerifyOTPView, AdminOTPView, AdminVerifyView,
-    UserTemplateView, UserImportView, UsersListView, CapsView,
+    UserTemplateView, UserImportView, UsersListView, CapsView, EstimateView,
     AdminOverviewView, AdminResetView,
     MyRequestsView, RequestDetailView,
     CreateTourSanctionView, CreateTravelExpenseView, CreateLocalTravelView,
@@ -20,6 +20,7 @@ urlpatterns = [
     path('users/import/',    UserImportView.as_view()),
     path('users/',           UsersListView.as_view()),
     path('caps/',            CapsView.as_view()),
+    path('estimate/',        EstimateView.as_view()),
     path('admin/overview/',  AdminOverviewView.as_view()),
     path('admin/reset/',     AdminResetView.as_view()),
 

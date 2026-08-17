@@ -81,6 +81,10 @@ def serialize_request(r, detail=False):
         'return_mode_date': str(r.return_mode_date) if r.return_mode_date else None,
         'return_mode_time_pref': r.return_mode_time_pref,
         'return_mode_time_pref_label': r.get_return_mode_time_pref_display() if r.return_mode_time_pref else None,
+        'est_ticket_amount': float(r.est_ticket_amount), 'est_lodging_amount': float(r.est_lodging_amount),
+        'est_food_amount': float(r.est_food_amount), 'est_local_amount': float(r.est_local_amount),
+        'est_misc_amount': float(r.est_misc_amount), 'advance_amount': float(r.advance_amount),
+        'policy_flags': [f for f in (r.policy_flags or '').split('\n') if f],
         'total_claimed': float(r.total_claimed), 'total_approved': float(r.total_approved),
         'manager_remarks': r.manager_remarks, 'hr_remarks': r.hr_remarks, 'finance_remarks': r.finance_remarks,
         'created_at': r.created_at.strftime('%Y-%m-%d %H:%M'),
@@ -352,6 +356,28 @@ class CapsView(APIView):
         return Response(out)
 
 
+class EstimateView(APIView):
+    """Live policy estimate for the tour-sanction form.
+
+    The form calls this as the employee picks destination/dates/mode so the
+    lodging, food and local-conveyance figures shown are the same ones the
+    server will recompute on submit — one source of truth for the numbers.
+    """
+    def get(self, request):
+        q = request.query_params
+        u = _get_user(request)
+        level = u.level if u else q.get('level', '')
+        city = q.get('city', '')
+        days = policy.trip_days(_parse_date(q.get('from_date')), _parse_date(q.get('to_date'))) or 0
+        out = policy.estimate_breakdown(level, city, days,
+                                        misc=_sf(q.get('misc')), ticket=_sf(q.get('ticket')))
+        within, entitled, flags = policy.mode_entitlement(level, q.get('mode', ''))
+        out['mode_within_entitlement'] = within
+        out['entitled_mode'] = entitled
+        out['mode_flags'] = flags
+        return Response(out)
+
+
 # ── EMPLOYEE: create requests ─────────────────────────────────────────────────
 class MyRequestsView(APIView):
     def get(self, request):
@@ -376,18 +402,42 @@ class CreateTourSanctionView(APIView):
         if not u:
             return Response({'error': 'Login required.'}, status=401)
         d = request.data
+        city = d.get('destination_city', '')
+        from_date, to_date = _parse_date(d.get('from_date')), _parse_date(d.get('to_date'))
+        days = policy.trip_days(from_date, to_date) or 0
+
+        # Recompute the estimate server-side rather than trusting the posted
+        # total — the browser can send anything, and this number drives an
+        # approval and a cash advance.
+        ticket = _sf(d.get('est_ticket_amount'))
+        misc = _sf(d.get('est_misc_amount'))
+        base = policy.estimate_breakdown(u.level, city, days, misc=misc, ticket=ticket)
+        lodging = _sf(d.get('est_lodging_amount'), base['lines']['lodging'])
+        food = _sf(d.get('est_food_amount'), base['lines']['food'])
+        local = _sf(d.get('est_local_amount'), base['lines']['local'])
+        advance = _sf(d.get('advance_amount'))
+        total = round(ticket + lodging + food + local + misc, 2)
+
+        flags = policy.validate_estimate(u.level, city, days, lodging=lodging, food=food,
+                                         local=local, advance=advance, total=total)
+        _, _, mode_flags = policy.mode_entitlement(u.level, d.get('travel_mode', ''))
+        flags += mode_flags
+
         r = TravelRequest.objects.create(
             user=u, request_type='tour_sanction', status='submitted',
             purpose=d.get('purpose', ''), travel_address=d.get('travel_address', ''),
-            destination_city=d.get('destination_city', ''),
-            city_grade=policy.city_grade(d.get('destination_city', '')),
-            from_date=_parse_date(d.get('from_date')), to_date=_parse_date(d.get('to_date')),
+            destination_city=city, city_grade=policy.city_grade(city),
+            from_date=from_date, to_date=to_date,
             contact_number=d.get('contact_number', ''), sanction_number=d.get('sanction_number', ''),
-            estimate_amount=_sf(d.get('estimate_amount')), travel_mode=d.get('travel_mode', ''),
+            travel_mode=d.get('travel_mode', ''),
             travel_mode_date=_parse_date(d.get('travel_mode_date')),
             travel_mode_time_pref=d.get('travel_mode_time_pref', ''),
             return_mode_date=_parse_date(d.get('return_mode_date')),
             return_mode_time_pref=d.get('return_mode_time_pref', ''),
+            est_ticket_amount=ticket, est_lodging_amount=lodging, est_food_amount=food,
+            est_local_amount=local, est_misc_amount=misc,
+            estimate_amount=total, advance_amount=advance,
+            policy_flags='\n'.join(flags),
             submitted_at=timezone.now(),
         )
         ApprovalLog.objects.create(request=r, stage='employee', action='submitted', by_name=u.name)
