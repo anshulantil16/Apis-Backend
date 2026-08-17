@@ -108,6 +108,11 @@ class TravelRequest(models.Model):
     # Advance drawn before departure; settled against the actual claim later.
     advance_amount   = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
+    # Why a travel mode outside the level's entitlement was chosen (emergency,
+    # no train available, etc.). Required by the form when the mode is an
+    # exception; travels with the request for the approver to weigh.
+    mode_exception_reason = models.TextField(blank=True)
+
     # Policy breaches recorded at submission so the approver sees them (newline-separated).
     policy_flags     = models.TextField(blank=True)
 

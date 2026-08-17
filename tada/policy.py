@@ -102,6 +102,7 @@ def get_caps(level):
         'gstin': GSTIN,
         'company': COMPANY_NAME,
         'submission_deadline_days': SUBMISSION_DEADLINE_DAYS,
+        'mode_options': mode_options(level),
     }
 
 
@@ -149,6 +150,31 @@ def vehicle_amount(mode, km):
     if 'two' in m or '2' in m or 'bike' in m or 'scooter' in m:
         return round(km * VEHICLE_RATE_2W, 2)
     return 0.0
+
+
+# Canonical travel modes offered on the sanction form. Lives here (not just in
+# the UI) so entitlement is decided against the same list the form renders.
+TRAVEL_MODES = [
+    'Train', 'Flight', 'Bus', 'Cab / Taxi', 'Own Car',
+    'Own Two-Wheeler', 'Auto Rickshaw', 'Company Vehicle',
+]
+
+
+def mode_options(level):
+    """Split the travel modes into what this level is entitled to and what needs
+    an exception. The form shows the entitled set first; picking anything from
+    the second list is allowed but must carry a reason for the approver."""
+    entitled, exception = [], []
+    for m in TRAVEL_MODES:
+        within, _, flags = mode_entitlement(level, m)
+        (entitled if within else exception).append({
+            'mode': m, 'note': flags[0] if flags else '',
+        })
+    band = band_for_level(level)
+    return {
+        'entitled': entitled, 'exception': exception,
+        'entitled_mode': DA_MATRIX.get(band, {}).get('mode'),
+    }
 
 
 def trip_days(from_date, to_date):

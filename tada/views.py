@@ -84,6 +84,7 @@ def serialize_request(r, detail=False):
         'est_ticket_amount': float(r.est_ticket_amount), 'est_lodging_amount': float(r.est_lodging_amount),
         'est_food_amount': float(r.est_food_amount), 'est_local_amount': float(r.est_local_amount),
         'est_misc_amount': float(r.est_misc_amount), 'advance_amount': float(r.advance_amount),
+        'mode_exception_reason': r.mode_exception_reason,
         'policy_flags': [f for f in (r.policy_flags or '').split('\n') if f],
         'total_claimed': float(r.total_claimed), 'total_approved': float(r.total_approved),
         'manager_remarks': r.manager_remarks, 'hr_remarks': r.hr_remarks, 'finance_remarks': r.finance_remarks,
@@ -420,8 +421,12 @@ class CreateTourSanctionView(APIView):
 
         flags = policy.validate_estimate(u.level, city, days, lodging=lodging, food=food,
                                          local=local, advance=advance, total=total)
-        _, _, mode_flags = policy.mode_entitlement(u.level, d.get('travel_mode', ''))
+        mode = d.get('travel_mode', '')
+        within_mode, _, mode_flags = policy.mode_entitlement(u.level, mode)
         flags += mode_flags
+        reason = (d.get('mode_exception_reason') or '').strip()
+        if not within_mode and not reason:
+            return Response({'error': f'{mode} is outside your travel entitlement — please give a reason for the exception.'}, status=400)
 
         r = TravelRequest.objects.create(
             user=u, request_type='tour_sanction', status='submitted',
@@ -437,7 +442,7 @@ class CreateTourSanctionView(APIView):
             est_ticket_amount=ticket, est_lodging_amount=lodging, est_food_amount=food,
             est_local_amount=local, est_misc_amount=misc,
             estimate_amount=total, advance_amount=advance,
-            policy_flags='\n'.join(flags),
+            mode_exception_reason=reason, policy_flags='\n'.join(flags),
             submitted_at=timezone.now(),
         )
         ApprovalLog.objects.create(request=r, stage='employee', action='submitted', by_name=u.name)
