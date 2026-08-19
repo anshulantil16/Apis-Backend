@@ -317,17 +317,29 @@ def itinerary_estimate(level, legs, misc=0):
         nights = d if i < n - 1 else max(0, d - 1)
         e = leg_estimate(level, leg.get('destination_city', ''), d, nights,
                          ticket=leg.get('est_ticket_amount', 0))
-        e['seq'] = i
+        # Keep the caller's own id for this leg. Legs are sorted by date to work
+        # out nights, so the position here is NOT the position the caller sent —
+        # returning the sorted index would hand each leg its neighbour's costs.
+        e['seq'] = leg.get('seq', i)
+        e['order'] = i
         e['from_date'], e['to_date'] = str(leg['from_date']), str(leg['to_date'])
         e['travel_mode'] = leg.get('travel_mode', '')
         out.append(e)
         total_days += d
 
     misc_amt = float(misc or 0)
+
+    # Trip ceiling per head = sum of the stops' ceilings. If any stop is an
+    # 'actual' band there is no ceiling for that head across the trip either.
+    def _cap(head):
+        vals = [l['caps'][head] for l in out]
+        return None if not vals or any(v is None for v in vals) else round(sum(vals), 2)
+
     return {
         'legs': out,
         'total_days': total_days,
         'total_nights': sum(l['nights'] for l in out),
+        'caps': {'lodging': _cap('lodging'), 'food': _cap('food'), 'local': _cap('local')},
         'lines': {
             'ticket': round(sum(l['lines']['ticket'] for l in out), 2),
             'lodging': round(sum(l['lines']['lodging'] for l in out), 2),

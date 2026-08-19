@@ -399,7 +399,7 @@ class EstimateView(APIView):
             lf, lt = _parse_date(lg.get('from_date')), _parse_date(lg.get('to_date'))
             if not lf or not lt:
                 continue
-            legs.append({'seq': i, 'from_date': lf, 'to_date': lt,
+            legs.append({'seq': int(lg.get('seq', i) or 0), 'from_date': lf, 'to_date': lt,
                          'destination_city': lg.get('destination_city', ''),
                          'travel_mode': lg.get('travel_mode', ''),
                          'est_ticket_amount': _sf(lg.get('est_ticket_amount'))})
@@ -450,7 +450,7 @@ class CreateTourSanctionView(APIView):
             if not lf or not lt:
                 continue
             legs.append({
-                'seq': i, 'from_date': lf, 'to_date': lt,
+                'seq': int(lg.get('seq', i) or 0), 'from_date': lf, 'to_date': lt,
                 'destination_city': lg.get('destination_city', ''),
                 'purpose': lg.get('purpose', ''),
                 'travel_mode': lg.get('travel_mode', ''),
@@ -476,6 +476,13 @@ class CreateTourSanctionView(APIView):
             local = _sf(d.get('est_local_amount'), it['lines']['local'])
             total = round(ticket + lodging + food + local + misc, 2)
             flags += policy.validate_itinerary(legs, from_date, to_date)
+            # Same ceiling check the single-destination path gets, against the
+            # summed per-stop ceilings.
+            for head, label, val in (('lodging', 'Lodging', lodging), ('food', 'Food / DA', food),
+                                     ('local', 'Local conveyance', local)):
+                cap = it['caps'].get(head)
+                if cap is not None and val > cap:
+                    flags.append(f'{label} estimate ₹{val:,.0f} exceeds policy ceiling ₹{cap:,.0f}')
             days = it['total_days']
             if not city:
                 city = legs[0]['destination_city']
@@ -487,8 +494,9 @@ class CreateTourSanctionView(APIView):
             food = _sf(d.get('est_food_amount'), base['lines']['food'])
             local = _sf(d.get('est_local_amount'), base['lines']['local'])
             total = round(ticket + lodging + food + local + misc, 2)
+            # advance is checked once for both paths, just below
             flags += policy.validate_estimate(u.level, city, days, lodging=lodging, food=food,
-                                              local=local, advance=advance, total=total)
+                                              local=local, advance=0, total=total)
 
         if float(advance or 0) > total:
             flags.append('Advance requested is more than the total estimated expense')
