@@ -469,6 +469,17 @@ class CreateTourSanctionView(APIView):
         flags = []
 
         if legs:
+            # The form bounds the stop pickers to the trip window, but a typed
+            # date can still get past that, and a stop outside the trip would be
+            # costed for days the trip never covers — refuse it outright rather
+            # than flag it.
+            if from_date and to_date:
+                stray = [lg['destination_city'] or f"Stop {lg['seq'] + 1}"
+                         for lg in legs if lg['from_date'] < from_date or lg['to_date'] > to_date]
+                if stray:
+                    return Response({'error': f"{', '.join(stray)} falls outside your travel dates "
+                                              f"({from_date} to {to_date}). Stops must be within the trip."}, status=400)
+
             # Each stop is costed at its own city grade, then summed.
             it = policy.itinerary_estimate(u.level, legs, misc=misc)
             ticket = it['lines']['ticket']
