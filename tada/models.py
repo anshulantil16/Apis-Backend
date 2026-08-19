@@ -161,6 +161,7 @@ class TravelLeg(models.Model):
     from_date        = models.DateField(null=True, blank=True)
     to_date          = models.DateField(null=True, blank=True)
     destination_city = models.CharField(max_length=200, blank=True)
+    travel_address   = models.CharField(max_length=500, blank=True)   # where you actually are at this stop
     city_grade       = models.CharField(max_length=1, blank=True)
     purpose          = models.CharField(max_length=500, blank=True)
 

@@ -89,8 +89,8 @@ def serialize_request(r, detail=False):
         'legs': [{
             'seq': l.seq, 'from_date': str(l.from_date) if l.from_date else None,
             'to_date': str(l.to_date) if l.to_date else None, 'days': l.days,
-            'destination_city': l.destination_city, 'city_grade': l.city_grade,
-            'purpose': l.purpose, 'travel_mode': l.travel_mode,
+            'destination_city': l.destination_city, 'travel_address': l.travel_address,
+            'city_grade': l.city_grade, 'purpose': l.purpose, 'travel_mode': l.travel_mode,
             'ticket_date': str(l.ticket_date) if l.ticket_date else None,
             'ticket_time_pref_label': l.get_ticket_time_pref_display() if l.ticket_time_pref else None,
             'mode_exception_reason': l.mode_exception_reason,
@@ -452,6 +452,7 @@ class CreateTourSanctionView(APIView):
             legs.append({
                 'seq': int(lg.get('seq', i) or 0), 'from_date': lf, 'to_date': lt,
                 'destination_city': lg.get('destination_city', ''),
+                'travel_address': lg.get('travel_address', ''),
                 'purpose': lg.get('purpose', ''),
                 'travel_mode': lg.get('travel_mode', ''),
                 'ticket_date': _parse_date(lg.get('ticket_date')),
@@ -538,7 +539,7 @@ class CreateTourSanctionView(APIView):
                 e = per_leg.get(lg['seq'], {}).get('lines', {})
                 TravelLeg.objects.create(
                     request=r, seq=lg['seq'], from_date=lg['from_date'], to_date=lg['to_date'],
-                    destination_city=lg['destination_city'],
+                    destination_city=lg['destination_city'], travel_address=lg['travel_address'],
                     city_grade=policy.city_grade(lg['destination_city']),
                     purpose=lg['purpose'], travel_mode=lg['travel_mode'],
                     ticket_date=lg['ticket_date'], ticket_time_pref=lg['ticket_time_pref'],
