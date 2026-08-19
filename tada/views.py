@@ -17,7 +17,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
-from .models import TadaUser, TadaOTP, TravelRequest, ExpenseItem, LocalTravelItem, ApprovalLog
+from .models import TadaUser, TadaOTP, TravelRequest, TravelLeg, ExpenseItem, LocalTravelItem, ApprovalLog
 from . import policy
 
 
@@ -86,6 +86,17 @@ def serialize_request(r, detail=False):
         'est_misc_amount': float(r.est_misc_amount), 'advance_amount': float(r.advance_amount),
         'mode_exception_reason': r.mode_exception_reason,
         'policy_flags': [f for f in (r.policy_flags or '').split('\n') if f],
+        'legs': [{
+            'seq': l.seq, 'from_date': str(l.from_date) if l.from_date else None,
+            'to_date': str(l.to_date) if l.to_date else None, 'days': l.days,
+            'destination_city': l.destination_city, 'city_grade': l.city_grade,
+            'purpose': l.purpose, 'travel_mode': l.travel_mode,
+            'ticket_date': str(l.ticket_date) if l.ticket_date else None,
+            'ticket_time_pref_label': l.get_ticket_time_pref_display() if l.ticket_time_pref else None,
+            'mode_exception_reason': l.mode_exception_reason,
+            'est_ticket_amount': float(l.est_ticket_amount), 'est_lodging_amount': float(l.est_lodging_amount),
+            'est_food_amount': float(l.est_food_amount), 'est_local_amount': float(l.est_local_amount),
+        } for l in r.legs.all()],
         'total_claimed': float(r.total_claimed), 'total_approved': float(r.total_approved),
         'manager_remarks': r.manager_remarks, 'hr_remarks': r.hr_remarks, 'finance_remarks': r.finance_remarks,
         'created_at': r.created_at.strftime('%Y-%m-%d %H:%M'),
@@ -378,6 +389,30 @@ class EstimateView(APIView):
         out['mode_flags'] = flags
         return Response(out)
 
+    def post(self, request):
+        """Cost a multi-stop itinerary — each leg at its own city grade."""
+        d = request.data
+        u = _get_user(request)
+        level = u.level if u else d.get('level', '')
+        legs = []
+        for i, lg in enumerate(d.get('legs') or []):
+            lf, lt = _parse_date(lg.get('from_date')), _parse_date(lg.get('to_date'))
+            if not lf or not lt:
+                continue
+            legs.append({'seq': i, 'from_date': lf, 'to_date': lt,
+                         'destination_city': lg.get('destination_city', ''),
+                         'travel_mode': lg.get('travel_mode', ''),
+                         'est_ticket_amount': _sf(lg.get('est_ticket_amount'))})
+        out = policy.itinerary_estimate(level, legs, misc=_sf(d.get('misc')))
+        out['itinerary_flags'] = policy.validate_itinerary(
+            legs, _parse_date(d.get('from_date')), _parse_date(d.get('to_date')))
+        for leg_out, leg_in in zip(out['legs'], sorted(legs, key=lambda l: l['from_date'])):
+            within, entitled, flags = policy.mode_entitlement(level, leg_in['travel_mode'])
+            leg_out['mode_within_entitlement'] = within
+            leg_out['mode_flags'] = flags
+        out['entitled_mode'] = policy.mode_options(level)['entitled_mode']
+        return Response(out)
+
 
 # ── EMPLOYEE: create requests ─────────────────────────────────────────────────
 class MyRequestsView(APIView):
@@ -407,26 +442,70 @@ class CreateTourSanctionView(APIView):
         from_date, to_date = _parse_date(d.get('from_date')), _parse_date(d.get('to_date'))
         days = policy.trip_days(from_date, to_date) or 0
 
+        # Multi-stop itinerary, if the employee broke the trip down by city.
+        raw_legs = d.get('legs') or []
+        legs = []
+        for i, lg in enumerate(raw_legs):
+            lf, lt = _parse_date(lg.get('from_date')), _parse_date(lg.get('to_date'))
+            if not lf or not lt:
+                continue
+            legs.append({
+                'seq': i, 'from_date': lf, 'to_date': lt,
+                'destination_city': lg.get('destination_city', ''),
+                'purpose': lg.get('purpose', ''),
+                'travel_mode': lg.get('travel_mode', ''),
+                'ticket_date': _parse_date(lg.get('ticket_date')),
+                'ticket_time_pref': lg.get('ticket_time_pref', ''),
+                'mode_exception_reason': (lg.get('mode_exception_reason') or '').strip(),
+                'est_ticket_amount': _sf(lg.get('est_ticket_amount')),
+            })
+
         # Recompute the estimate server-side rather than trusting the posted
         # total — the browser can send anything, and this number drives an
         # approval and a cash advance.
-        ticket = _sf(d.get('est_ticket_amount'))
         misc = _sf(d.get('est_misc_amount'))
-        base = policy.estimate_breakdown(u.level, city, days, misc=misc, ticket=ticket)
-        lodging = _sf(d.get('est_lodging_amount'), base['lines']['lodging'])
-        food = _sf(d.get('est_food_amount'), base['lines']['food'])
-        local = _sf(d.get('est_local_amount'), base['lines']['local'])
         advance = _sf(d.get('advance_amount'))
-        total = round(ticket + lodging + food + local + misc, 2)
+        flags = []
 
-        flags = policy.validate_estimate(u.level, city, days, lodging=lodging, food=food,
-                                         local=local, advance=advance, total=total)
-        mode = d.get('travel_mode', '')
-        within_mode, _, mode_flags = policy.mode_entitlement(u.level, mode)
-        flags += mode_flags
+        if legs:
+            # Each stop is costed at its own city grade, then summed.
+            it = policy.itinerary_estimate(u.level, legs, misc=misc)
+            ticket = it['lines']['ticket']
+            lodging = _sf(d.get('est_lodging_amount'), it['lines']['lodging'])
+            food = _sf(d.get('est_food_amount'), it['lines']['food'])
+            local = _sf(d.get('est_local_amount'), it['lines']['local'])
+            total = round(ticket + lodging + food + local + misc, 2)
+            flags += policy.validate_itinerary(legs, from_date, to_date)
+            days = it['total_days']
+            if not city:
+                city = legs[0]['destination_city']
+        else:
+            base = policy.estimate_breakdown(u.level, city, days, misc=misc,
+                                             ticket=_sf(d.get('est_ticket_amount')))
+            ticket = _sf(d.get('est_ticket_amount'))
+            lodging = _sf(d.get('est_lodging_amount'), base['lines']['lodging'])
+            food = _sf(d.get('est_food_amount'), base['lines']['food'])
+            local = _sf(d.get('est_local_amount'), base['lines']['local'])
+            total = round(ticket + lodging + food + local + misc, 2)
+            flags += policy.validate_estimate(u.level, city, days, lodging=lodging, food=food,
+                                              local=local, advance=advance, total=total)
+
+        if float(advance or 0) > total:
+            flags.append('Advance requested is more than the total estimated expense')
+
+        # Every mode in play must be within entitlement, or carry a reason —
+        # per leg for a multi-stop trip, else the single request-level mode.
         reason = (d.get('mode_exception_reason') or '').strip()
-        if not within_mode and not reason:
-            return Response({'error': f'{mode} is outside your travel entitlement — please give a reason for the exception.'}, status=400)
+        checks = ([(lg['travel_mode'], lg['mode_exception_reason'], lg['destination_city']) for lg in legs]
+                  if legs else [(d.get('travel_mode', ''), reason, city)])
+        for mode, why, where in checks:
+            if not mode:
+                continue
+            within_mode, _, mode_flags = policy.mode_entitlement(u.level, mode)
+            flags += [f'{where}: {f}' if where and legs else f for f in mode_flags]
+            if not within_mode and not why:
+                label = f' for {where}' if where and legs else ''
+                return Response({'error': f'{mode}{label} is outside your travel entitlement — please give a reason for the exception.'}, status=400)
 
         r = TravelRequest.objects.create(
             user=u, request_type='tour_sanction', status='submitted',
@@ -445,6 +524,22 @@ class CreateTourSanctionView(APIView):
             mode_exception_reason=reason, policy_flags='\n'.join(flags),
             submitted_at=timezone.now(),
         )
+        if legs:
+            per_leg = {l['seq']: l for l in policy.itinerary_estimate(u.level, legs, misc=misc)['legs']}
+            for lg in legs:
+                e = per_leg.get(lg['seq'], {}).get('lines', {})
+                TravelLeg.objects.create(
+                    request=r, seq=lg['seq'], from_date=lg['from_date'], to_date=lg['to_date'],
+                    destination_city=lg['destination_city'],
+                    city_grade=policy.city_grade(lg['destination_city']),
+                    purpose=lg['purpose'], travel_mode=lg['travel_mode'],
+                    ticket_date=lg['ticket_date'], ticket_time_pref=lg['ticket_time_pref'],
+                    mode_exception_reason=lg['mode_exception_reason'],
+                    est_ticket_amount=lg['est_ticket_amount'],
+                    est_lodging_amount=e.get('lodging', 0), est_food_amount=e.get('food', 0),
+                    est_local_amount=e.get('local', 0),
+                )
+
         ApprovalLog.objects.create(request=r, stage='employee', action='submitted', by_name=u.name)
         return Response({'message': 'Tour Programme submitted for Manager approval.',
                          'request': serialize_request(r, detail=True)})

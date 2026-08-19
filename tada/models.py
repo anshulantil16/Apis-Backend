@@ -144,6 +144,52 @@ class TravelRequest(models.Model):
         return (self.to_date - self.from_date).days + 1
 
 
+class TravelLeg(models.Model):
+    """One stop of a multi-city tour — 'days 1-4 in Delhi, then 5-7 in Kanpur'.
+
+    A leg exists because entitlements are per city grade: Delhi is grade A and
+    Kanpur grade C, so costing a mixed trip against a single destination over-
+    or under-states the allowance. Each leg carries its own dates, city and the
+    travel mode used to *reach* it; the journey home is the request-level
+    return ticket.
+
+    A single-destination trip needs no legs at all — the request-level fields
+    still describe it, and older requests keep working untouched.
+    """
+    request          = models.ForeignKey(TravelRequest, on_delete=models.CASCADE, related_name='legs')
+    seq              = models.PositiveIntegerField(default=0)   # display order
+    from_date        = models.DateField(null=True, blank=True)
+    to_date          = models.DateField(null=True, blank=True)
+    destination_city = models.CharField(max_length=200, blank=True)
+    city_grade       = models.CharField(max_length=1, blank=True)
+    purpose          = models.CharField(max_length=500, blank=True)
+
+    # Travel INTO this city (the return home is on the request).
+    travel_mode      = models.CharField(max_length=100, blank=True)
+    ticket_date      = models.DateField(null=True, blank=True)
+    ticket_time_pref = models.CharField(max_length=20, choices=TravelRequest.TIME_PREF_CHOICES, blank=True)
+    mode_exception_reason = models.TextField(blank=True)
+
+    # Per-leg estimate. Lodging/food/local come from this leg's own city grade.
+    est_ticket_amount  = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    est_lodging_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    est_food_amount    = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    est_local_amount   = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    class Meta:
+        ordering = ['seq', 'from_date']
+
+    def __str__(self):
+        return f"Leg {self.seq + 1}: {self.destination_city} ({self.from_date} → {self.to_date})"
+
+    @property
+    def days(self):
+        if not self.from_date or not self.to_date:
+            return None
+        d = (self.to_date - self.from_date).days + 1
+        return d if d > 0 else None
+
+
 class ExpenseItem(models.Model):
     """Line item for a Travelling-Expenses claim (tabbed categories) with a bill."""
     CATEGORY_CHOICES = [

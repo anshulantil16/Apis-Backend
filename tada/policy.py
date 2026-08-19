@@ -273,6 +273,102 @@ def estimate_breakdown(level, city, days, misc=0, ticket=0):
     }
 
 
+def leg_estimate(level, city, days, nights, ticket=0):
+    """Policy amounts for one stop of a tour, costed at that city's own grade."""
+    grade = city_grade(city)
+    band = band_for_level(level)
+    stay, da = stay_cap(level, grade), da_cap(level, grade)
+    local_daily = LOCAL_CONVEYANCE.get(band, {}).get('daily')
+    stay_rate = None if stay == 'actual' else stay
+    da_rate = None if da == 'actual' else da
+
+    lodging = round(stay_rate * nights, 2) if stay_rate is not None else 0.0
+    food = round(da_rate * days, 2) if da_rate is not None else 0.0
+    local = round(local_daily * days, 2) if local_daily is not None else 0.0
+    return {
+        'city': city, 'city_grade': grade, 'days': days, 'nights': nights,
+        'rates': {'stay_per_night': stay, 'da_per_day': da, 'local_per_day': local_daily},
+        'lines': {'ticket': float(ticket or 0), 'lodging': lodging, 'food': food, 'local': local},
+        'caps': {'lodging': lodging if stay_rate is not None else None,
+                 'food': food if da_rate is not None else None,
+                 'local': local if local_daily is not None else None},
+        'subtotal': round(float(ticket or 0) + lodging + food + local, 2),
+    }
+
+
+def itinerary_estimate(level, legs, misc=0):
+    """Cost a multi-stop tour leg by leg, each at its own city grade.
+
+    Nights are assigned to the city you sleep in: every leg but the last is
+    charged for as many nights as it has days (the night after the final day is
+    spent travelling on to the next city, or sleeping there), and the last leg
+    drops one night because that day ends back at HQ. For legs that tile the
+    trip contiguously this sums to exactly (total days - 1) nights, matching how
+    a single-destination trip is costed.
+    """
+    ordered = sorted(
+        [l for l in legs if l.get('from_date') and l.get('to_date')],
+        key=lambda l: l['from_date'],
+    )
+    n = len(ordered)
+    out, total_days = [], 0
+    for i, leg in enumerate(ordered):
+        d = trip_days(leg['from_date'], leg['to_date']) or 0
+        nights = d if i < n - 1 else max(0, d - 1)
+        e = leg_estimate(level, leg.get('destination_city', ''), d, nights,
+                         ticket=leg.get('est_ticket_amount', 0))
+        e['seq'] = i
+        e['from_date'], e['to_date'] = str(leg['from_date']), str(leg['to_date'])
+        e['travel_mode'] = leg.get('travel_mode', '')
+        out.append(e)
+        total_days += d
+
+    misc_amt = float(misc or 0)
+    return {
+        'legs': out,
+        'total_days': total_days,
+        'total_nights': sum(l['nights'] for l in out),
+        'lines': {
+            'ticket': round(sum(l['lines']['ticket'] for l in out), 2),
+            'lodging': round(sum(l['lines']['lodging'] for l in out), 2),
+            'food': round(sum(l['lines']['food'] for l in out), 2),
+            'local': round(sum(l['lines']['local'] for l in out), 2),
+            'misc': misc_amt,
+        },
+        'total': round(sum(l['subtotal'] for l in out) + misc_amt, 2),
+    }
+
+
+def validate_itinerary(legs, trip_from=None, trip_to=None):
+    """Flag overlapping, out-of-window or unallocated days across the legs."""
+    flags = []
+    ordered = sorted(
+        [l for l in legs if l.get('from_date') and l.get('to_date')],
+        key=lambda l: l['from_date'],
+    )
+    for l in ordered:
+        if l['to_date'] < l['from_date']:
+            flags.append(f"{l.get('destination_city') or 'A stop'} ends before it starts")
+
+    for a, b in zip(ordered, ordered[1:]):
+        if b['from_date'] <= a['to_date']:
+            flags.append(f"{a.get('destination_city') or 'stop'} and {b.get('destination_city') or 'stop'} overlap")
+        elif (b['from_date'] - a['to_date']).days > 1:
+            gap = (b['from_date'] - a['to_date']).days - 1
+            flags.append(f"{gap} day(s) between {a.get('destination_city') or 'stop'} and "
+                         f"{b.get('destination_city') or 'stop'} are not assigned to any city — no DA estimated for them")
+
+    if ordered and trip_from and trip_to:
+        if ordered[0]['from_date'] < trip_from or ordered[-1]['to_date'] > trip_to:
+            flags.append('Itinerary falls outside the overall travel dates')
+        else:
+            if (ordered[0]['from_date'] - trip_from).days > 0:
+                flags.append(f"First stop starts {(ordered[0]['from_date'] - trip_from).days} day(s) after the trip start date")
+            if (trip_to - ordered[-1]['to_date']).days > 0:
+                flags.append(f"Last stop ends {(trip_to - ordered[-1]['to_date']).days} day(s) before the trip end date")
+    return flags
+
+
 def validate_estimate(level, city, days, lodging=0, food=0, local=0, advance=0, total=0):
     """Flag an employee-adjusted estimate against policy ceilings."""
     base = estimate_breakdown(level, city, days)
