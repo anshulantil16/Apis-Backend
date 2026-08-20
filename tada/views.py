@@ -713,6 +713,16 @@ class ActionView(APIView):
         if not flow:
             return Response({'error': 'Your role cannot action requests.'}, status=403)
 
+        # Nobody signs off their own travel, whatever their role.
+        if r.user_id == u.id:
+            return Response({'error': 'You cannot action your own request.'}, status=403)
+
+        # A manager's authority covers their own reports only. The queue already
+        # filters by team, but that is presentation — without this check a
+        # direct POST lets any manager approve any employee's travel.
+        if u.role == 'manager' and (r.user.reporting_manager_id or '') != u.employee_id:
+            return Response({'error': "This request is not from one of your reports."}, status=403)
+
         if action == 'paid' and u.role == 'finance' and r.status == 'finance_approved':
             r.status = 'paid'
             r.finance_action_at = timezone.now()
@@ -735,7 +745,12 @@ class ActionView(APIView):
         elif u.role == 'finance':
             r.finance_remarks = remarks; r.finance_action_at = now
             if action == 'approve':
-                r.total_approved = r.total_claimed
+                # A claim is approved at what was claimed. A tour sanction has
+                # nothing claimed yet — it is pre-travel — so the figure finance
+                # actually releases is the advance; recording total_claimed
+                # there would file every sanctioned trip as approved for zero.
+                r.total_approved = (r.advance_amount if r.request_type == 'tour_sanction'
+                                    else r.total_claimed)
         r.save()
         ApprovalLog.objects.create(request=r, stage=u.role, action=action + 'd', by_name=u.name, remarks=remarks)
         return Response({'message': f'Request {action}d.', 'request': serialize_request(r, detail=True)})
