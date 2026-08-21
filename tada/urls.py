@@ -3,7 +3,7 @@ from .views import (
     SendOTPView, VerifyOTPView, AdminOTPView, AdminVerifyView,
     UserTemplateView, UserImportView, UsersListView, CapsView, EstimateView,
     AdminOverviewView, AdminResetView,
-    MyRequestsView, RequestDetailView,
+    MyRequestsView, RequestDetailView, ClaimableSanctionsView,
     CreateTourSanctionView, CreateTravelExpenseView, CreateLocalTravelView,
     BillDownloadView, PendingQueueView, ActionView,
 )
@@ -26,6 +26,7 @@ urlpatterns = [
 
     # Employee — create & view requests
     path('requests/mine/',                 MyRequestsView.as_view()),
+    path('requests/claimable/',            ClaimableSanctionsView.as_view()),
     path('requests/<int:req_id>/',         RequestDetailView.as_view()),
     path('requests/tour-sanction/',        CreateTourSanctionView.as_view()),
     path('requests/travel-expense/',       CreateTravelExpenseView.as_view()),

@@ -69,6 +69,13 @@ class TravelRequest(models.Model):
     request_type  = models.CharField(max_length=20, choices=TYPE_CHOICES)
     status        = models.CharField(max_length=25, choices=STATUS_CHOICES, default='draft')
 
+    # A Travelling-Expenses claim settles the Tour Sanction it was approved
+    # under: the sanction holds what the trip was estimated to cost and what
+    # advance was drawn, the claim holds what it actually cost with bills.
+    # Null for a standalone claim (travel that was never pre-sanctioned).
+    sanction      = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL,
+                                      related_name='claims', limit_choices_to={'request_type': 'tour_sanction'})
+
     # ── Common / trip details ────────────────────────────────────────────────
     purpose          = models.TextField(blank=True)
     from_date        = models.DateField(null=True, blank=True)
@@ -142,6 +149,46 @@ class TravelRequest(models.Model):
         if not self.from_date or not self.to_date:
             return None
         return (self.to_date - self.from_date).days + 1
+
+    # Rejected claims don't tie up the sanction — the employee refiles against it.
+    LIVE_CLAIM_STATUSES = ['submitted', 'manager_approved', 'hr_approved',
+                           'finance_approved', 'paid']
+
+    @property
+    def open_claim(self):
+        """The live claim settling this sanction, if any."""
+        if self.request_type != 'tour_sanction':
+            return None
+        return self.claims.filter(status__in=self.LIVE_CLAIM_STATUSES).first()
+
+    @property
+    def is_claimable(self):
+        """A fully approved trip that has been taken and not yet claimed for."""
+        return (self.request_type == 'tour_sanction'
+                and self.status in ('finance_approved', 'paid')
+                and self.open_claim is None)
+
+    @property
+    def estimate_heads(self):
+        """Per-head estimate keyed by the expense category it maps to, so a
+        claim can be shown line by line against what was sanctioned."""
+        return {
+            'travel': float(self.est_ticket_amount),
+            'lodging': float(self.est_lodging_amount),
+            'food': float(self.est_food_amount),
+            'local_transport': float(self.est_local_amount),
+            'misc': float(self.est_misc_amount),
+        }
+
+    @property
+    def advance_adjusted(self):
+        """Advance already drawn against this claim's sanction."""
+        return float(self.sanction.advance_amount) if self.sanction else 0.0
+
+    @property
+    def net_settlement(self):
+        """Positive = still owed to the employee, negative = to recover."""
+        return round(float(self.total_claimed) - self.advance_adjusted, 2)
 
 
 class TravelLeg(models.Model):

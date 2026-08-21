@@ -86,6 +86,22 @@ def serialize_request(r, detail=False):
         'est_misc_amount': float(r.est_misc_amount), 'advance_amount': float(r.advance_amount),
         'mode_exception_reason': r.mode_exception_reason,
         'policy_flags': [f for f in (r.policy_flags or '').split('\n') if f],
+        'is_claimable': r.is_claimable,
+        'claim_id': (r.open_claim.id if r.request_type == 'tour_sanction' and r.open_claim else None),
+        # For a claim: what the trip was sanctioned to cost, so approvers see
+        # estimate against actual rather than a bare total.
+        'sanction': ({
+            'id': r.sanction.id,
+            'sanction_number': r.sanction.sanction_number,
+            'from_date': str(r.sanction.from_date) if r.sanction.from_date else None,
+            'to_date': str(r.sanction.to_date) if r.sanction.to_date else None,
+            'destination_city': r.sanction.destination_city,
+            'estimate_amount': float(r.sanction.estimate_amount),
+            'advance_amount': float(r.sanction.advance_amount),
+            'heads': r.sanction.estimate_heads,
+        } if r.sanction else None),
+        'advance_adjusted': r.advance_adjusted,
+        'net_settlement': r.net_settlement,
         'legs': [{
             'seq': l.seq, 'from_date': str(l.from_date) if l.from_date else None,
             'to_date': str(l.to_date) if l.to_date else None, 'days': l.days,
@@ -424,6 +440,26 @@ class MyRequestsView(APIView):
         return Response({'requests': [serialize_request(r) for r in rs]})
 
 
+class ClaimableSanctionsView(APIView):
+    """Approved trips this employee still has to file expenses for.
+
+    The gap this closes: a sanction would be approved all the way through,
+    the trip happened, and nothing connected the eventual expense claim back
+    to what was sanctioned — so nobody could see estimate against actual, or
+    net the advance off what was owed.
+    """
+    def get(self, request):
+        u = _get_user(request)
+        if not u:
+            return Response({'error': 'Login required.'}, status=401)
+        sanctions = (TravelRequest.objects
+                     .filter(user=u, request_type='tour_sanction',
+                             status__in=['finance_approved', 'paid'])
+                     .order_by('-to_date', '-created_at'))
+        return Response({'sanctions': [serialize_request(s, detail=True)
+                                       for s in sanctions if s.is_claimable]})
+
+
 class RequestDetailView(APIView):
     def get(self, request, req_id):
         r = TravelRequest.objects.filter(id=req_id).first()
@@ -581,20 +617,40 @@ class CreateTravelExpenseView(APIView):
         except Exception:
             payload = request.data
         items = payload.get('items', [])
-        city = payload.get('destination_city', '')
+
+        # A claim may settle a previously approved sanction. Validate it belongs
+        # to this employee and is still open — otherwise one trip could be
+        # claimed for twice, or against someone else's approval.
+        sanction = None
+        sid = payload.get('sanction_id')
+        if sid:
+            sanction = TravelRequest.objects.filter(id=sid, user=u,
+                                                    request_type='tour_sanction').first()
+            if not sanction:
+                return Response({'error': 'That sanction was not found against your account.'}, status=404)
+            if sanction.status not in ('finance_approved', 'paid'):
+                return Response({'error': f'That trip is not fully approved yet '
+                                          f'({sanction.get_status_display()}).'}, status=400)
+            if sanction.open_claim:
+                return Response({'error': 'Expenses have already been filed for that trip.'}, status=400)
+
+        # Fall back to the sanction's own trip details for anything not restated.
+        city = payload.get('destination_city') or (sanction.destination_city if sanction else '')
         cgrade = policy.city_grade(city)
+        fd = _parse_date(payload.get('from_date')) or (sanction.from_date if sanction else None)
+        td = _parse_date(payload.get('to_date')) or (sanction.to_date if sanction else None)
 
         # Hard-stop: 60-day deadline (checked against the earliest item / from_date)
-        fd = _parse_date(payload.get('from_date'))
         if fd and not policy.is_within_deadline(fd):
             return Response({'error': f'Blocked: travel date is beyond the {policy.SUBMISSION_DEADLINE_DAYS}-day '
                                       f'submission deadline.'}, status=400)
 
         r = TravelRequest.objects.create(
-            user=u, request_type='travel_expense', status='submitted',
-            purpose=payload.get('purpose', ''), destination_city=city, city_grade=cgrade,
-            from_date=fd, to_date=_parse_date(payload.get('to_date')),
-            sanction_number=payload.get('sanction_number', ''), travel_mode=payload.get('travel_mode', ''),
+            user=u, request_type='travel_expense', status='submitted', sanction=sanction,
+            purpose=payload.get('purpose') or (sanction.purpose if sanction else ''),
+            destination_city=city, city_grade=cgrade, from_date=fd, to_date=td,
+            sanction_number=payload.get('sanction_number') or (sanction.sanction_number if sanction else ''),
+            travel_mode=payload.get('travel_mode') or (sanction.travel_mode if sanction else ''),
             submitted_at=timezone.now(),
         )
         total = 0.0
