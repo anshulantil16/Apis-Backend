@@ -129,8 +129,12 @@ def build_settlement(r):
             'to_date': str(s.to_date) if s and s.to_date else (str(r.to_date) if r.to_date else None),
             'days': days, 'nights': max(0, days - 1),
             'sanctioned': s.estimate_heads if s else {k: 0.0 for k, _ in HEAD_LABELS},
-            'policy': (leg_policy_heads(level, city, days, max(0, days - 1)) if city
+            # Policy needs a city (for the grade) and dates (for nights/days).
+            # A standalone claim missing either can't be measured against it —
+            # say so rather than quietly reporting a ceiling of zero.
+            'policy': (leg_policy_heads(level, city, days, max(0, days - 1)) if city and days
                        else {k: None for k, _ in HEAD_LABELS}),
+            'policy_unavailable': not (city and days),
         })
 
     tot = {'policy': 0.0, 'sanctioned': 0.0, 'claimed': 0.0}
@@ -140,8 +144,8 @@ def build_settlement(r):
             pol = st['policy'].get(key)
             san = float(st['sanctioned'].get(key) or 0)
             act = claimed.get((st['key'], key), 0.0)
-            if pol is None and not san and not act:
-                continue
+            # Every head is listed even at zero. A head that simply vanishes
+            # reads as missing data; shown at zero it reads as nothing claimed.
             rows.append({
                 'key': key, 'label': label, 'policy': pol, 'sanctioned': san, 'claimed': act,
                 'over_policy': round(act - pol, 2) if pol is not None and act > pol else 0,
