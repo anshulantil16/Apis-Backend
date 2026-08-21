@@ -112,6 +112,7 @@ def serialize_request(r, detail=False):
             'mode_exception_reason': l.mode_exception_reason,
             'est_ticket_amount': float(l.est_ticket_amount), 'est_lodging_amount': float(l.est_lodging_amount),
             'est_food_amount': float(l.est_food_amount), 'est_local_amount': float(l.est_local_amount),
+            'heads': l.estimate_heads,
         } for l in r.legs.all()],
         'total_claimed': float(r.total_claimed), 'total_approved': float(r.total_approved),
         'manager_remarks': r.manager_remarks, 'hr_remarks': r.hr_remarks, 'finance_remarks': r.finance_remarks,
@@ -121,6 +122,8 @@ def serialize_request(r, detail=False):
     if detail:
         d['expense_items'] = [{
             'id': i.id, 'category': i.category, 'category_label': i.get_category_display(),
+            'leg_id': i.leg_id, 'leg_seq': i.leg.seq if i.leg else None,
+            'leg_city': i.leg.destination_city if i.leg else None,
             'date': str(i.date) if i.date else None, 'description': i.description,
             'from_location': i.from_location, 'to_location': i.to_location, 'mode': i.mode,
             'km': float(i.km), 'claimed_amount': float(i.claimed_amount),
@@ -653,15 +656,22 @@ class CreateTravelExpenseView(APIView):
             travel_mode=payload.get('travel_mode') or (sanction.travel_mode if sanction else ''),
             submitted_at=timezone.now(),
         )
+        # Bills can be filed per stop. Only the sanction's own legs are accepted,
+        # so a claim can't attribute spend to a leg of someone else's trip.
+        legs_by_seq = {l.seq: l for l in sanction.legs.all()} if sanction else {}
+
         total = 0.0
         for idx, it in enumerate(items):
             claimed = _sf(it.get('claimed_amount'))
             bill = request.FILES.get(f'bill_{idx}')
+            leg = legs_by_seq.get(it.get('leg_seq'))
+            # A stop's own city grade decides its caps, not the trip's headline city.
+            item_grade = policy.city_grade(leg.destination_city) if leg else cgrade
             cap, flags = policy.validate_expense_item(
-                u.level, it.get('category', 'misc'), cgrade, claimed, bool(bill),
+                u.level, it.get('category', 'misc'), item_grade, claimed, bool(bill),
                 mode=it.get('mode', ''), km=_sf(it.get('km')), date_val=_parse_date(it.get('date')))
             item = ExpenseItem.objects.create(
-                request=r, category=it.get('category', 'misc'), date=_parse_date(it.get('date')),
+                request=r, leg=leg, category=it.get('category', 'misc'), date=_parse_date(it.get('date')),
                 description=it.get('description', ''), from_location=it.get('from_location', ''),
                 to_location=it.get('to_location', ''), mode=it.get('mode', ''), km=_sf(it.get('km')),
                 claimed_amount=claimed, gst_verified=bool(it.get('gst_verified')),

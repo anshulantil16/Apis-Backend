@@ -237,6 +237,18 @@ class TravelLeg(models.Model):
         d = (self.to_date - self.from_date).days + 1
         return d if d > 0 else None
 
+    @property
+    def estimate_heads(self):
+        """This stop's estimate keyed by the expense category it maps to, so
+        bills can be collected head by head against what it was sanctioned for."""
+        return {
+            'travel': float(self.est_ticket_amount),
+            'lodging': float(self.est_lodging_amount),
+            'food': float(self.est_food_amount),
+            'local_transport': float(self.est_local_amount),
+            'misc': 0.0,          # misc is estimated for the trip, not per stop
+        }
+
 
 class ExpenseItem(models.Model):
     """Line item for a Travelling-Expenses claim (tabbed categories) with a bill."""
@@ -248,6 +260,12 @@ class ExpenseItem(models.Model):
         ('misc',            'Miscellaneous'),
     ]
     request         = models.ForeignKey(TravelRequest, on_delete=models.CASCADE, related_name='expense_items')
+    # Which stop of the sanctioned trip this bill belongs to. Null for a
+    # single-destination trip or a standalone claim. Bills are collected per
+    # stop per head so they line up with how the trip was sanctioned — and so
+    # an over-run can be traced to the leg that caused it.
+    leg             = models.ForeignKey('TravelLeg', null=True, blank=True,
+                                        on_delete=models.SET_NULL, related_name='expense_items')
     category        = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
     date            = models.DateField(null=True, blank=True)
     description     = models.CharField(max_length=500, blank=True)
