@@ -154,10 +154,23 @@ def vehicle_amount(mode, km):
 
 # Canonical travel modes offered on the sanction form. Lives here (not just in
 # the UI) so entitlement is decided against the same list the form renders.
+# Auto rickshaw is deliberately absent: this is how you reach another city, not
+# how you get around once you are there — for that see LOCAL_MODES below.
 TRAVEL_MODES = [
     'Train', 'Flight', 'Bus', 'Cab / Taxi', 'Own Car',
-    'Own Two-Wheeler', 'Auto Rickshaw', 'Company Vehicle',
+    'Own Two-Wheeler', 'Company Vehicle',
 ]
+
+# Conveyance within a city, for the Local Travel claim.
+LOCAL_MODES = [
+    'Cab / Taxi', 'Auto Rickshaw', 'Bus', 'Metro', 'Own Car',
+    'Own Two-Wheeler', 'Bike Taxi', 'E-Rickshaw',
+]
+
+# An advance may exceed the estimate by this much — trips run a little over, and
+# refusing at exactly 100% would block reasonable requests. Beyond it the
+# request is rejected rather than flagged: this is cash out of the door.
+ADVANCE_TOLERANCE = 0.10
 
 
 def mode_options(level):
@@ -269,6 +282,7 @@ def estimate_breakdown(level, city, days, misc=0, ticket=0):
             'food': food_amt if da_rate is not None else None,
             'local': local_amt if local_daily is not None else None,
         },
+        'advance_tolerance': ADVANCE_TOLERANCE,
         'total': round(ticket_amt + lodging_amt + food_amt + local_amt + misc_amt, 2),
     }
 
@@ -340,6 +354,7 @@ def itinerary_estimate(level, legs, misc=0):
         'total_days': total_days,
         'total_nights': sum(l['nights'] for l in out),
         'caps': {'lodging': _cap('lodging'), 'food': _cap('food'), 'local': _cap('local')},
+        'advance_tolerance': ADVANCE_TOLERANCE,
         'lines': {
             'ticket': round(sum(l['lines']['ticket'] for l in out), 2),
             'lodging': round(sum(l['lines']['lodging'] for l in out), 2),
@@ -381,6 +396,21 @@ def validate_itinerary(legs, trip_from=None, trip_to=None):
     return flags
 
 
+def max_advance(total):
+    """Ceiling on the advance for a given estimate."""
+    return round(float(total or 0) * (1 + ADVANCE_TOLERANCE), 2)
+
+
+def advance_error(advance, total):
+    """Message if the advance is over the ceiling, else None."""
+    advance, total = float(advance or 0), float(total or 0)
+    if total <= 0 or advance <= max_advance(total):
+        return None
+    return (f'Advance ₹{advance:,.0f} is more than the most that can be drawn for this trip '
+            f'(₹{max_advance(total):,.0f} — the ₹{total:,.0f} estimate plus '
+            f'{int(ADVANCE_TOLERANCE * 100)}%). Reduce the advance or revise the estimate.')
+
+
 def validate_estimate(level, city, days, lodging=0, food=0, local=0, advance=0, total=0):
     """Flag an employee-adjusted estimate against policy ceilings."""
     base = estimate_breakdown(level, city, days)
@@ -388,13 +418,14 @@ def validate_estimate(level, city, days, lodging=0, food=0, local=0, advance=0, 
     flags = []
     for key, label, val in (
         ('lodging', 'Lodging', lodging), ('food', 'Food / DA', food),
-        ('local', 'Local conveyance', local),
+        ('local', 'Conveyance', local),
     ):
         cap = caps.get(key)
         if cap is not None and float(val or 0) > cap:
             flags.append(f'{label} estimate ₹{float(val):,.0f} exceeds policy ceiling ₹{cap:,.0f}')
-    if float(advance or 0) > float(total or 0):
-        flags.append('Advance requested is more than the total estimated expense')
+    err = advance_error(advance, total)
+    if err:
+        flags.append(err)
     return flags
 
 

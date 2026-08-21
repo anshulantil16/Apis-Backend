@@ -491,7 +491,7 @@ class CreateTourSanctionView(APIView):
             # Same ceiling check the single-destination path gets, against the
             # summed per-stop ceilings.
             for head, label, val in (('lodging', 'Lodging', lodging), ('food', 'Food / DA', food),
-                                     ('local', 'Local conveyance', local)):
+                                     ('local', 'Conveyance', local)):
                 cap = it['caps'].get(head)
                 if cap is not None and val > cap:
                     flags.append(f'{label} estimate ₹{val:,.0f} exceeds policy ceiling ₹{cap:,.0f}')
@@ -510,8 +510,11 @@ class CreateTourSanctionView(APIView):
             flags += policy.validate_estimate(u.level, city, days, lodging=lodging, food=food,
                                               local=local, advance=0, total=total)
 
-        if float(advance or 0) > total:
-            flags.append('Advance requested is more than the total estimated expense')
+        # The advance is cash released before the trip, so an over-limit request
+        # is refused outright rather than flagged for someone to catch later.
+        adv_err = policy.advance_error(advance, total)
+        if adv_err:
+            return Response({'error': adv_err}, status=400)
 
         # Every mode in play must be within entitlement, or carry a reason —
         # per leg for a multi-stop trip, else the single request-level mode.
