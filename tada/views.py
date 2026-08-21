@@ -593,7 +593,11 @@ class RequestDetailView(APIView):
         r = TravelRequest.objects.filter(id=req_id).first()
         if not r:
             return Response({'error': 'Not found'}, status=404)
-        return Response(serialize_request(r, detail=True))
+        out = serialize_request(r, detail=True)
+        # Tell the UI what this viewer may actually do, so it never offers a
+        # button the server will refuse.
+        out['permission'] = action_permission(r, _get_user(request))
+        return Response(out)
 
 
 class CreateTourSanctionView(APIView):
@@ -876,6 +880,30 @@ _STAGE_FLOW = {
 }
 
 
+def action_permission(r, u):
+    """May this user approve/reject/pay this request, and if not, why not?
+
+    One place, used both by the action endpoint and by the detail response the
+    UI renders from — otherwise the screen offers an Approve button that the
+    server then refuses, which reads as the app being broken.
+    """
+    if not u:
+        return {'can_approve': False, 'can_pay': False, 'reason': 'Login required.'}
+    if r.user_id == u.id:
+        return {'can_approve': False, 'can_pay': False, 'reason': 'You cannot action your own request.'}
+    flow = _STAGE_FLOW.get(u.role)
+    if not flow:
+        return {'can_approve': False, 'can_pay': False, 'reason': 'Your role cannot action requests.'}
+    if u.role == 'manager' and (r.user.reporting_manager_id or '') != u.employee_id:
+        return {'can_approve': False, 'can_pay': False,
+                'reason': 'This request is not from one of your reports.'}
+    can_pay = u.role == 'finance' and r.status == 'finance_approved'
+    if r.status != flow['from']:
+        return {'can_approve': False, 'can_pay': can_pay,
+                'reason': None if can_pay else f'Awaiting a different stage ({r.get_status_display()}).'}
+    return {'can_approve': True, 'can_pay': can_pay, 'reason': None}
+
+
 class PendingQueueView(APIView):
     """Role-based queue of requests awaiting the acting user's action."""
     def get(self, request):
@@ -912,19 +940,15 @@ class ActionView(APIView):
             return Response({'error': 'Not found'}, status=404)
         action = (request.data.get('action') or '').strip().lower()   # approve / reject / paid
         remarks = request.data.get('remarks', '')
-        flow = _STAGE_FLOW.get(u.role)
-        if not flow:
-            return Response({'error': 'Your role cannot action requests.'}, status=403)
 
-        # Nobody signs off their own travel, whatever their role.
-        if r.user_id == u.id:
-            return Response({'error': 'You cannot action your own request.'}, status=403)
-
-        # A manager's authority covers their own reports only. The queue already
-        # filters by team, but that is presentation — without this check a
-        # direct POST lets any manager approve any employee's travel.
-        if u.role == 'manager' and (r.user.reporting_manager_id or '') != u.employee_id:
-            return Response({'error': "This request is not from one of your reports."}, status=403)
+        # Same authority check the UI renders its buttons from.
+        perm = action_permission(r, u)
+        if not (perm['can_approve'] or perm['can_pay']):
+            # Own request, wrong team and wrong role are refusals of authority;
+            # being at another stage is simply not this user's turn yet.
+            wrong_stage = perm['reason'] and perm['reason'].startswith('Awaiting')
+            return Response({'error': perm['reason']}, status=400 if wrong_stage else 403)
+        flow = _STAGE_FLOW[u.role]
 
         if action == 'paid' and u.role == 'finance' and r.status == 'finance_approved':
             r.status = 'paid'
