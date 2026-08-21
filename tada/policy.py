@@ -429,30 +429,40 @@ def validate_estimate(level, city, days, lodging=0, food=0, local=0, advance=0, 
     return flags
 
 
-def validate_expense_item(user_level, category, city_grade_val, claimed, has_bill, mode='', km=0, date_val=None):
-    """Return (approved_cap, flags[]) for an expense line against policy."""
+def validate_expense_item(user_level, category, city_grade_val, claimed, has_bill, mode='', km=0,
+                          date_val=None, nights=1, days=1):
+    """Return (approved_cap, flags[]) for an expense line against policy.
+
+    Stay and DA ceilings are per night and per day, but a bill is not: one hotel
+    invoice usually covers the whole stay, and a restaurant bill can cover
+    several days. Judging such a bill against the single-night rate flagged
+    perfectly compliant claims — so the ceiling here is scaled by the nights or
+    days the line actually covers.
+    """
     flags = []
     claimed = float(claimed or 0)
+    nights = max(1, int(nights or 1))
+    days = max(1, int(days or 1))
     cap = None
 
     if not is_within_deadline(date_val):
         flags.append('Beyond 60-day submission deadline')
 
     if category == 'lodging':
-        cap = stay_cap(user_level, city_grade_val)
-        if cap == 'actual':
-            cap = None
+        rate = stay_cap(user_level, city_grade_val)
+        cap = None if rate == 'actual' else (rate * nights if rate is not None else None)
         if not has_bill:
             flags.append('No hotel invoice → defaults to "own arrangement" (DA only, stay not paid)')
             cap = 0
         elif cap is not None and claimed > cap:
-            flags.append(f'Exceeds stay cap ₹{cap} for grade-{city_grade_val} city')
+            span = f' for {nights} night{"s" if nights > 1 else ""}' if nights > 1 else ''
+            flags.append(f'Exceeds stay cap ₹{cap:,.0f}{span} (₹{rate:,.0f}/night, grade-{city_grade_val} city)')
     elif category == 'food':
-        cap = da_cap(user_level, city_grade_val)
-        if cap == 'actual':
-            cap = None
+        rate = da_cap(user_level, city_grade_val)
+        cap = None if rate == 'actual' else (rate * days if rate is not None else None)
         if cap is not None and claimed > cap:
-            flags.append(f'Exceeds DA cap ₹{cap}/day for grade-{city_grade_val} city')
+            span = f' for {days} day{"s" if days > 1 else ""}' if days > 1 else ''
+            flags.append(f'Exceeds DA cap ₹{cap:,.0f}{span} (₹{rate:,.0f}/day, grade-{city_grade_val} city)')
     elif category == 'local_transport':
         band = band_for_level(user_level)
         dc = LOCAL_CONVEYANCE.get(band, {}).get('daily')

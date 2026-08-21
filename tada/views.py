@@ -63,7 +63,118 @@ def serialize_user(u):
     }
 
 
+HEAD_LABELS = [('travel', 'Travel'), ('lodging', 'Lodging'), ('food', 'Food / DA'),
+               ('local_transport', 'Conveyance'), ('misc', 'Miscellaneous')]
+
+
+def _leg_nights(leg, is_last):
+    """Nights follow where you sleep — the last stop drops one for the trip home."""
+    days = leg.days or 0
+    return max(0, days - 1) if is_last else days
+
+
+def leg_policy_heads(level, city, days, nights):
+    """The policy ceiling per head for one stop.
+
+    Distinct from what was sanctioned: the sanction seeds from these but the
+    employee can edit it, so a trip may be approved above or below entitlement.
+    Both numbers have to be visible or an approver cannot tell which is which.
+    Travel and misc have no ceiling — the policy sets an entitled class, not a
+    fare, and misc is judged on its bills.
+    """
+    e = policy.leg_estimate(level, city, days, nights)
+    return {'travel': None, 'lodging': e['caps']['lodging'], 'food': e['caps']['food'],
+            'local_transport': e['caps']['local'], 'misc': None}
+
+
+def build_settlement(r):
+    """Policy vs sanctioned vs claimed, per stop and per head.
+
+    Built here rather than in each UI so the employee filling the claim and
+    every approver looking at it are reading the same arithmetic.
+    """
+    if r.request_type != 'travel_expense':
+        return None
+    s, level = r.sanction, r.user.level
+
+    # Claimed totals keyed by (leg id, head), plus any policy flags raised.
+    claimed, flags = {}, {}
+    for it in r.expense_items.all():
+        k = (it.leg_id, it.category)
+        claimed[k] = claimed.get(k, 0.0) + float(it.claimed_amount)
+        if it.policy_flag:
+            flags.setdefault(k, []).extend(f for f in it.policy_flag.split(' | ') if f)
+
+    legs = list(s.legs.all()) if s else []
+    stops = []
+    if legs:
+        for i, l in enumerate(legs):
+            nights = _leg_nights(l, i == len(legs) - 1)
+            stops.append({
+                'key': l.id, 'seq': l.seq, 'city': l.destination_city, 'grade': l.city_grade,
+                'from_date': str(l.from_date) if l.from_date else None,
+                'to_date': str(l.to_date) if l.to_date else None,
+                'days': l.days, 'nights': nights,
+                'sanctioned': l.estimate_heads,
+                'policy': leg_policy_heads(level, l.destination_city, l.days or 0, nights),
+            })
+    else:
+        # Single-destination trip, or a claim filed with no sanction at all.
+        days = (s.number_of_days if s else r.number_of_days) or 0
+        city = (s.destination_city if s else r.destination_city) or ''
+        stops.append({
+            'key': None, 'seq': None, 'city': city or 'This trip',
+            'grade': policy.city_grade(city) if city else None,
+            'from_date': str(s.from_date) if s and s.from_date else (str(r.from_date) if r.from_date else None),
+            'to_date': str(s.to_date) if s and s.to_date else (str(r.to_date) if r.to_date else None),
+            'days': days, 'nights': max(0, days - 1),
+            'sanctioned': s.estimate_heads if s else {k: 0.0 for k, _ in HEAD_LABELS},
+            'policy': (leg_policy_heads(level, city, days, max(0, days - 1)) if city
+                       else {k: None for k, _ in HEAD_LABELS}),
+        })
+
+    tot = {'policy': 0.0, 'sanctioned': 0.0, 'claimed': 0.0}
+    for st in stops:
+        rows, sub = [], {'policy': 0.0, 'sanctioned': 0.0, 'claimed': 0.0}
+        for key, label in HEAD_LABELS:
+            pol = st['policy'].get(key)
+            san = float(st['sanctioned'].get(key) or 0)
+            act = claimed.get((st['key'], key), 0.0)
+            if pol is None and not san and not act:
+                continue
+            rows.append({
+                'key': key, 'label': label, 'policy': pol, 'sanctioned': san, 'claimed': act,
+                'over_policy': round(act - pol, 2) if pol is not None and act > pol else 0,
+                'over_sanctioned': round(act - san, 2) if san and act > san else 0,
+                'flags': flags.get((st['key'], key), []),
+            })
+            sub['policy'] += pol or 0
+            sub['sanctioned'] += san
+            sub['claimed'] += act
+        st['rows'] = rows
+        st['totals'] = {k: round(v, 2) for k, v in sub.items()}
+        for k in tot:
+            tot[k] += sub[k]
+
+    # Bills filed against no recognised stop still have to be accounted for.
+    loose = [{'key': k[1], 'label': dict(HEAD_LABELS).get(k[1], k[1]), 'claimed': v}
+             for k, v in claimed.items()
+             if k[0] not in {st['key'] for st in stops}]
+    tot['claimed'] += sum(x['claimed'] for x in loose)
+
+    advance = r.advance_adjusted
+    return {
+        'stops': stops, 'unattributed': loose,
+        'totals': {k: round(v, 2) for k, v in tot.items()},
+        'advance': advance,
+        'net': round(tot['claimed'] - advance, 2),
+        'over_policy': round(tot['claimed'] - tot['policy'], 2) if tot['policy'] else 0,
+        'over_sanctioned': round(tot['claimed'] - tot['sanctioned'], 2) if tot['sanctioned'] else 0,
+    }
+
+
 def serialize_request(r, detail=False):
+    _legs = list(r.legs.all())
     d = {
         'id': r.id, 'type': r.request_type, 'type_label': r.get_request_type_display(),
         'status': r.status, 'status_label': r.get_status_display(),
@@ -87,6 +198,12 @@ def serialize_request(r, detail=False):
         'mode_exception_reason': r.mode_exception_reason,
         'policy_flags': [f for f in (r.policy_flags or '').split('\n') if f],
         'is_claimable': r.is_claimable,
+        # Per-head estimate and the policy ceiling behind it, so a claim form can
+        # show both without recomputing policy in the browser.
+        'heads': r.estimate_heads if r.request_type == 'tour_sanction' else None,
+        'policy_heads': (leg_policy_heads(r.user.level, r.destination_city,
+                                          r.number_of_days or 0, max(0, (r.number_of_days or 1) - 1))
+                         if r.request_type == 'tour_sanction' and not _legs else None),
         'claim_id': (r.open_claim.id if r.request_type == 'tour_sanction' and r.open_claim else None),
         # For a claim: what the trip was sanctioned to cost, so approvers see
         # estimate against actual rather than a bare total.
@@ -113,13 +230,17 @@ def serialize_request(r, detail=False):
             'est_ticket_amount': float(l.est_ticket_amount), 'est_lodging_amount': float(l.est_lodging_amount),
             'est_food_amount': float(l.est_food_amount), 'est_local_amount': float(l.est_local_amount),
             'heads': l.estimate_heads,
-        } for l in r.legs.all()],
+            'policy_heads': leg_policy_heads(r.user.level, l.destination_city, l.days or 0,
+                                             _leg_nights(l, i == len(_legs) - 1)),
+        } for i, l in enumerate(_legs)],
         'total_claimed': float(r.total_claimed), 'total_approved': float(r.total_approved),
         'manager_remarks': r.manager_remarks, 'hr_remarks': r.hr_remarks, 'finance_remarks': r.finance_remarks,
         'created_at': r.created_at.strftime('%Y-%m-%d %H:%M'),
         'submitted_at': r.submitted_at.strftime('%Y-%m-%d %H:%M') if r.submitted_at else None,
     }
     if detail:
+        # Policy vs sanctioned vs claimed — the whole picture an approver needs.
+        d['settlement'] = build_settlement(r)
         d['expense_items'] = [{
             'id': i.id, 'category': i.category, 'category_label': i.get_category_display(),
             'leg_id': i.leg_id, 'leg_seq': i.leg.seq if i.leg else None,
@@ -667,9 +788,18 @@ class CreateTravelExpenseView(APIView):
             leg = legs_by_seq.get(it.get('leg_seq'))
             # A stop's own city grade decides its caps, not the trip's headline city.
             item_grade = policy.city_grade(leg.destination_city) if leg else cgrade
+            # Scale the per-night/per-day ceilings by what this stay actually
+            # covers — one invoice for a four-night hotel is not a one-night bill.
+            if leg:
+                span_days = leg.days or 1
+                span_nights = _leg_nights(leg, leg.seq == max(legs_by_seq))
+            else:
+                span_days = (sanction.number_of_days if sanction else r.number_of_days) or 1
+                span_nights = max(1, span_days - 1)
             cap, flags = policy.validate_expense_item(
                 u.level, it.get('category', 'misc'), item_grade, claimed, bool(bill),
-                mode=it.get('mode', ''), km=_sf(it.get('km')), date_val=_parse_date(it.get('date')))
+                mode=it.get('mode', ''), km=_sf(it.get('km')), date_val=_parse_date(it.get('date')),
+                nights=span_nights, days=span_days)
             item = ExpenseItem.objects.create(
                 request=r, leg=leg, category=it.get('category', 'misc'), date=_parse_date(it.get('date')),
                 description=it.get('description', ''), from_location=it.get('from_location', ''),
