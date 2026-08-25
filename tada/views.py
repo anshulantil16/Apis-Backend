@@ -479,6 +479,14 @@ class AdminOverviewView(APIView):
         for u in users:
             by_role[u.role] = by_role.get(u.role, 0) + 1
         rejected = sum(1 for r in rs if r.status in ('manager_rejected', 'hr_rejected', 'finance_rejected'))
+
+        # hr_approved means two different things now: a tour programme is
+        # finally approved there, while a claim still has Finance ahead of it.
+        # Counting them together reported approved trips as pending payment.
+        tour_done = sum(1 for r in rs
+                        if r.status == 'hr_approved' and r.request_type == 'tour_sanction')
+        claims_at_finance = sum(1 for r in rs
+                                if r.status == 'hr_approved' and r.request_type != 'tour_sanction')
         return Response({
             'total_requests': len(rs),
             'total_users': users.count(),
@@ -486,8 +494,8 @@ class AdminOverviewView(APIView):
             'total_approved': round(sum(float(r.total_approved) for r in rs), 2),
             'pending_manager': by_status.get('submitted', 0),
             'pending_hr': by_status.get('manager_approved', 0),
-            'pending_finance': by_status.get('hr_approved', 0),
-            'approved': by_status.get('finance_approved', 0),
+            'pending_finance': claims_at_finance,
+            'approved': by_status.get('finance_approved', 0) + tour_done,
             'paid': by_status.get('paid', 0),
             'rejected': rejected,
             'by_status': by_status,
@@ -877,6 +885,7 @@ class CreateLocalTravelView(APIView):
         r.total_claimed = total
         r.save(update_fields=['total_claimed'])
         ApprovalLog.objects.create(request=r, stage='employee', action='submitted', by_name=u.name)
+        notify_submitted(r)
         return Response({'message': 'Local Travel submitted for Manager approval.',
                          'request': serialize_request(r, detail=True)})
 
