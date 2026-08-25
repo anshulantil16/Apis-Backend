@@ -194,8 +194,8 @@ def build_settlement(r):
 
 
 def _status_label(r):
-    """A tour programme is finally approved by HR, so the stock label
-    "HR Approved - Pending Finance" would misreport it as still in flight."""
+    """A tour programme is finally approved by P&C (HR), so the stock label
+    "P&C (HR) Approved - Pending Finance" would misreport it as still in flight."""
     if r.request_type == 'tour_sanction' and r.status == 'hr_approved':
         return 'Approved - Finance notified'
     return r.get_status_display()
@@ -309,7 +309,8 @@ def serialize_request(r, detail=False):
         } for i in r.local_items.all()]
         d['logs'] = [{
             'stage': l.stage, 'action': l.action, 'by_name': l.by_name,
-            'briefing': l.briefing, 'advance_remarks': l.advance_remarks,
+            'briefing': l.briefing, 'tour_justification': l.tour_justification,
+            'advance_remarks': l.advance_remarks,
             'deviation_justification': l.deviation_justification,
             'remarks': l.remarks, 'timestamp': l.timestamp.strftime('%Y-%m-%d %H:%M'),
         } for l in r.logs.all()]
@@ -334,7 +335,7 @@ class SendOTPView(APIView):
         if not u:
             return Response({'error': 'Employee ID not found in TA/DA portal.'}, status=404)
         if not u.email:
-            return Response({'error': 'No email on file. Contact HR/IT.'}, status=400)
+            return Response({'error': 'No email on file. Contact P&C (HR) or IT.'}, status=400)
         TadaOTP.objects.filter(user=u, is_used=False).delete()
         code = f"{secrets.randbelow(1_000_000):06d}"
         TadaOTP.objects.create(user=u, code=code, expires_at=timezone.now() + timedelta(minutes=5))
@@ -417,7 +418,7 @@ class UserTemplateView(APIView):
         samples = [
             ['E1001', 'Rahul Verma', 'rahul@apisindia.com', 'Area Sales Manager', 'Sales', 'M1', 'Delhi', 'M2001', 'employee', 'DL01AB1234'],
             ['M2001', 'Suresh Rao', 'suresh@apisindia.com', 'Regional Sales Manager', 'Sales', 'M4', 'Mumbai', 'M5001', 'manager', ''],
-            ['H3001', 'Neha HR', 'neha@apisindia.com', 'HR Manager', 'People & Culture', 'M3', 'Delhi', '', 'hr', ''],
+            ['H3001', 'Neha P&C', 'neha@apisindia.com', 'P&C Manager', 'People & Culture', 'M3', 'Delhi', '', 'hr', ''],
             ['F4001', 'Amit Finance', 'amit@apisindia.com', 'Finance Manager', 'Finance', 'M4', 'Delhi', '', 'finance', ''],
             ['T5001', 'Kavita Desk', 'kavita@apisindia.com', 'Travel Desk Executive', 'Administration', 'E3', 'Delhi', '', 'travel_desk', ''],
         ]
@@ -641,7 +642,7 @@ class ClaimableSanctionsView(APIView):
         if not u:
             return Response({'error': 'Login required.'}, status=401)
         # Must match TravelRequest.is_claimable — a tour programme is finally
-        # approved by HR, so hr_approved belongs here. The older finance
+        # approved by P&C (HR), so hr_approved belongs here. The older finance
         # statuses stay for trips approved before Finance stopped signing off.
         sanctions = (TravelRequest.objects
                      .filter(user=u, request_type='tour_sanction',
@@ -863,7 +864,7 @@ class CreateTravelExpenseView(APIView):
                                                     request_type='tour_sanction').first()
             if not sanction:
                 return Response({'error': 'That sanction was not found against your account.'}, status=404)
-            # A tour programme is finally approved by HR, so hr_approved counts as
+            # A tour programme is finally approved by P&C (HR), so hr_approved counts as
             # settled-and-claimable; the older finance statuses stay valid for
             # trips approved before Finance stopped signing these off.
             if sanction.status not in ('hr_approved', 'finance_approved', 'paid'):
@@ -1013,7 +1014,7 @@ class BillDownloadView(APIView):
         return FileResponse(it.bill.open('rb'), filename=f'bill_{item_id}.pdf')
 
 
-# ── APPROVALS (Manager / HR / Finance) ────────────────────────────────────────
+# ── APPROVALS (Manager / P&C (HR) / Finance) ────────────────────────────────────────
 NL = chr(10)
 
 
@@ -1127,7 +1128,7 @@ def notify_actioned(r, stage, by_name, action, remarks=""):
     sent only to the employee - the request stops there, so no one downstream
     has anything to act on.
     """
-    stage_name = {"manager": "Reporting Manager", "hr": "HR", "finance": "Finance"}.get(stage, stage.title())
+    stage_name = {"manager": "Reporting Manager", "hr": "P&C (HR)", "finance": "Finance"}.get(stage, stage.title())
     extra = ["", "Remarks: %s" % remarks] if remarks else []
 
     if action == "rejected":
@@ -1139,11 +1140,11 @@ def notify_actioned(r, stage, by_name, action, remarks=""):
                "Dear %s," % r.user.name, lines, [r.user])
         return
 
-    # A tour programme is finally approved by HR; Finance is kept informed.
+    # A tour programme is finally approved by P&C (HR); Finance is kept informed.
     fyi_only = stage == "hr" and r.request_type == "tour_sanction"
     if stage == "manager":
         nxt = _people("hr")
-        note = "It has been forwarded to HR for further approval."
+        note = "It has been forwarded to P&C (HR) for further approval."
     elif fyi_only:
         nxt = _people("finance")
         note = "Your tour programme now stands approved. Finance has been informed for their records."
@@ -1167,7 +1168,7 @@ def notify_actioned(r, stage, by_name, action, remarks=""):
     if fyi_only:
         subject = "For Information | Tour Programme Approved | %s" % r.user.name
         opening = ("The following tour programme has been approved by the Reporting Manager "
-                   "and HR, and is shared with Finance for information and records.")
+                   "and P&C (HR), and is shared with Finance for information and records.")
         closing = "Kindly take note of the advance and estimated cost indicated above."
     else:
         subject = "Action Required | %s | %s" % (_trip_summary(r), r.user.name)
@@ -1270,11 +1271,11 @@ def action_permission(r, u):
     if u.role == 'manager' and (r.user.reporting_manager_id or '') != u.employee_id:
         return {'can_approve': False, 'can_pay': False,
                 'reason': 'This request is not from one of your reports.'}
-    # A tour programme is finally approved by HR. Finance is notified by mail
+    # A tour programme is finally approved by P&C (HR). Finance is notified by mail
     # and has nothing to action, so it must not sit in their queue either.
     if u.role == 'finance' and r.request_type == 'tour_sanction':
         return {'can_approve': False, 'can_pay': False,
-                'reason': 'Tour programmes are approved by HR; Finance is notified for information.'}
+                'reason': 'Tour programmes are approved by P&C (HR); Finance is notified for information.'}
     can_pay = u.role == 'finance' and r.status == 'finance_approved'
     if r.status != flow['from']:
         return {'can_approve': False, 'can_pay': can_pay,
@@ -1299,7 +1300,7 @@ class PendingQueueView(APIView):
             rs = TravelRequest.objects.filter(status='manager_approved')
             others = TravelRequest.objects.filter(status__in=['hr_approved', 'hr_rejected', 'finance_approved', 'finance_rejected', 'paid'])
         elif role == 'finance':
-            # Tour programmes end at HR; Finance only ever sees claims to action.
+            # Tour programmes end at P&C (HR); Finance only ever sees claims to action.
             rs = TravelRequest.objects.filter(status='hr_approved').exclude(request_type='tour_sanction')
             others = TravelRequest.objects.filter(status__in=['finance_approved', 'finance_rejected', 'paid'])
         else:
@@ -1311,7 +1312,7 @@ class PendingQueueView(APIView):
 class BookingQueueView(APIView):
     """What the Travel Help Desk has to book, and what it has already booked.
 
-    Only fully approved trips appear: booking a journey that HR then rejects
+    Only fully approved trips appear: booking a journey that P&C (HR) then rejects
     wastes a fare and a cancellation fee.
     """
     def get(self, request):
@@ -1421,25 +1422,38 @@ class ActionView(APIView):
         if action not in ('approve', 'reject'):
             return Response({'error': 'action must be approve or reject.'}, status=400)
 
-        # Approving a tour programme is a judgement. Record what the employee
-        # was briefed and the approver's view of the advance, and — when the
-        # request breaks a policy limit — why it is being allowed through.
+        # Approving a tour programme is a judgement, so it is recorded in the
+        # approver's own words. The two stages answer different questions: the
+        # manager briefed the employee and owns any deviation from policy,
+        # while P&C (HR) is endorsing the tour itself.
         briefing = (request.data.get('briefing') or '').strip()
+        tour_justification = (request.data.get('tour_justification') or '').strip()
         advance_remarks = (request.data.get('advance_remarks') or '').strip()
         deviation = (request.data.get('deviation_justification') or '').strip()
         flags = [f for f in (r.policy_flags or '').split(NL) if f]
 
-        if action == 'approve' and r.request_type == 'tour_sanction' and u.role in ('manager', 'hr'):
-            missing = []
-            if not briefing:
-                missing.append('what you briefed the employee about this programme')
-            if not advance_remarks:
+        missing = []
+        if action == 'approve' and r.request_type == 'tour_sanction':
+            if u.role == 'manager':
+                if not briefing:
+                    missing.append('what you briefed the employee about this programme')
+                if flags and not deviation:
+                    missing.append('a justification for the policy deviation on this request')
+            elif u.role == 'hr':
+                if not tour_justification:
+                    missing.append('your justification for this tour')
+            if u.role in ('manager', 'hr') and not advance_remarks:
                 missing.append('your remarks on the advance')
-            if flags and not deviation:
-                missing.append('a justification for the policy deviation on this request')
-            if missing:
-                return Response({'error': 'Before approving, please add: ' + '; '.join(missing) + '.',
-                                 'missing': missing}, status=400)
+
+        # A decision with no words behind it is not an audit trail. Marking a
+        # settled claim as paid is bookkeeping, not a judgement, so it is exempt.
+        if action in ('approve', 'reject') and not str(remarks).strip():
+            missing.append('your remarks on this decision')
+
+        if missing:
+            verb = 'approving' if action == 'approve' else 'rejecting'
+            return Response({'error': 'Before %s, please add: ' % verb + '; '.join(missing) + '.',
+                             'missing': missing}, status=400)
 
         new_status = flow['approve'] if action == 'approve' else flow['reject']
         r.status = new_status
@@ -1448,7 +1462,7 @@ class ActionView(APIView):
             r.manager_remarks = remarks; r.manager_action_at = now
         elif u.role == 'hr':
             r.hr_remarks = remarks; r.hr_action_at = now
-            # HR is the last approver of a tour programme, so the amount
+            # P&C (HR) is the last approver of a tour programme, so the amount
             # sanctioned is settled here. A sanction has nothing *claimed* yet —
             # it is pre-travel — so what is actually authorised is the advance;
             # recording total_claimed would file every trip as approved for zero.
@@ -1465,6 +1479,7 @@ class ActionView(APIView):
         past = 'approved' if action == 'approve' else 'rejected'
         ApprovalLog.objects.create(request=r, stage=u.role, action=past, by_name=u.name,
                                    remarks=remarks, briefing=briefing,
+                                   tour_justification=tour_justification,
                                    advance_remarks=advance_remarks, deviation_justification=deviation)
         notify_actioned(r, u.role, u.name, past, remarks)
         # Only a sanctioned trip goes to the desk — booking one that is later

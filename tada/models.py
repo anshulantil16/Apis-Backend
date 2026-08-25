@@ -1,7 +1,7 @@
 """
 TA/DA (Travel & Daily Allowance) Portal — standalone module.
 Own tables (tada_*), own user directory, own OTP login, own workflow.
-Workflow: Employee → Manager → HR → Finance.
+Workflow: Employee → Manager → P&C (HR) → Finance.
 """
 from django.db import models
 from django.utils import timezone
@@ -12,7 +12,7 @@ class TadaUser(models.Model):
     ROLE_CHOICES = [
         ('employee', 'Employee'),
         ('manager', 'Manager'),
-        ('hr', 'HR'),
+        ('hr', 'P&C (HR)'),
         ('finance', 'Finance'),
         ('travel_desk', 'Travel Help Desk'),
         ('admin', 'Admin'),
@@ -58,10 +58,10 @@ class TravelRequest(models.Model):
     STATUS_CHOICES = [
         ('draft',            'Draft'),
         ('submitted',        'Submitted · Pending Manager'),
-        ('manager_approved', 'Manager Approved · Pending HR'),
+        ('manager_approved', 'Manager Approved · Pending P&C (HR)'),
         ('manager_rejected', 'Rejected by Manager'),
-        ('hr_approved',      'HR Approved · Pending Finance'),
-        ('hr_rejected',      'Rejected by HR'),
+        ('hr_approved',      'P&C (HR) Approved · Pending Finance'),
+        ('hr_rejected',      'Rejected by P&C (HR)'),
         ('finance_approved', 'Finance Approved'),
         ('finance_rejected', 'Rejected by Finance'),
         ('paid',             'Paid / Settled'),
@@ -409,11 +409,12 @@ class LocalTravelItem(models.Model):
 class ApprovalLog(models.Model):
     """Audit trail of every workflow action.
 
-    Approving a tour programme is a judgement, not a rubber stamp, so the
-    manager and HR record *why* alongside the fact: what the employee was
-    briefed, what they think of the advance, and — when the request breaks a
-    policy limit — the justification for letting it through anyway. Kept here
-    rather than on the request so each approver's answers stand on their own.
+    Approving a tour programme is a judgement, not a rubber stamp, so each
+    approver records *why* alongside the fact. The two stages are asked
+    different questions, because they are answering different ones: the manager
+    briefed the employee and owns the deviation call, while P&C (HR) is
+    endorsing the tour itself. Kept here rather than on the request so each
+    approver's answers stand on their own.
     """
     request   = models.ForeignKey(TravelRequest, on_delete=models.CASCADE, related_name='logs')
     stage     = models.CharField(max_length=20)   # employee / manager / hr / finance
@@ -422,9 +423,10 @@ class ApprovalLog(models.Model):
     remarks   = models.TextField(blank=True)
 
     # Captured on approval of a tour programme (see ActionView).
-    briefing                = models.TextField(blank=True)   # what the employee was briefed
-    advance_remarks         = models.TextField(blank=True)   # view on the advance requested
-    deviation_justification = models.TextField(blank=True)   # only when policy flags exist
+    briefing                = models.TextField(blank=True)   # manager: what the employee was briefed
+    tour_justification      = models.TextField(blank=True)   # P&C (HR): why the tour is justified
+    advance_remarks         = models.TextField(blank=True)   # both: view on the advance requested
+    deviation_justification = models.TextField(blank=True)   # manager, only when policy flags exist
 
     timestamp = models.DateTimeField(default=timezone.now)
 
