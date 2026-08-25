@@ -268,7 +268,21 @@ class ExpenseItem(models.Model):
                                         on_delete=models.SET_NULL, related_name='expense_items')
     category        = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
     date            = models.DateField(null=True, blank=True)
+    # A single bill can cover several days (a hotel folio, a week of meals).
+    # Without this the ceiling was compared against a one-day rate and
+    # perfectly compliant bills were flagged.
+    to_date         = models.DateField(null=True, blank=True)
     description     = models.CharField(max_length=500, blank=True)
+
+    # Who issued the bill, and its reference — a hotel name, an airline and a
+    # PNR, a cab operator and an invoice number. Finance reconciles on these.
+    vendor          = models.CharField(max_length=200, blank=True)
+    reference_no    = models.CharField(max_length=100, blank=True)
+
+    # Lodging only. The stay decides how many nights the ceiling covers, and
+    # the times matter: a check-out on the 4th at 06:00 is not a fourth night.
+    check_in        = models.DateTimeField(null=True, blank=True)
+    check_out       = models.DateTimeField(null=True, blank=True)
     from_location   = models.CharField(max_length=200, blank=True)
     to_location     = models.CharField(max_length=200, blank=True)
     mode            = models.CharField(max_length=100, blank=True)
@@ -278,8 +292,45 @@ class ExpenseItem(models.Model):
     bill            = models.FileField(upload_to='tada_bills/', null=True, blank=True)
     gst_verified    = models.BooleanField(default=False)
     policy_cap      = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    # How that ceiling was arrived at, so a row can show its own arithmetic
+    # instead of an unexplained total: 3 nights, 5 days, 48 km.
+    cap_units       = models.PositiveIntegerField(default=1)
+    cap_basis       = models.CharField(max_length=10, blank=True)     # night / day
     policy_flag     = models.CharField(max_length=400, blank=True)   # warning if over policy
     created_at      = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def nights(self):
+        """Nights this lodging bill covers, from the actual stay."""
+        if not (self.check_in and self.check_out):
+            return None
+        n = (self.check_out.date() - self.check_in.date()).days
+        return n if n > 0 else 1          # same-day check-out is still one night
+
+    @property
+    def days_covered(self):
+        """Days a bill spans — one unless it carries an end date."""
+        if not self.date:
+            return 1
+        if not self.to_date:
+            return 1
+        d = (self.to_date - self.date).days + 1
+        return d if d > 0 else 1
+
+    @property
+    def cap_explained(self):
+        """'Rs 2,800 x 3 nights' - the ceiling with its working shown."""
+        if self.policy_cap is None or not self.cap_basis or not self.cap_units:
+            return None
+        rate = float(self.policy_cap) / self.cap_units
+        unit = self.cap_basis + ('' if self.cap_units == 1 else 's')
+        return 'Rs %s x %d %s' % (format(rate, ',.0f'), self.cap_units, unit)
+
+    @property
+    def per_night(self):
+        """Nightly rate actually claimed — the figure the stay cap applies to."""
+        n = self.nights
+        return round(float(self.claimed_amount) / n, 2) if n else None
 
 
 class LocalTravelItem(models.Model):

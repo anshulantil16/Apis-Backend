@@ -45,6 +45,21 @@ def _parse_date(v):
     return None
 
 
+def _parse_dt(v):
+    """Datetime from the browser's <input type="datetime-local"> value."""
+    if not v:
+        return None
+    if isinstance(v, datetime):
+        return v
+    for fmt in ('%Y-%m-%dT%H:%M', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M'):
+        try:
+            return datetime.strptime(str(v).strip(), fmt)
+        except Exception:
+            pass
+    d = _parse_date(v)
+    return datetime.combine(d, datetime.min.time()) if d else None
+
+
 def _sf(v, d=0):
     if v is None or str(v).strip() == '':
         return d
@@ -257,7 +272,13 @@ def serialize_request(r, detail=False):
             'id': i.id, 'category': i.category, 'category_label': i.get_category_display(),
             'leg_id': i.leg_id, 'leg_seq': i.leg.seq if i.leg else None,
             'leg_city': i.leg.destination_city if i.leg else None,
-            'date': str(i.date) if i.date else None, 'description': i.description,
+            'date': str(i.date) if i.date else None,
+            'to_date': str(i.to_date) if i.to_date else None,
+            'description': i.description, 'vendor': i.vendor, 'reference_no': i.reference_no,
+            'check_in': i.check_in.strftime('%Y-%m-%d %H:%M') if i.check_in else None,
+            'check_out': i.check_out.strftime('%Y-%m-%d %H:%M') if i.check_out else None,
+            'nights': i.nights, 'per_night': i.per_night, 'days_covered': i.days_covered,
+            'cap_units': i.cap_units, 'cap_basis': i.cap_basis, 'cap_explained': i.cap_explained,
             'from_location': i.from_location, 'to_location': i.to_location, 'mode': i.mode,
             'km': float(i.km), 'claimed_amount': float(i.claimed_amount),
             'approved_amount': float(i.approved_amount) if i.approved_amount is not None else None,
@@ -829,16 +850,35 @@ class CreateTravelExpenseView(APIView):
             else:
                 span_days = (sanction.number_of_days if sanction else r.number_of_days) or 1
                 span_nights = max(1, span_days - 1)
+            check_in = _parse_dt(it.get('check_in'))
+            check_out = _parse_dt(it.get('check_out'))
+            item_from = _parse_date(it.get('date'))
+            item_to = _parse_date(it.get('to_date'))
+
+            # Judge the bill on what it actually covers rather than on the
+            # stop's length: a three-night folio measured against a one-night
+            # ceiling flags a compliant claim, and a two-night stay on a
+            # four-night leg would otherwise be allowed twice what it should.
+            if check_in and check_out:
+                span_nights = max(1, (check_out.date() - check_in.date()).days)
+            if item_from and item_to:
+                span_days = max(1, (item_to - item_from).days + 1)
+
             cap, flags = policy.validate_expense_item(
                 u.level, it.get('category', 'misc'), item_grade, claimed, bool(bill),
-                mode=it.get('mode', ''), km=_sf(it.get('km')), date_val=_parse_date(it.get('date')),
+                mode=it.get('mode', ''), km=_sf(it.get('km')), date_val=item_from,
                 nights=span_nights, days=span_days)
             item = ExpenseItem.objects.create(
-                request=r, leg=leg, category=it.get('category', 'misc'), date=_parse_date(it.get('date')),
-                description=it.get('description', ''), from_location=it.get('from_location', ''),
+                request=r, leg=leg, category=it.get('category', 'misc'), date=item_from,
+                to_date=item_to, description=it.get('description', ''),
+                vendor=it.get('vendor', ''), reference_no=it.get('reference_no', ''),
+                check_in=check_in, check_out=check_out,
+                from_location=it.get('from_location', ''),
                 to_location=it.get('to_location', ''), mode=it.get('mode', ''), km=_sf(it.get('km')),
                 claimed_amount=claimed, gst_verified=bool(it.get('gst_verified')),
                 policy_cap=cap, policy_flag=' | '.join(flags),
+                cap_units=(span_nights if it.get('category') == 'lodging' else span_days),
+                cap_basis=('night' if it.get('category') == 'lodging' else 'day'),
             )
             if bill:
                 item.bill.save(f'bill_{r.id}_{idx}_{bill.name}', bill, save=True)
