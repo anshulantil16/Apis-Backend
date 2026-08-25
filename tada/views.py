@@ -676,6 +676,18 @@ class CreateTourSanctionView(APIView):
         # Who is raising the tickets. On a multi-stop trip this is per leg.
         trip_booking_mode = 'company' if d.get('booking_mode') == 'company' else 'self'
 
+        def _booking_gaps(mode, travel_mode, ticket_date, where=''):
+            """What the desk would be missing if asked to book this journey."""
+            if mode != 'company':
+                return []
+            at = f' for {where}' if where else ''
+            gaps = []
+            if not (travel_mode or '').strip():
+                gaps.append(f'the travel mode{at}')
+            if not ticket_date:
+                gaps.append(f'the date you want to travel{at}')
+            return gaps
+
         # Multi-stop itinerary, if the employee broke the trip down by city.
         raw_legs = d.get('legs') or []
         legs = []
@@ -764,6 +776,19 @@ class CreateTourSanctionView(APIView):
             if not within_mode and not why:
                 label = f' for {where}' if where and legs else ''
                 return Response({'error': f'{mode}{label} is outside your travel entitlement — please give a reason for the exception.'}, status=400)
+
+        gaps = []
+        if legs:
+            for lg in legs:
+                gaps += _booking_gaps(lg['booking_mode'], lg['travel_mode'], lg['ticket_date'],
+                                      lg['destination_city'] or f"stop {lg['seq'] + 1}")
+        else:
+            gaps += _booking_gaps(trip_booking_mode, d.get('travel_mode'),
+                                  _parse_date(d.get('travel_mode_date')))
+        if gaps:
+            return Response({'error': 'The Travel Help Desk needs ' + ', '.join(gaps)
+                                      + ' before it can book. Please add that, or book the ticket yourself.'},
+                            status=400)
 
         r = TravelRequest.objects.create(
             user=u, request_type='tour_sanction', status='submitted',
