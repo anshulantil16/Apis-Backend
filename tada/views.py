@@ -8,6 +8,7 @@ import openpyxl
 from django.conf import settings
 from django.core.cache import cache
 from django.core.mail import send_mail
+from django.db import transaction
 from django.utils import timezone
 
 ADMIN_BOOTSTRAP_EMAIL = 'anshul@apisindia.com'
@@ -225,6 +226,14 @@ def serialize_request(r, detail=False):
         'mode_exception_reason': r.mode_exception_reason,
         'policy_flags': [f for f in (r.policy_flags or '').split('\n') if f],
         'is_claimable': r.is_claimable,
+        'needs_booking': r.needs_booking,
+        'company_borne_fare': r.company_borne_fare,
+            'booking_mode': r.booking_mode, 'booking_mode_label': r.get_booking_mode_display(),
+            'booking_status': r.booking_status, 'booking_status_label': r.get_booking_status_display(),
+            'booking_reference': r.booking_reference, 'booking_carrier': r.booking_carrier,
+            'booking_fare': float(r.booking_fare), 'booking_remarks': r.booking_remarks,
+            'booked_by': r.booked_by,
+            'booked_at': r.booked_at.strftime('%Y-%m-%d %H:%M') if r.booked_at else None,
         # Per-head estimate and the policy ceiling behind it, so a claim form can
         # show both without recomputing policy in the browser.
         'heads': r.estimate_heads if r.request_type == 'tour_sanction' else None,
@@ -257,6 +266,12 @@ def serialize_request(r, detail=False):
             'est_ticket_amount': float(l.est_ticket_amount), 'est_lodging_amount': float(l.est_lodging_amount),
             'est_food_amount': float(l.est_food_amount), 'est_local_amount': float(l.est_local_amount),
             'heads': l.estimate_heads,
+            'booking_mode': l.booking_mode, 'booking_mode_label': l.get_booking_mode_display(),
+            'booking_status': l.booking_status, 'booking_status_label': l.get_booking_status_display(),
+            'booking_reference': l.booking_reference, 'booking_carrier': l.booking_carrier,
+            'booking_fare': float(l.booking_fare), 'booking_remarks': l.booking_remarks,
+            'booked_by': l.booked_by,
+            'booked_at': l.booked_at.strftime('%Y-%m-%d %H:%M') if l.booked_at else None,
             'policy_heads': leg_policy_heads(r.user.level, l.destination_city, l.days or 0,
                                              _leg_nights(l, i == len(_legs) - 1)),
         } for i, l in enumerate(_legs)],
@@ -393,7 +408,7 @@ class UserTemplateView(APIView):
         wb = openpyxl.Workbook(); ws = wb.active; ws.title = 'TADA Users'
         headers = ['Employee ID *', 'Name *', 'Email *', 'Designation', 'Department',
                    'Level (M1-M7/E1-E4) *', 'HQ City', 'Reporting Manager ID',
-                   'Role (employee/manager/hr/finance)', 'Vehicle RC No']
+                   'Role (employee/manager/hr/finance/travel_desk)', 'Vehicle RC No']
         hf = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
         for ci, h in enumerate(headers, 1):
             c = ws.cell(row=1, column=ci, value=h)
@@ -404,6 +419,7 @@ class UserTemplateView(APIView):
             ['M2001', 'Suresh Rao', 'suresh@apisindia.com', 'Regional Sales Manager', 'Sales', 'M4', 'Mumbai', 'M5001', 'manager', ''],
             ['H3001', 'Neha HR', 'neha@apisindia.com', 'HR Manager', 'People & Culture', 'M3', 'Delhi', '', 'hr', ''],
             ['F4001', 'Amit Finance', 'amit@apisindia.com', 'Finance Manager', 'Finance', 'M4', 'Delhi', '', 'finance', ''],
+            ['T5001', 'Kavita Desk', 'kavita@apisindia.com', 'Travel Desk Executive', 'Administration', 'E3', 'Delhi', '', 'travel_desk', ''],
         ]
         for ri, row in enumerate(samples, 2):
             for ci, v in enumerate(row, 1):
@@ -433,6 +449,7 @@ class UserImportView(APIView):
             'level': 'level', 'level (m1-m7/e1-e4)': 'level',
             'hq city': 'hq_city', 'reporting manager id': 'reporting_manager_id',
             'role': 'role', 'role (employee/manager/hr/finance)': 'role',
+            'role (employee/manager/hr/finance/travel_desk)': 'role',
             'vehicle rc no': 'vehicle_rc_no',
         }
         header = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
@@ -454,7 +471,11 @@ class UserImportView(APIView):
             if not eid or not name:
                 errors.append(f'Row {ri}: missing Employee ID or Name'); continue
             role = str(data.get('role') or 'employee').strip().lower()
-            if role not in ('employee', 'manager', 'hr', 'finance', 'admin'):
+            # Spreadsheets carry "travel desk" as often as "travel_desk".
+            role = role.replace(' ', '_').replace('-', '_')
+            if role in ('traveldesk', 'travel_help_desk', 'desk'):
+                role = 'travel_desk'
+            if role not in ('employee', 'manager', 'hr', 'finance', 'travel_desk', 'admin'):
                 role = 'employee'
             _, was_created = TadaUser.objects.update_or_create(
                 employee_id=eid,
@@ -652,6 +673,9 @@ class CreateTourSanctionView(APIView):
         from_date, to_date = _parse_date(d.get('from_date')), _parse_date(d.get('to_date'))
         days = policy.trip_days(from_date, to_date) or 0
 
+        # Who is raising the tickets. On a multi-stop trip this is per leg.
+        trip_booking_mode = 'company' if d.get('booking_mode') == 'company' else 'self'
+
         # Multi-stop itinerary, if the employee broke the trip down by city.
         raw_legs = d.get('legs') or []
         legs = []
@@ -668,6 +692,7 @@ class CreateTourSanctionView(APIView):
                 'ticket_date': _parse_date(lg.get('ticket_date')),
                 'ticket_time_pref': lg.get('ticket_time_pref', ''),
                 'mode_exception_reason': (lg.get('mode_exception_reason') or '').strip(),
+                'booking_mode': ('company' if lg.get('booking_mode') == 'company' else 'self'),
                 'est_ticket_amount': _sf(lg.get('est_ticket_amount')),
             })
 
@@ -751,6 +776,8 @@ class CreateTourSanctionView(APIView):
             travel_mode_time_pref=d.get('travel_mode_time_pref', ''),
             return_mode_date=_parse_date(d.get('return_mode_date')),
             return_mode_time_pref=d.get('return_mode_time_pref', ''),
+            booking_mode=trip_booking_mode,
+            booking_status=('pending' if trip_booking_mode == 'company' and not legs else 'not_required'),
             est_ticket_amount=ticket, est_lodging_amount=lodging, est_food_amount=food,
             est_local_amount=local, est_misc_amount=misc,
             estimate_amount=total, advance_amount=advance,
@@ -771,6 +798,8 @@ class CreateTourSanctionView(APIView):
                     est_ticket_amount=lg['est_ticket_amount'],
                     est_lodging_amount=e.get('lodging', 0), est_food_amount=e.get('food', 0),
                     est_local_amount=e.get('local', 0),
+                    booking_mode=lg['booking_mode'],
+                    booking_status=('pending' if lg['booking_mode'] == 'company' else 'not_required'),
                 )
 
         ApprovalLog.objects.create(request=r, stage='employee', action='submitted', by_name=u.name)
@@ -783,6 +812,7 @@ class CreateTravelExpenseView(APIView):
     """Multipart: 'payload' = JSON (request + items[]), files bill_<idx> per item."""
     parser_classes = (MultiPartParser, FormParser, JSONParser)
 
+    @transaction.atomic
     def post(self, request):
         u = _get_user(request)
         if not u:
@@ -823,6 +853,19 @@ class CreateTravelExpenseView(APIView):
             return Response({'error': f'Blocked: travel date is beyond the {policy.SUBMISSION_DEADLINE_DAYS}-day '
                                       f'submission deadline.'}, status=400)
 
+        # Check the items before writing anything. A fare the company already
+        # paid cannot be claimed back, and finding that out half-way through
+        # used to leave a half-built claim behind.
+        pre_legs = {l.seq: l for l in sanction.legs.all()} if sanction else {}
+        for it in items:
+            if it.get('category') != 'travel':
+                continue
+            src = pre_legs.get(it.get('leg_seq')) or (sanction if not pre_legs else None)
+            if src and src.booking_mode == 'company' and src.booking_status == 'booked':
+                where = getattr(src, 'destination_city', '') or 'this trip'
+                return Response({'error': f'The ticket for {where} was booked and paid for by the '
+                                          f'company, so its fare cannot be claimed.'}, status=400)
+
         r = TravelRequest.objects.create(
             user=u, request_type='travel_expense', status='submitted', sanction=sanction,
             purpose=payload.get('purpose') or (sanction.purpose if sanction else ''),
@@ -834,6 +877,7 @@ class CreateTravelExpenseView(APIView):
         # Bills can be filed per stop. Only the sanction's own legs are accepted,
         # so a claim can't attribute spend to a leg of someone else's trip.
         legs_by_seq = {l.seq: l for l in sanction.legs.all()} if sanction else {}
+
 
         total = 0.0
         for idx, it in enumerate(items):
@@ -1105,6 +1149,67 @@ def notify_actioned(r, stage, by_name, action, remarks=""):
            [opening, ""] + _detail_block(r) + extra + ["", closing], nxt)
 
 
+def _journey_label(x, r):
+    """A leg reads as its stop; a single-destination trip as the trip."""
+    city = getattr(x, 'destination_city', '') or r.destination_city
+    return city or 'the journey'
+
+
+def notify_booking_needed(r):
+    """Fully approved, and the desk has tickets to raise."""
+    legs = [x for x in r.company_booked_legs if x.booking_status == 'pending']
+    if not legs:
+        return
+    lines = ["The following tour programme is approved and requires ticketing "
+             "by the Travel Help Desk.", ""] + _detail_block(r) + ["", "Journeys to be booked:"]
+    for x in legs:
+        parts = ["  - %s" % _journey_label(x, r)]
+        mode = getattr(x, 'travel_mode', '') or r.travel_mode
+        if mode:
+            parts.append("by %s" % mode)
+        dt = getattr(x, 'ticket_date', None) or r.travel_mode_date
+        if dt:
+            parts.append("on %s" % _d(dt))
+        pref = (getattr(x, 'get_ticket_time_pref_display', None) or
+                getattr(r, 'get_travel_mode_time_pref_display', None))
+        try:
+            tp = pref() if pref else ''
+        except Exception:
+            tp = ''
+        if tp:
+            parts.append("(%s)" % tp)
+        lines.append(" ".join(parts))
+    lines += ["", "Kindly book and record the ticket details in the APIS TA/DA Portal."]
+    notify("Ticketing Required | %s | %s" % (_trip_summary(r), r.user.name),
+           "Dear Sir/Madam,", lines, _people("travel_desk"))
+
+
+def notify_booked(r, target, action, by_name):
+    """Tell the employee what the desk did."""
+    where = _journey_label(target, r)
+    if action == "cancelled":
+        lines = ["The Travel Help Desk could not complete the booking for %s." % where, ""]
+        if target.booking_remarks:
+            lines += ["Reason: %s" % target.booking_remarks, ""]
+        lines += _detail_block(r) + ["", "Please contact the Travel Help Desk for the next steps."]
+        notify("Booking Not Completed | %s" % _trip_summary(r),
+               "Dear %s," % r.user.name, lines, [r.user])
+        return
+
+    lines = ["Your ticket has been booked by the Travel Help Desk.", "",
+             "Journey   : %s" % where]
+    if target.booking_carrier:
+        lines.append("Operator  : %s" % target.booking_carrier)
+    lines.append("Ticket / PNR : %s" % target.booking_reference)
+    lines.append("Fare      : %s (borne by the company)" % _money(target.booking_fare))
+    lines.append("Booked by : %s" % by_name)
+    if target.booking_remarks:
+        lines += ["", "Remarks: %s" % target.booking_remarks]
+    lines += ["", "As this ticket is paid for by the company, please do not include "
+                  "this fare in your expense claim."]
+    notify("Ticket Booked | %s" % _trip_summary(r), "Dear %s," % r.user.name, lines, [r.user])
+
+
 def notify_paid(r, by_name):
     lines = (["The payment against your travel claim has been settled.", "",
               "Processed by : %s (Finance)" % by_name, ""] + _detail_block(r))
@@ -1171,6 +1276,85 @@ class PendingQueueView(APIView):
             return Response({'pending': [], 'processed': []})
         return Response({'pending': [serialize_request(r) for r in rs],
                          'processed': [serialize_request(r) for r in others[:100]]})
+
+
+class BookingQueueView(APIView):
+    """What the Travel Help Desk has to book, and what it has already booked.
+
+    Only fully approved trips appear: booking a journey that HR then rejects
+    wastes a fare and a cancellation fee.
+    """
+    def get(self, request):
+        u = _get_user(request)
+        if not u:
+            return Response({'error': 'Login required.'}, status=401)
+        if u.role not in ('travel_desk', 'admin'):
+            return Response({'error': 'This queue is for the Travel Help Desk.'}, status=403)
+
+        approved = (TravelRequest.objects
+                    .filter(request_type='tour_sanction',
+                            status__in=['hr_approved', 'finance_approved', 'paid'])
+                    .select_related('user').order_by('from_date'))
+        pending, booked = [], []
+        for r in approved:
+            legs = r.company_booked_legs
+            if not legs:
+                continue
+            (pending if any(x.booking_status == 'pending' for x in legs) else booked).append(
+                serialize_request(r, detail=True))
+        return Response({'pending': pending, 'booked': booked[:100]})
+
+
+class BookingActionView(APIView):
+    """Record what the desk booked — or that it could not be booked."""
+    def post(self, request, req_id):
+        u = _get_user(request)
+        if not u:
+            return Response({'error': 'Login required.'}, status=401)
+        if u.role not in ('travel_desk', 'admin'):
+            return Response({'error': 'Only the Travel Help Desk can record a booking.'}, status=403)
+
+        r = TravelRequest.objects.filter(id=req_id).first()
+        if not r:
+            return Response({'error': 'Not found'}, status=404)
+        if r.status not in ('hr_approved', 'finance_approved', 'paid'):
+            return Response({'error': f'That trip is not approved yet ({_status_label(r)}).'}, status=400)
+
+        d = request.data
+        # A leg is identified by its seq; a single-destination trip has none.
+        seq = d.get('leg_seq')
+        target = r
+        if seq is not None and str(seq) != '':
+            target = r.legs.filter(seq=int(seq)).first()
+            if not target:
+                return Response({'error': 'That stop is not part of this trip.'}, status=404)
+        if target.booking_mode != 'company':
+            return Response({'error': 'That journey is being booked by the employee.'}, status=400)
+
+        action = (d.get('action') or 'booked').strip().lower()
+        if action not in ('booked', 'cancelled'):
+            return Response({'error': 'action must be booked or cancelled.'}, status=400)
+
+        if action == 'booked':
+            ref = (d.get('booking_reference') or '').strip()
+            fare = _sf(d.get('booking_fare'))
+            if not ref:
+                return Response({'error': 'A PNR or ticket number is needed to record a booking.'}, status=400)
+            if fare <= 0:
+                return Response({'error': 'Enter the fare actually paid.'}, status=400)
+            target.booking_reference = ref
+            target.booking_carrier = (d.get('booking_carrier') or '').strip()
+            target.booking_fare = fare
+        target.booking_status = action
+        target.booking_remarks = (d.get('booking_remarks') or '').strip()
+        target.booked_by = u.name
+        target.booked_at = timezone.now()
+        target.save()
+
+        ApprovalLog.objects.create(request=r, stage='travel_desk', action=action, by_name=u.name,
+                                   remarks=target.booking_remarks)
+        notify_booked(r, target, action, u.name)
+        return Response({'message': f'Booking {action}.', 'request': serialize_request(r, detail=True)})
 
 
 class ActionView(APIView):
@@ -1253,4 +1437,8 @@ class ActionView(APIView):
                                    remarks=remarks, briefing=briefing,
                                    advance_remarks=advance_remarks, deviation_justification=deviation)
         notify_actioned(r, u.role, u.name, past, remarks)
+        # Only a sanctioned trip goes to the desk — booking one that is later
+        # rejected wastes a fare and a cancellation charge.
+        if past == 'approved' and r.needs_booking:
+            notify_booking_needed(r)
         return Response({'message': f'Request {action}d.', 'request': serialize_request(r, detail=True)})

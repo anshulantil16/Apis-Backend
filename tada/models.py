@@ -14,6 +14,7 @@ class TadaUser(models.Model):
         ('manager', 'Manager'),
         ('hr', 'HR'),
         ('finance', 'Finance'),
+        ('travel_desk', 'Travel Help Desk'),
         ('admin', 'Admin'),
     ]
     employee_id          = models.CharField(max_length=50, unique=True)
@@ -90,6 +91,17 @@ class TravelRequest(models.Model):
     local_travel_type = models.CharField(max_length=100, blank=True)   # Outdoor Duty, etc.
 
     # ── Ticket booking preference for the chosen travel mode ──────────────────
+    BOOKING_MODE_CHOICES = [
+        ('self',    'Booked by me — I will claim the fare'),
+        ('company', 'Booked by the company — Travel Help Desk'),
+    ]
+    BOOKING_STATUS_CHOICES = [
+        ('not_required', 'Self-booked — nothing for the desk'),
+        ('pending',      'Awaiting booking by the Travel Help Desk'),
+        ('booked',       'Booked'),
+        ('cancelled',    'Booking cancelled'),
+    ]
+
     TIME_PREF_CHOICES = [
         ('early_morning', 'Early Morning (12 AM – 6 AM)'),
         ('morning',       'Morning (6 AM – 12 PM)'),
@@ -101,6 +113,17 @@ class TravelRequest(models.Model):
     travel_mode_time_pref = models.CharField(max_length=20, choices=TIME_PREF_CHOICES, blank=True)
     return_mode_date      = models.DateField(null=True, blank=True)   # return ticket date
     return_mode_time_pref = models.CharField(max_length=20, choices=TIME_PREF_CHOICES, blank=True)
+
+    # Ticketing for a single-destination trip. A company booking is paid to the
+    # carrier directly, so its fare never belongs in the employee's claim.
+    booking_mode      = models.CharField(max_length=10, choices=BOOKING_MODE_CHOICES, default='self')
+    booking_status    = models.CharField(max_length=15, choices=BOOKING_STATUS_CHOICES, default='not_required')
+    booking_reference = models.CharField(max_length=100, blank=True)   # PNR / ticket no.
+    booking_carrier   = models.CharField(max_length=200, blank=True)   # airline / operator
+    booking_fare      = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    booking_remarks   = models.TextField(blank=True)
+    booked_by         = models.CharField(max_length=200, blank=True)
+    booked_at         = models.DateTimeField(null=True, blank=True)
 
     # ── Pre-travel estimate, broken down by head ─────────────────────────────
     # Lodging / food / local are seeded from the policy matrices (band × city
@@ -169,6 +192,33 @@ class TravelRequest(models.Model):
                 and self.open_claim is None)
 
     @property
+    def company_booked_legs(self):
+        """Journeys the Travel Help Desk is booking, whatever their state.
+
+        A claim owns no journeys — the tickets belong to the sanction it
+        settles, and that is where the approver needs to see them.
+        """
+        src = self.sanction if (self.request_type == 'travel_expense' and self.sanction) else self
+        legs = [l for l in src.legs.all() if l.booking_mode == 'company']
+        if legs or src.legs.exists():
+            return legs
+        return [src] if src.booking_mode == 'company' else []
+
+    @property
+    def needs_booking(self):
+        """Fully approved, and something still to book."""
+        if self.request_type != 'tour_sanction' or self.status not in (
+                'hr_approved', 'finance_approved', 'paid'):
+            return False
+        return any(x.booking_status == 'pending' for x in self.company_booked_legs)
+
+    @property
+    def company_borne_fare(self):
+        """Fare the company has paid directly — never the employee's to claim."""
+        return round(sum(float(x.booking_fare or 0) for x in self.company_booked_legs
+                         if x.booking_status == 'booked'), 2)
+
+    @property
     def estimate_heads(self):
         """Per-head estimate keyed by the expense category it maps to, so a
         claim can be shown line by line against what was sanctioned."""
@@ -217,6 +267,16 @@ class TravelLeg(models.Model):
     ticket_date      = models.DateField(null=True, blank=True)
     ticket_time_pref = models.CharField(max_length=20, choices=TravelRequest.TIME_PREF_CHOICES, blank=True)
     mode_exception_reason = models.TextField(blank=True)
+
+    # Ticketing for this leg — see TravelRequest for the same fields at trip level.
+    booking_mode      = models.CharField(max_length=10, choices=TravelRequest.BOOKING_MODE_CHOICES, default='self')
+    booking_status    = models.CharField(max_length=15, choices=TravelRequest.BOOKING_STATUS_CHOICES, default='not_required')
+    booking_reference = models.CharField(max_length=100, blank=True)
+    booking_carrier   = models.CharField(max_length=200, blank=True)
+    booking_fare      = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    booking_remarks   = models.TextField(blank=True)
+    booked_by         = models.CharField(max_length=200, blank=True)
+    booked_at         = models.DateTimeField(null=True, blank=True)
 
     # Per-leg estimate. Lodging/food/local come from this leg's own city grade.
     est_ticket_amount  = models.DecimalField(max_digits=12, decimal_places=2, default=0)
