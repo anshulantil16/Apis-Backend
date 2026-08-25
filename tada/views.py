@@ -676,15 +676,18 @@ class CreateTourSanctionView(APIView):
         # Who is raising the tickets. On a multi-stop trip this is per leg.
         trip_booking_mode = 'company' if d.get('booking_mode') == 'company' else 'self'
 
-        def _booking_gaps(mode, travel_mode, ticket_date, where=''):
-            """What the desk would be missing if asked to book this journey."""
-            if mode != 'company':
-                return []
+        def _journey_gaps(mode, travel_mode, ticket_date, where=''):
+            """What is missing before this journey can be approved or booked.
+
+            The travel mode is always needed: it is measured against the band's
+            entitled class, and an absent mode passes that check by default.
+            The date is only needed when the desk has to act on it.
+            """
             at = f' for {where}' if where else ''
             gaps = []
             if not (travel_mode or '').strip():
                 gaps.append(f'the travel mode{at}')
-            if not ticket_date:
+            if mode == 'company' and not ticket_date:
                 gaps.append(f'the date you want to travel{at}')
             return gaps
 
@@ -777,18 +780,20 @@ class CreateTourSanctionView(APIView):
                 label = f' for {where}' if where and legs else ''
                 return Response({'error': f'{mode}{label} is outside your travel entitlement — please give a reason for the exception.'}, status=400)
 
-        gaps = []
+        gaps, needs_desk = [], False
         if legs:
             for lg in legs:
-                gaps += _booking_gaps(lg['booking_mode'], lg['travel_mode'], lg['ticket_date'],
+                gaps += _journey_gaps(lg['booking_mode'], lg['travel_mode'], lg['ticket_date'],
                                       lg['destination_city'] or f"stop {lg['seq'] + 1}")
+                needs_desk = needs_desk or lg['booking_mode'] == 'company'
         else:
-            gaps += _booking_gaps(trip_booking_mode, d.get('travel_mode'),
+            gaps += _journey_gaps(trip_booking_mode, d.get('travel_mode'),
                                   _parse_date(d.get('travel_mode_date')))
+            needs_desk = trip_booking_mode == 'company'
         if gaps:
-            return Response({'error': 'The Travel Help Desk needs ' + ', '.join(gaps)
-                                      + ' before it can book. Please add that, or book the ticket yourself.'},
-                            status=400)
+            tail = ('. The Travel Help Desk cannot book without it.' if needs_desk
+                    else '. Your travel class is approved against it.')
+            return Response({'error': 'Please add ' + ', '.join(gaps) + tail}, status=400)
 
         r = TravelRequest.objects.create(
             user=u, request_type='tour_sanction', status='submitted',
