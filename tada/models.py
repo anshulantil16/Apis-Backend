@@ -102,6 +102,12 @@ class TravelRequest(models.Model):
         ('cancelled',    'Booking cancelled'),
     ]
 
+    # Most tours come back, so that is the default; a one-way leg (relocation,
+    # onward posting) is the exception and has to be said out loud.
+    TRIP_TYPE_CHOICES = [
+        ('round_trip', 'To & Fro'),
+        ('one_way',    'One Way'),
+    ]
     TIME_PREF_CHOICES = [
         ('early_morning', 'Early Morning (12 AM – 6 AM)'),
         ('morning',       'Morning (6 AM – 12 PM)'),
@@ -113,6 +119,31 @@ class TravelRequest(models.Model):
     travel_mode_time_pref = models.CharField(max_length=20, choices=TIME_PREF_CHOICES, blank=True)
     return_mode_date      = models.DateField(null=True, blank=True)   # return ticket date
     return_mode_time_pref = models.CharField(max_length=20, choices=TIME_PREF_CHOICES, blank=True)
+    # The way home can be a different mode from the way out, and it is checked
+    # against the same class entitlement, so it is asked for separately.
+    return_travel_mode    = models.CharField(max_length=100, blank=True)
+    trip_type             = models.CharField(max_length=12, choices=TRIP_TYPE_CHOICES, default='round_trip')
+
+    # ── Who is travelling, as the carrier needs it ───────────────────────────
+    # Only the employee knows the spelling on their Aadhaar card, the number
+    # they will actually answer while away, and their age. A ticket raised on a
+    # guess is a ticket that fails at the counter, so these are asked for
+    # whenever the company is doing the booking.
+    traveller_name    = models.CharField(max_length=200, blank=True)   # exactly as per Aadhaar
+    traveller_age     = models.PositiveIntegerField(null=True, blank=True)
+
+    # ── Ticketing for the journey home ───────────────────────────────────────
+    # Its own record because it is its own ticket: a separate PNR, carrier and
+    # fare, and it can be booked or fail to be booked independently of the
+    # outbound one.
+    return_booking_mode      = models.CharField(max_length=10, choices=BOOKING_MODE_CHOICES, default='self')
+    return_booking_status    = models.CharField(max_length=15, choices=BOOKING_STATUS_CHOICES, default='not_required')
+    return_booking_reference = models.CharField(max_length=100, blank=True)
+    return_booking_carrier   = models.CharField(max_length=200, blank=True)
+    return_booking_fare      = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    return_booking_remarks   = models.TextField(blank=True)
+    return_booked_by         = models.CharField(max_length=200, blank=True)
+    return_booked_at         = models.DateTimeField(null=True, blank=True)
 
     # Ticketing for a single-destination trip. A company booking is paid to the
     # carrier directly, so its fare never belongs in the employee's claim.
@@ -200,9 +231,14 @@ class TravelRequest(models.Model):
         """
         src = self.sanction if (self.request_type == 'travel_expense' and self.sanction) else self
         legs = [l for l in src.legs.all() if l.booking_mode == 'company']
-        if legs or src.legs.exists():
-            return legs
-        return [src] if src.booking_mode == 'company' else []
+        if not legs and not src.legs.exists() and src.booking_mode == 'company':
+            legs = [src]
+        # The way home is a ticket like any other, and was being left off this
+        # list entirely - which is how a company-booked trip reached the desk
+        # with nothing raised for the return.
+        if src.trip_type == 'round_trip' and src.return_booking_mode == 'company':
+            legs = legs + [ReturnJourney(src)]
+        return legs
 
     @property
     def needs_booking(self):
@@ -239,6 +275,64 @@ class TravelRequest(models.Model):
     def net_settlement(self):
         """Positive = still owed to the employee, negative = to recover."""
         return round(float(self.total_claimed) - self.advance_adjusted, 2)
+
+
+class ReturnJourney:
+    """The trip home, presented like a leg.
+
+    It is a separate ticket - its own PNR, carrier and fare, bookable or
+    unbookable on its own - but it lives in columns on the request rather than
+    in a row of its own, because it is not a *stop*: giving it a TravelLeg would
+    add a phantom destination to the estimate, which is costed per city grade.
+    This wrapper bridges the two shapes, including writes, so the desk endpoint
+    records a return booking through exactly the same code path as an outbound.
+    """
+    seq = 'return'
+    is_return = True
+
+    def __init__(self, request):
+        self._r = request
+
+    def __repr__(self):
+        return f'<ReturnJourney of request {self._r.id}>'
+
+    @property
+    def destination_city(self):
+        return self._r.user.hq_city or 'base'
+
+    @property
+    def travel_mode(self):
+        return self._r.return_travel_mode
+
+    @property
+    def ticket_date(self):
+        return self._r.return_mode_date
+
+    @property
+    def ticket_time_pref(self):
+        return self._r.return_mode_time_pref
+
+    def get_ticket_time_pref_display(self):
+        return dict(TravelRequest.TIME_PREF_CHOICES).get(self._r.return_mode_time_pref, '')
+
+    # The estimate is not split between outbound and return, so the return
+    # carries none of it rather than double-counting the ticket line.
+    est_ticket_amount = 0
+
+    def save(self, *a, **kw):
+        self._r.save()
+
+
+def _mirror(name):
+    """booking_x on the wrapper is return_booking_x on the request."""
+    src = 'return_booked_' + name[7:] if name.startswith('booked_') else 'return_' + name
+    return property(lambda self: getattr(self._r, src),
+                    lambda self, v: setattr(self._r, src, v))
+
+
+for _f in ('booking_mode', 'booking_status', 'booking_reference', 'booking_carrier',
+           'booking_fare', 'booking_remarks', 'booked_by', 'booked_at'):
+    setattr(ReturnJourney, _f, _mirror(_f))
 
 
 class TravelLeg(models.Model):

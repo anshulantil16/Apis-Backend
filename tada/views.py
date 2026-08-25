@@ -18,7 +18,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
-from .models import TadaUser, TadaOTP, TravelRequest, TravelLeg, ExpenseItem, LocalTravelItem, ApprovalLog
+from .models import (TadaUser, TadaOTP, TravelRequest, TravelLeg, ExpenseItem,
+                     LocalTravelItem, ApprovalLog, ReturnJourney)
 from . import policy
 
 
@@ -208,6 +209,7 @@ def serialize_request(r, detail=False):
         'status': r.status, 'status_label': _status_label(r),
         'employee_id': r.user.employee_id, 'employee_name': r.user.name,
         'level': r.user.level, 'department': r.user.department,
+        'hq_city': r.user.hq_city,
         'purpose': r.purpose, 'from_date': str(r.from_date) if r.from_date else None,
         'to_date': str(r.to_date) if r.to_date else None, 'number_of_days': r.number_of_days,
         'travel_address': r.travel_address, 'destination_city': r.destination_city,
@@ -217,6 +219,16 @@ def serialize_request(r, detail=False):
         'travel_mode_date': str(r.travel_mode_date) if r.travel_mode_date else None,
         'travel_mode_time_pref': r.travel_mode_time_pref,
         'travel_mode_time_pref_label': r.get_travel_mode_time_pref_display() if r.travel_mode_time_pref else None,
+        'trip_type': r.trip_type, 'trip_type_label': r.get_trip_type_display(),
+        'traveller_name': r.traveller_name, 'traveller_age': r.traveller_age,
+        'return_travel_mode': r.return_travel_mode,
+        'return_booking_mode': r.return_booking_mode,
+        'return_booking_status': r.return_booking_status,
+        'return_booking_reference': r.return_booking_reference,
+        'return_booking_carrier': r.return_booking_carrier,
+        'return_booking_fare': float(r.return_booking_fare),
+        'return_booking_remarks': r.return_booking_remarks,
+        'return_booked_by': r.return_booked_by,
         'return_mode_date': str(r.return_mode_date) if r.return_mode_date else None,
         'return_mode_time_pref': r.return_mode_time_pref,
         'return_mode_time_pref_label': r.get_return_mode_time_pref_display() if r.return_mode_time_pref else None,
@@ -781,6 +793,14 @@ class CreateTourSanctionView(APIView):
                 label = f' for {where}' if where and legs else ''
                 return Response({'error': f'{mode}{label} is outside your travel entitlement — please give a reason for the exception.'}, status=400)
 
+        # The class entitlement applies to the way home too.
+        if (d.get('return_travel_mode') or '').strip() and d.get('trip_type') != 'one_way':
+            _ok_ret, _, _ret_flags = policy.mode_entitlement(u.level, d['return_travel_mode'])
+            flags += [f'Return journey: {f}' for f in _ret_flags]
+            if not _ok_ret and not reason:
+                return Response({'error': f"{d['return_travel_mode']} for the journey home is outside your "
+                                          "travel entitlement — please give a reason for the exception."}, status=400)
+
         gaps, needs_desk = [], False
         if legs:
             for lg in legs:
@@ -791,22 +811,70 @@ class CreateTourSanctionView(APIView):
             gaps += _journey_gaps(trip_booking_mode, d.get('travel_mode'),
                                   _parse_date(d.get('travel_mode_date')))
             needs_desk = trip_booking_mode == 'company'
+
+        # The way home is half the trip. It was captured as a bare date, so it
+        # was never checked against the class entitlement and the desk was never
+        # asked to raise it - which is how company-booked trips arrived with an
+        # outbound ticket and no way back.
+        trip_type = 'one_way' if d.get('trip_type') == 'one_way' else 'round_trip'
+        return_booking_mode = 'company' if d.get('return_booking_mode') == 'company' else 'self'
+        if trip_type == 'round_trip':
+            gaps += _journey_gaps(return_booking_mode, d.get('return_travel_mode'),
+                                  _parse_date(d.get('return_mode_date')), 'the journey home')
+            needs_desk = needs_desk or return_booking_mode == 'company'
+        else:
+            return_booking_mode = 'self'
         if gaps:
             tail = ('. The Travel Help Desk cannot book without it.' if needs_desk
                     else '. Your travel class is approved against it.')
             return Response({'error': 'Please add ' + ', '.join(gaps) + tail}, status=400)
+
+        # A ticket is raised against a person, not an employee code. Only the
+        # employee knows the spelling on their Aadhaar card, the number they
+        # will answer while away and their age - and a ticket booked on a guess
+        # is refused at the counter, so these are asked for the moment the
+        # company is doing the booking.
+        traveller_name = (d.get('traveller_name') or '').strip()
+        traveller_age = d.get('traveller_age')
+        contact_number = (d.get('contact_number') or '').strip()
+        if needs_desk:
+            who = []
+            if not traveller_name:
+                who.append('your name exactly as it appears on your Aadhaar card')
+            if not contact_number:
+                who.append('a contact number you can be reached on while travelling')
+            try:
+                traveller_age = int(traveller_age)
+                if not (14 <= traveller_age <= 100):
+                    raise ValueError
+            except (TypeError, ValueError):
+                traveller_age = None
+                who.append('your age')
+            if who:
+                return Response({'error': 'The Travel Help Desk raises tickets in your name, so please add '
+                                          + ', '.join(who) + '.'}, status=400)
+        else:
+            try:
+                traveller_age = int(traveller_age)
+            except (TypeError, ValueError):
+                traveller_age = None
 
         r = TravelRequest.objects.create(
             user=u, request_type='tour_sanction', status='submitted',
             purpose=d.get('purpose', ''), travel_address=d.get('travel_address', ''),
             destination_city=city, city_grade=policy.city_grade(city),
             from_date=from_date, to_date=to_date,
-            contact_number=d.get('contact_number', ''), sanction_number=d.get('sanction_number', ''),
+            contact_number=contact_number, sanction_number=d.get('sanction_number', ''),
+            traveller_name=traveller_name, traveller_age=traveller_age,
             travel_mode=d.get('travel_mode', ''),
             travel_mode_date=_parse_date(d.get('travel_mode_date')),
             travel_mode_time_pref=d.get('travel_mode_time_pref', ''),
-            return_mode_date=_parse_date(d.get('return_mode_date')),
-            return_mode_time_pref=d.get('return_mode_time_pref', ''),
+            trip_type=trip_type,
+            return_travel_mode=(d.get('return_travel_mode') or '') if trip_type == 'round_trip' else '',
+            return_mode_date=_parse_date(d.get('return_mode_date')) if trip_type == 'round_trip' else None,
+            return_mode_time_pref=d.get('return_mode_time_pref', '') if trip_type == 'round_trip' else '',
+            return_booking_mode=return_booking_mode,
+            return_booking_status=('pending' if return_booking_mode == 'company' else 'not_required'),
             booking_mode=trip_booking_mode,
             booking_status=('pending' if trip_booking_mode == 'company' and not legs else 'not_required'),
             est_ticket_amount=ticket, est_lodging_amount=lodging, est_food_amount=food,
@@ -1181,7 +1249,13 @@ def notify_actioned(r, stage, by_name, action, remarks=""):
 
 
 def _journey_label(x, r):
-    """A leg reads as its stop; a single-destination trip as the trip."""
+    """A leg reads as its stop; a single-destination trip as the trip.
+
+    The way home reads as the way home — "Delhi" on both the outbound and the
+    return would give the desk two identical lines to book.
+    """
+    if getattr(x, 'is_return', False):
+        return 'return to %s' % (r.user.hq_city or 'base')
     city = getattr(x, 'destination_city', '') or r.destination_city
     return city or 'the journey'
 
@@ -1195,10 +1269,10 @@ def notify_booking_needed(r):
              "by the Travel Help Desk.", ""] + _detail_block(r) + ["", "Journeys to be booked:"]
     for x in legs:
         parts = ["  - %s" % _journey_label(x, r)]
-        mode = getattr(x, 'travel_mode', '') or r.travel_mode
+        mode = getattr(x, 'travel_mode', '') or ('' if getattr(x, 'is_return', False) else r.travel_mode)
         if mode:
             parts.append("by %s" % mode)
-        dt = getattr(x, 'ticket_date', None) or r.travel_mode_date
+        dt = getattr(x, 'ticket_date', None) or (None if getattr(x, 'is_return', False) else r.travel_mode_date)
         if dt:
             parts.append("on %s" % _d(dt))
         pref = (getattr(x, 'get_ticket_time_pref_display', None) or
@@ -1210,7 +1284,13 @@ def notify_booking_needed(r):
         if tp:
             parts.append("(%s)" % tp)
         lines.append(" ".join(parts))
-    lines += ["", "Kindly book and record the ticket details in the APIS TA/DA Portal."]
+    # A carrier asks for a person, not an employee code, so the details the
+    # employee gave for exactly this purpose travel with the request.
+    lines += ["", "Traveller details, as given by the employee:",
+              "  Name (as per Aadhaar) : %s" % (r.traveller_name or r.user.name),
+              "  Age                   : %s" % (r.traveller_age or 'not stated'),
+              "  Contact while touring : %s" % (r.contact_number or 'not stated'),
+              "", "Kindly book and record the ticket details in the APIS TA/DA Portal."]
     notify("Ticketing Required | %s | %s" % (_trip_summary(r), r.user.name),
            "Dear Sir/Madam,", lines, _people("travel_desk"))
 
@@ -1355,7 +1435,13 @@ class BookingActionView(APIView):
         # A leg is identified by its seq; a single-destination trip has none.
         seq = d.get('leg_seq')
         target = r
-        if seq is not None and str(seq) != '':
+        if str(seq) == 'return':
+            # The journey home is its own ticket, wrapped to read and write like
+            # a leg so nothing below needs a second code path.
+            if r.trip_type != 'round_trip':
+                return Response({'error': 'This is a one-way trip — there is no return to book.'}, status=400)
+            target = ReturnJourney(r)
+        elif seq is not None and str(seq) != '':
             target = r.legs.filter(seq=int(seq)).first()
             if not target:
                 return Response({'error': 'That stop is not part of this trip.'}, status=404)
