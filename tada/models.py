@@ -165,7 +165,7 @@ class TravelRequest(models.Model):
     def is_claimable(self):
         """A fully approved trip that has been taken and not yet claimed for."""
         return (self.request_type == 'tour_sanction'
-                and self.status in ('finance_approved', 'paid')
+                and self.status in ('hr_approved', 'finance_approved', 'paid')
                 and self.open_claim is None)
 
     @property
@@ -296,12 +296,25 @@ class LocalTravelItem(models.Model):
 
 
 class ApprovalLog(models.Model):
-    """Audit trail of every workflow action."""
+    """Audit trail of every workflow action.
+
+    Approving a tour programme is a judgement, not a rubber stamp, so the
+    manager and HR record *why* alongside the fact: what the employee was
+    briefed, what they think of the advance, and — when the request breaks a
+    policy limit — the justification for letting it through anyway. Kept here
+    rather than on the request so each approver's answers stand on their own.
+    """
     request   = models.ForeignKey(TravelRequest, on_delete=models.CASCADE, related_name='logs')
     stage     = models.CharField(max_length=20)   # employee / manager / hr / finance
     action    = models.CharField(max_length=20)   # submitted / approved / rejected / paid
     by_name   = models.CharField(max_length=200, blank=True)
     remarks   = models.TextField(blank=True)
+
+    # Captured on approval of a tour programme (see ActionView).
+    briefing                = models.TextField(blank=True)   # what the employee was briefed
+    advance_remarks         = models.TextField(blank=True)   # view on the advance requested
+    deviation_justification = models.TextField(blank=True)   # only when policy flags exist
+
     timestamp = models.DateTimeField(default=timezone.now)
 
     class Meta:

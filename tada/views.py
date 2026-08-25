@@ -177,11 +177,19 @@ def build_settlement(r):
     }
 
 
+def _status_label(r):
+    """A tour programme is finally approved by HR, so the stock label
+    "HR Approved - Pending Finance" would misreport it as still in flight."""
+    if r.request_type == 'tour_sanction' and r.status == 'hr_approved':
+        return 'Approved - Finance notified'
+    return r.get_status_display()
+
+
 def serialize_request(r, detail=False):
     _legs = list(r.legs.all())
     d = {
         'id': r.id, 'type': r.request_type, 'type_label': r.get_request_type_display(),
-        'status': r.status, 'status_label': r.get_status_display(),
+        'status': r.status, 'status_label': _status_label(r),
         'employee_id': r.user.employee_id, 'employee_name': r.user.name,
         'level': r.user.level, 'department': r.user.department,
         'purpose': r.purpose, 'from_date': str(r.from_date) if r.from_date else None,
@@ -265,6 +273,8 @@ def serialize_request(r, detail=False):
         } for i in r.local_items.all()]
         d['logs'] = [{
             'stage': l.stage, 'action': l.action, 'by_name': l.by_name,
+            'briefing': l.briefing, 'advance_remarks': l.advance_remarks,
+            'deviation_justification': l.deviation_justification,
             'remarks': l.remarks, 'timestamp': l.timestamp.strftime('%Y-%m-%d %H:%M'),
         } for l in r.logs.all()]
     return d
@@ -580,9 +590,12 @@ class ClaimableSanctionsView(APIView):
         u = _get_user(request)
         if not u:
             return Response({'error': 'Login required.'}, status=401)
+        # Must match TravelRequest.is_claimable — a tour programme is finally
+        # approved by HR, so hr_approved belongs here. The older finance
+        # statuses stay for trips approved before Finance stopped signing off.
         sanctions = (TravelRequest.objects
                      .filter(user=u, request_type='tour_sanction',
-                             status__in=['finance_approved', 'paid'])
+                             status__in=['hr_approved', 'finance_approved', 'paid'])
                      .order_by('-to_date', '-created_at'))
         return Response({'sanctions': [serialize_request(s, detail=True)
                                        for s in sanctions if s.is_claimable]})
@@ -732,6 +745,7 @@ class CreateTourSanctionView(APIView):
                 )
 
         ApprovalLog.objects.create(request=r, stage='employee', action='submitted', by_name=u.name)
+        notify_submitted(r)
         return Response({'message': 'Tour Programme submitted for Manager approval.',
                          'request': serialize_request(r, detail=True)})
 
@@ -760,9 +774,12 @@ class CreateTravelExpenseView(APIView):
                                                     request_type='tour_sanction').first()
             if not sanction:
                 return Response({'error': 'That sanction was not found against your account.'}, status=404)
-            if sanction.status not in ('finance_approved', 'paid'):
+            # A tour programme is finally approved by HR, so hr_approved counts as
+            # settled-and-claimable; the older finance statuses stay valid for
+            # trips approved before Finance stopped signing these off.
+            if sanction.status not in ('hr_approved', 'finance_approved', 'paid'):
                 return Response({'error': f'That trip is not fully approved yet '
-                                          f'({sanction.get_status_display()}).'}, status=400)
+                                          f'({_status_label(sanction)}).'}, status=400)
             if sanction.open_claim:
                 return Response({'error': 'Expenses have already been filed for that trip.'}, status=400)
 
@@ -821,6 +838,7 @@ class CreateTravelExpenseView(APIView):
         r.total_claimed = total
         r.save(update_fields=['total_claimed'])
         ApprovalLog.objects.create(request=r, stage='employee', action='submitted', by_name=u.name)
+        notify_submitted(r)
         return Response({'message': 'Travelling Expenses submitted for Manager approval.',
                          'request': serialize_request(r, detail=True)})
 
@@ -873,6 +891,177 @@ class BillDownloadView(APIView):
 
 
 # ── APPROVALS (Manager / HR / Finance) ────────────────────────────────────────
+NL = chr(10)
+
+
+# -- Notifications ------------------------------------------------------------
+# Who hears about a request, and when. Mail is a side effect of the workflow and
+# never a gate on it: a bounced address or an SMTP outage must not stop an
+# approval that has already happened, so every send is best-effort.
+
+def _people(role):
+    """Everyone holding a role who can actually receive mail."""
+    return list(TadaUser.objects.filter(role=role, is_active=True).exclude(email=""))
+
+
+def _manager_of(u):
+    if not u.reporting_manager_id:
+        return None
+    return TadaUser.objects.filter(employee_id=u.reporting_manager_id, is_active=True).first()
+
+
+def _trip_summary(r):
+    """Short subject-line description of the request."""
+    bits = [r.get_request_type_display()]
+    if r.destination_city:
+        bits.append(r.destination_city)
+    if r.from_date and r.to_date:
+        bits.append("%s to %s" % (_d(r.from_date), _d(r.to_date)))
+    return " | ".join(bits)
+
+
+def _d(v):
+    """Dates read as 05 Aug 2026 in mail, not 2026-08-05."""
+    try:
+        return v.strftime("%d %b %Y")
+    except Exception:
+        return str(v)
+
+
+def _money(v):
+    return "Rs. %s" % format(float(v or 0), ",.0f")
+
+
+def _detail_block(r):
+    """The particulars, laid out as a block so the mail can be read on its own
+    without opening the portal."""
+    rows = [("Employee", "%s (%s)" % (r.user.name, r.user.employee_id))]
+    if r.user.department:
+        rows.append(("Department", r.user.department))
+    rows.append(("Request Type", r.get_request_type_display()))
+    if r.destination_city:
+        rows.append(("Destination", r.destination_city))
+    if r.from_date and r.to_date:
+        rows.append(("Travel Dates", "%s to %s" % (_d(r.from_date), _d(r.to_date))))
+    if r.purpose:
+        rows.append(("Purpose", r.purpose))
+    if r.travel_mode:
+        rows.append(("Mode of Travel", r.travel_mode))
+    if r.estimate_amount:
+        rows.append(("Estimated Cost", _money(r.estimate_amount)))
+    if r.advance_amount:
+        rows.append(("Advance Requested", _money(r.advance_amount)))
+    if r.total_claimed:
+        rows.append(("Amount Claimed", _money(r.total_claimed)))
+
+    width = max(len(k) for k, _ in rows)
+    out = [k.ljust(width) + " : " + str(v) for k, v in rows]
+
+    flags = [f for f in (r.policy_flags or "").split(NL) if f]
+    if flags:
+        out.append("")
+        out.append("Policy observations:")
+        out += ["  - " + f for f in flags]
+    return out
+
+
+def _sign_off():
+    return ["", "This is an automated message from the APIS TA/DA Portal.",
+            "Please do not reply to this email.", "", "Regards,",
+            "APIS India Limited"]
+
+
+def notify(subject, greeting, lines, recipients):
+    """Compose and send. Never raises - mail is a side effect of the workflow,
+    not a gate on it, so a bad address must not fail an approval."""
+    to = sorted({x.email for x in recipients if x and x.email})
+    if not to:
+        return
+    body = NL.join([greeting, ""] + lines + _sign_off())
+    try:
+        send_mail(subject=subject, message=body,
+                  from_email=settings.DEFAULT_FROM_EMAIL, recipient_list=to,
+                  fail_silently=True)
+    except Exception:
+        pass
+
+
+def notify_submitted(r):
+    """Raised - inform the approver that it awaits their action."""
+    mgr = _manager_of(r.user)
+    lines = (["A new travel request has been submitted and is awaiting your approval.", ""]
+             + _detail_block(r)
+             + ["", "Kindly review and record your decision in the APIS TA/DA Portal."])
+    notify("Action Required | %s | %s" % (_trip_summary(r), r.user.name),
+           "Dear %s," % (mgr.name if mgr else "Sir/Madam"),
+           lines, [mgr] if mgr else _people("hr"))
+
+
+def notify_actioned(r, stage, by_name, action, remarks=""):
+    """Approved or rejected.
+
+    An approval informs the employee and moves to the next desk. A rejection is
+    sent only to the employee - the request stops there, so no one downstream
+    has anything to act on.
+    """
+    stage_name = {"manager": "Reporting Manager", "hr": "HR", "finance": "Finance"}.get(stage, stage.title())
+    extra = ["", "Remarks: %s" % remarks] if remarks else []
+
+    if action == "rejected":
+        lines = (["We regret to inform you that your travel request has not been approved.", "",
+                  "Rejected by : %s (%s)" % (by_name, stage_name), ""]
+                 + _detail_block(r) + extra
+                 + ["", "For any clarification, please contact your %s." % stage_name])
+        notify("Travel Request Not Approved | %s" % _trip_summary(r),
+               "Dear %s," % r.user.name, lines, [r.user])
+        return
+
+    # A tour programme is finally approved by HR; Finance is kept informed.
+    fyi_only = stage == "hr" and r.request_type == "tour_sanction"
+    if stage == "manager":
+        nxt = _people("hr")
+        note = "It has been forwarded to HR for further approval."
+    elif fyi_only:
+        nxt = _people("finance")
+        note = "Your tour programme now stands approved. Finance has been informed for their records."
+    elif stage == "hr":
+        nxt = _people("finance")
+        note = "It has been forwarded to Finance for further approval."
+    else:
+        nxt, note = [], ""
+
+    lines = ["Your travel request has been approved.", "",
+             "Approved by : %s (%s)" % (by_name, stage_name), ""]
+    lines += _detail_block(r) + extra
+    if note:
+        lines += ["", note]
+    notify("Travel Request Approved | %s | %s" % (_trip_summary(r), r.user.name),
+           "Dear %s," % r.user.name, lines, [r.user])
+
+    if not nxt:
+        return
+
+    if fyi_only:
+        subject = "For Information | Tour Programme Approved | %s" % r.user.name
+        opening = ("The following tour programme has been approved by the Reporting Manager "
+                   "and HR, and is shared with Finance for information and records.")
+        closing = "Kindly take note of the advance and estimated cost indicated above."
+    else:
+        subject = "Action Required | %s | %s" % (_trip_summary(r), r.user.name)
+        opening = ("The following travel request has been approved by %s (%s) "
+                   "and is now pending your approval." % (by_name, stage_name))
+        closing = "Kindly review and record your decision in the APIS TA/DA Portal."
+
+    notify(subject, "Dear Sir/Madam,",
+           [opening, ""] + _detail_block(r) + extra + ["", closing], nxt)
+
+
+def notify_paid(r, by_name):
+    lines = (["The payment against your travel claim has been settled.", "",
+              "Processed by : %s (Finance)" % by_name, ""] + _detail_block(r))
+    notify("Payment Settled | %s" % _trip_summary(r), "Dear %s," % r.user.name, lines, [r.user])
+
+
 _STAGE_FLOW = {
     'manager': {'from': 'submitted',        'approve': 'manager_approved', 'reject': 'manager_rejected'},
     'hr':      {'from': 'manager_approved', 'approve': 'hr_approved',      'reject': 'hr_rejected'},
@@ -897,6 +1086,11 @@ def action_permission(r, u):
     if u.role == 'manager' and (r.user.reporting_manager_id or '') != u.employee_id:
         return {'can_approve': False, 'can_pay': False,
                 'reason': 'This request is not from one of your reports.'}
+    # A tour programme is finally approved by HR. Finance is notified by mail
+    # and has nothing to action, so it must not sit in their queue either.
+    if u.role == 'finance' and r.request_type == 'tour_sanction':
+        return {'can_approve': False, 'can_pay': False,
+                'reason': 'Tour programmes are approved by HR; Finance is notified for information.'}
     can_pay = u.role == 'finance' and r.status == 'finance_approved'
     if r.status != flow['from']:
         return {'can_approve': False, 'can_pay': can_pay,
@@ -921,7 +1115,8 @@ class PendingQueueView(APIView):
             rs = TravelRequest.objects.filter(status='manager_approved')
             others = TravelRequest.objects.filter(status__in=['hr_approved', 'hr_rejected', 'finance_approved', 'finance_rejected', 'paid'])
         elif role == 'finance':
-            rs = TravelRequest.objects.filter(status='hr_approved')
+            # Tour programmes end at HR; Finance only ever sees claims to action.
+            rs = TravelRequest.objects.filter(status='hr_approved').exclude(request_type='tour_sanction')
             others = TravelRequest.objects.filter(status__in=['finance_approved', 'finance_rejected', 'paid'])
         else:
             return Response({'pending': [], 'processed': []})
@@ -955,12 +1150,33 @@ class ActionView(APIView):
             r.finance_action_at = timezone.now()
             r.save()
             ApprovalLog.objects.create(request=r, stage='finance', action='paid', by_name=u.name, remarks=remarks)
+            notify_paid(r, u.name)
             return Response({'message': 'Marked as Paid.', 'request': serialize_request(r, detail=True)})
 
         if r.status != flow['from']:
             return Response({'error': f'Request is not awaiting your action (status: {r.get_status_display()}).'}, status=400)
         if action not in ('approve', 'reject'):
             return Response({'error': 'action must be approve or reject.'}, status=400)
+
+        # Approving a tour programme is a judgement. Record what the employee
+        # was briefed and the approver's view of the advance, and — when the
+        # request breaks a policy limit — why it is being allowed through.
+        briefing = (request.data.get('briefing') or '').strip()
+        advance_remarks = (request.data.get('advance_remarks') or '').strip()
+        deviation = (request.data.get('deviation_justification') or '').strip()
+        flags = [f for f in (r.policy_flags or '').split(NL) if f]
+
+        if action == 'approve' and r.request_type == 'tour_sanction' and u.role in ('manager', 'hr'):
+            missing = []
+            if not briefing:
+                missing.append('what you briefed the employee about this programme')
+            if not advance_remarks:
+                missing.append('your remarks on the advance')
+            if flags and not deviation:
+                missing.append('a justification for the policy deviation on this request')
+            if missing:
+                return Response({'error': 'Before approving, please add: ' + '; '.join(missing) + '.',
+                                 'missing': missing}, status=400)
 
         new_status = flow['approve'] if action == 'approve' else flow['reject']
         r.status = new_status
@@ -969,15 +1185,23 @@ class ActionView(APIView):
             r.manager_remarks = remarks; r.manager_action_at = now
         elif u.role == 'hr':
             r.hr_remarks = remarks; r.hr_action_at = now
+            # HR is the last approver of a tour programme, so the amount
+            # sanctioned is settled here. A sanction has nothing *claimed* yet —
+            # it is pre-travel — so what is actually authorised is the advance;
+            # recording total_claimed would file every trip as approved for zero.
+            if action == 'approve' and r.request_type == 'tour_sanction':
+                r.total_approved = r.advance_amount
         elif u.role == 'finance':
             r.finance_remarks = remarks; r.finance_action_at = now
             if action == 'approve':
-                # A claim is approved at what was claimed. A tour sanction has
-                # nothing claimed yet — it is pre-travel — so the figure finance
-                # actually releases is the advance; recording total_claimed
-                # there would file every sanctioned trip as approved for zero.
-                r.total_approved = (r.advance_amount if r.request_type == 'tour_sanction'
-                                    else r.total_claimed)
+                r.total_approved = r.total_claimed
         r.save()
-        ApprovalLog.objects.create(request=r, stage=u.role, action=action + 'd', by_name=u.name, remarks=remarks)
+        # 'approve' + 'd' gives "approved", but 'reject' + 'd' gave "rejectd" —
+        # a typo that has been in the audit trail all along, and which also made
+        # the rejection branch below never match.
+        past = 'approved' if action == 'approve' else 'rejected'
+        ApprovalLog.objects.create(request=r, stage=u.role, action=past, by_name=u.name,
+                                   remarks=remarks, briefing=briefing,
+                                   advance_remarks=advance_remarks, deviation_justification=deviation)
+        notify_actioned(r, u.role, u.name, past, remarks)
         return Response({'message': f'Request {action}d.', 'request': serialize_request(r, detail=True)})
