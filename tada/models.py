@@ -82,6 +82,11 @@ class TravelRequest(models.Model):
     from_date        = models.DateField(null=True, blank=True)
     to_date          = models.DateField(null=True, blank=True)
     travel_address   = models.CharField(max_length=500, blank=True)
+    # Where the outbound journey actually starts — not assumed to be the
+    # employee's HQ, since a trip can begin from wherever they already are.
+    # Required at submission (see CreateTourSanctionView) so the approver and
+    # the Travel Help Desk both know the route, not just the destination.
+    from_city        = models.CharField(max_length=200, blank=True)
     destination_city = models.CharField(max_length=200, blank=True)
     city_grade       = models.CharField(max_length=1, blank=True)   # A / B / C
     contact_number   = models.CharField(max_length=20, blank=True)
@@ -365,6 +370,10 @@ class TravelLeg(models.Model):
     seq              = models.PositiveIntegerField(default=0)   # display order
     from_date        = models.DateField(null=True, blank=True)
     to_date          = models.DateField(null=True, blank=True)
+    # Where THIS stop's journey starts — usually the previous stop, but asked
+    # explicitly rather than assumed, since a leg can be reached from
+    # somewhere off-itinerary too. Required (see CreateTourSanctionView).
+    from_city        = models.CharField(max_length=200, blank=True)
     destination_city = models.CharField(max_length=200, blank=True)
     travel_address   = models.CharField(max_length=500, blank=True)   # where you actually are at this stop
     city_grade       = models.CharField(max_length=1, blank=True)

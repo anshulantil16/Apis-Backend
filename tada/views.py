@@ -212,7 +212,7 @@ def serialize_request(r, detail=False):
         'hq_city': r.user.hq_city,
         'purpose': r.purpose, 'from_date': str(r.from_date) if r.from_date else None,
         'to_date': str(r.to_date) if r.to_date else None, 'number_of_days': r.number_of_days,
-        'travel_address': r.travel_address, 'destination_city': r.destination_city,
+        'travel_address': r.travel_address, 'from_city': r.from_city, 'destination_city': r.destination_city,
         'city_grade': r.city_grade, 'contact_number': r.contact_number,
         'sanction_number': r.sanction_number, 'estimate_amount': float(r.estimate_amount),
         'travel_mode': r.travel_mode, 'local_travel_type': r.local_travel_type,
@@ -272,7 +272,7 @@ def serialize_request(r, detail=False):
         'legs': [{
             'seq': l.seq, 'from_date': str(l.from_date) if l.from_date else None,
             'to_date': str(l.to_date) if l.to_date else None, 'days': l.days,
-            'destination_city': l.destination_city, 'travel_address': l.travel_address,
+            'from_city': l.from_city, 'destination_city': l.destination_city, 'travel_address': l.travel_address,
             'city_grade': l.city_grade, 'purpose': l.purpose, 'travel_mode': l.travel_mode,
             'ticket_date': str(l.ticket_date) if l.ticket_date else None,
             'ticket_time_pref_label': l.get_ticket_time_pref_display() if l.ticket_time_pref else None,
@@ -699,15 +699,19 @@ class CreateTourSanctionView(APIView):
         # Who is raising the tickets. On a multi-stop trip this is per leg.
         trip_booking_mode = 'company' if d.get('booking_mode') == 'company' else 'self'
 
-        def _journey_gaps(mode, travel_mode, ticket_date, where=''):
+        def _journey_gaps(mode, travel_mode, ticket_date, from_city, where=''):
             """What is missing before this journey can be approved or booked.
 
             The travel mode is always needed: it is measured against the band's
             entitled class, and an absent mode passes that check by default.
-            The date is only needed when the desk has to act on it.
+            from_city is always needed too - an approver or the Travel Help
+            Desk seeing only the destination has no route, only a place. The
+            date is only needed when the desk has to act on it.
             """
             at = f' for {where}' if where else ''
             gaps = []
+            if not (from_city or '').strip():
+                gaps.append(f'where the journey starts{at}')
             if not (travel_mode or '').strip():
                 gaps.append(f'the travel mode{at}')
             if mode == 'company' and not ticket_date:
@@ -723,6 +727,7 @@ class CreateTourSanctionView(APIView):
                 continue
             legs.append({
                 'seq': int(lg.get('seq', i) or 0), 'from_date': lf, 'to_date': lt,
+                'from_city': (lg.get('from_city') or '').strip(),
                 'destination_city': lg.get('destination_city', ''),
                 'travel_address': lg.get('travel_address', ''),
                 'purpose': lg.get('purpose', ''),
@@ -815,11 +820,11 @@ class CreateTourSanctionView(APIView):
         if legs:
             for lg in legs:
                 gaps += _journey_gaps(lg['booking_mode'], lg['travel_mode'], lg['ticket_date'],
-                                      lg['destination_city'] or f"stop {lg['seq'] + 1}")
+                                      lg['from_city'], lg['destination_city'] or f"stop {lg['seq'] + 1}")
                 needs_desk = needs_desk or lg['booking_mode'] == 'company'
         else:
             gaps += _journey_gaps(trip_booking_mode, d.get('travel_mode'),
-                                  _parse_date(d.get('travel_mode_date')))
+                                  _parse_date(d.get('travel_mode_date')), d.get('from_city'))
             needs_desk = trip_booking_mode == 'company'
 
         # The way home is half the trip. It was captured as a bare date, so it
@@ -830,7 +835,7 @@ class CreateTourSanctionView(APIView):
         return_booking_mode = 'company' if d.get('return_booking_mode') == 'company' else 'self'
         if trip_type == 'round_trip':
             gaps += _journey_gaps(return_booking_mode, d.get('return_travel_mode'),
-                                  _parse_date(d.get('return_mode_date')), 'the journey home')
+                                  _parse_date(d.get('return_mode_date')), 'ok', 'the journey home')
             needs_desk = needs_desk or return_booking_mode == 'company'
         else:
             return_booking_mode = 'self'
@@ -872,6 +877,7 @@ class CreateTourSanctionView(APIView):
         r = TravelRequest.objects.create(
             user=u, request_type='tour_sanction', status='submitted',
             purpose=d.get('purpose', ''), travel_address=d.get('travel_address', ''),
+            from_city=(d.get('from_city') or '').strip() if not legs else legs[0]['from_city'],
             destination_city=city, city_grade=policy.city_grade(city),
             from_date=from_date, to_date=to_date,
             contact_number=contact_number, sanction_number=d.get('sanction_number', ''),
@@ -899,6 +905,7 @@ class CreateTourSanctionView(APIView):
                 e = per_leg.get(lg['seq'], {}).get('lines', {})
                 TravelLeg.objects.create(
                     request=r, seq=lg['seq'], from_date=lg['from_date'], to_date=lg['to_date'],
+                    from_city=lg['from_city'],
                     destination_city=lg['destination_city'], travel_address=lg['travel_address'],
                     city_grade=policy.city_grade(lg['destination_city']),
                     purpose=lg['purpose'], travel_mode=lg['travel_mode'],
@@ -1292,11 +1299,21 @@ def _journey_label(x, r):
     """A leg reads as its stop; a single-destination trip as the trip.
 
     The way home reads as the way home — "Delhi" on both the outbound and the
-    return would give the desk two identical lines to book.
+    return would give the desk two identical lines to book. Outbound legs show
+    the route (from -> to), not just the destination, so the desk knows where
+    to actually raise the ticket from.
     """
     if getattr(x, 'is_return', False):
-        return 'return to %s' % (r.user.hq_city or 'base')
+        # The return starts wherever the trip actually ends: the last stop on
+        # a multi-city itinerary, or the single destination otherwise -
+        # r.destination_city alone is only the FIRST stop on a multi-city trip.
+        last_leg = r.legs.order_by('-seq').first()
+        frm = (last_leg.destination_city if last_leg else r.destination_city) or 'the last stop'
+        return '%s -> %s (return)' % (frm, r.user.hq_city or 'base')
     city = getattr(x, 'destination_city', '') or r.destination_city
+    frm = getattr(x, 'from_city', '') or getattr(r, 'from_city', '')
+    if frm and city:
+        return '%s -> %s' % (frm, city)
     return city or 'the journey'
 
 
