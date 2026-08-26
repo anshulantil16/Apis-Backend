@@ -736,7 +736,11 @@ class CreateTourSanctionView(APIView):
                 'ticket_time_pref': lg.get('ticket_time_pref', ''),
                 'mode_exception_reason': (lg.get('mode_exception_reason') or '').strip(),
                 'booking_mode': ('company' if lg.get('booking_mode') == 'company' else 'self'),
-                'est_ticket_amount': _sf(lg.get('est_ticket_amount')),
+                # The company pays this fare directly and it never enters the
+                # employee's claim, so an estimate here would only inflate the
+                # advance they are asking for against a cost that isn't theirs.
+                'est_ticket_amount': (0 if lg.get('booking_mode') == 'company'
+                                      else _sf(lg.get('est_ticket_amount'))),
             })
 
         # Recompute the estimate server-side rather than trusting the posted
@@ -777,9 +781,10 @@ class CreateTourSanctionView(APIView):
             if not city:
                 city = legs[0]['destination_city']
         else:
-            base = policy.estimate_breakdown(u.level, city, days, misc=misc,
-                                             ticket=_sf(d.get('est_ticket_amount')))
-            ticket = _sf(d.get('est_ticket_amount'))
+            # Same rule as a leg: a company-booked ticket is the desk's cost to
+            # quote, not the employee's to estimate or draw an advance against.
+            ticket = 0 if trip_booking_mode == 'company' else _sf(d.get('est_ticket_amount'))
+            base = policy.estimate_breakdown(u.level, city, days, misc=misc, ticket=ticket)
             lodging = _sf(d.get('est_lodging_amount'), base['lines']['lodging'])
             food = _sf(d.get('est_food_amount'), base['lines']['food'])
             local = _sf(d.get('est_local_amount'), base['lines']['local'])
