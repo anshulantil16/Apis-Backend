@@ -474,6 +474,42 @@ class BookingOption(models.Model):
         return ' '.join(p for p in parts if p)
 
 
+class StayPlan(models.Model):
+    """Where the employee intends to stay, night by night, on a tour programme.
+
+    Pre-travel and separate from ExpenseItem's lodging rows, which are the
+    actual folio filed afterwards. An approver releasing a lodging estimate and
+    an advance against it was previously told only a rupee figure; this is the
+    stay that figure is for, so the two can be judged against each other.
+
+    Kept as its own rows rather than columns on the request because a trip has
+    as many stays as it has stops - and sometimes more than one at a stop, if
+    the employee changes hotel mid-way.
+    """
+    request    = models.ForeignKey(TravelRequest, on_delete=models.CASCADE, related_name='stays')
+    seq        = models.PositiveIntegerField(default=0)   # display order
+    # Which stop this stay belongs to, when the trip was broken down by city.
+    # Null on a single-destination trip, which has no legs at all.
+    leg_seq    = models.PositiveIntegerField(null=True, blank=True)
+
+    location   = models.CharField(max_length=300)   # hotel / area / city, as the employee knows it
+    check_in   = models.DateField(null=True, blank=True)
+    check_out  = models.DateField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['seq', 'check_in']
+
+    def __str__(self):
+        return f"{self.location} ({self.check_in} to {self.check_out})"
+
+    @property
+    def nights(self):
+        """Nights this stay covers - checking in and out the same day is 0."""
+        if not (self.check_in and self.check_out):
+            return None
+        return max(0, (self.check_out - self.check_in).days)
+
+
 class ExpenseItem(models.Model):
     """Line item for a Travelling-Expenses claim (tabbed categories) with a bill."""
     CATEGORY_CHOICES = [

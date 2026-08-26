@@ -19,7 +19,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from .models import (TadaUser, TadaOTP, TravelRequest, TravelLeg, ExpenseItem,
-                     LocalTravelItem, ApprovalLog, ReturnJourney, BookingOption)
+                     LocalTravelItem, ApprovalLog, ReturnJourney, BookingOption, StayPlan)
 from . import policy
 
 
@@ -297,6 +297,13 @@ def serialize_request(r, detail=False):
             'detail': o.detail, 'date': str(o.date) if o.date else None, 'time': o.time,
             'amount': float(o.amount), 'remarks': o.remarks, 'is_selected': o.is_selected,
         } for o in r.booking_options.all()],
+        # The planned stay, so an approver sees what the lodging figure is for.
+        'stays': [{
+            'seq': sp.seq, 'leg_seq': sp.leg_seq, 'location': sp.location,
+            'check_in': str(sp.check_in) if sp.check_in else None,
+            'check_out': str(sp.check_out) if sp.check_out else None,
+            'nights': sp.nights,
+        } for sp in r.stays.all()],
         'total_claimed': float(r.total_claimed), 'total_approved': float(r.total_approved),
         'manager_remarks': r.manager_remarks, 'hr_remarks': r.hr_remarks, 'finance_remarks': r.finance_remarks,
         'created_at': r.created_at.strftime('%Y-%m-%d %H:%M'),
@@ -743,6 +750,32 @@ class CreateTourSanctionView(APIView):
                                       else _sf(lg.get('est_ticket_amount'))),
             })
 
+        # Where the employee plans to stay. An approver releasing lodging
+        # money was previously shown only the rupee figure, never the stay
+        # it was for - so the two could not be judged against each other.
+        stays = []
+        for i, sp in enumerate(d.get('stays') or []):
+            loc = (sp.get('location') or '').strip()
+            ci, co = _parse_date(sp.get('check_in')), _parse_date(sp.get('check_out'))
+            if not (loc or ci or co):
+                continue          # an untouched blank row is not an error
+            if not loc:
+                return Response({'error': f'Stay {i + 1}: add where you are staying.'},
+                                status=400)
+            if not ci or not co:
+                return Response({'error': f'Stay {i + 1} ({loc}): add both the check-in and'
+                                          f' check-out dates.'}, status=400)
+            if co < ci:
+                return Response({'error': f'Stay {i + 1} ({loc}): check-out cannot be before'
+                                          f' check-in.'}, status=400)
+            stays.append({
+                'seq': i, 'location': loc, 'check_in': ci, 'check_out': co,
+                # `or ''` would swallow stop 0, which is falsy - the first
+                # stop of every multi-city trip.
+                'leg_seq': (int(sp['leg_seq'])
+                            if str(sp.get('leg_seq', '')).strip().isdigit() else None),
+            })
+
         # Recompute the estimate server-side rather than trusting the posted
         # total — the browser can send anything, and this number drives an
         # approval and a cash advance.
@@ -792,6 +825,27 @@ class CreateTourSanctionView(APIView):
             # advance is checked once for both paths, just below
             flags += policy.validate_estimate(u.level, city, days, lodging=lodging, food=food,
                                               local=local, advance=0, total=total)
+
+        # A stay outside the travel dates is refused the same way a stray stop
+        # is: it would be nights the trip never covers.
+        if from_date and to_date:
+            for sp in stays:
+                if sp['check_in'] < from_date or sp['check_out'] > to_date:
+                    return Response({
+                        'error': f"{sp['location']} ({sp['check_in']} to {sp['check_out']}) "
+                                 f"falls outside your travel dates ({from_date} to {to_date})."
+                    }, status=400)
+
+        # Asking for lodging money without saying where you are staying leaves
+        # the approver releasing an advance against nothing they can check.
+        # Checked against the computed figure, not the posted one: lodging is
+        # seeded from policy when the form omits it, and a seeded figure is
+        # just as much money as a typed one.
+        if lodging > 0 and not stays:
+            return Response({
+                'error': 'You have estimated lodging, so please add where you plan to stay - '
+                         'location, check-in and check-out.'
+            }, status=400)
 
         # The advance is cash released before the trip, so an over-limit request
         # is refused outright rather than flagged for someone to catch later.
@@ -904,6 +958,11 @@ class CreateTourSanctionView(APIView):
             mode_exception_reason=reason, policy_flags='\n'.join(flags),
             submitted_at=timezone.now(),
         )
+        for sp in stays:
+            StayPlan.objects.create(
+                request=r, seq=sp['seq'], leg_seq=sp['leg_seq'],
+                location=sp['location'], check_in=sp['check_in'], check_out=sp['check_out'])
+
         if legs:
             per_leg = {l['seq']: l for l in policy.itinerary_estimate(u.level, legs, misc=misc)['legs']}
             for lg in legs:
@@ -1186,6 +1245,18 @@ def _detail_block(r):
 
     width = max(len(k) for k, _ in rows)
     out = [k.ljust(width) + " : " + str(v) for k, v in rows]
+
+    # The stay the lodging figure above is actually for - an approver
+    # releasing an advance should not have to open the portal to see it.
+    stays = list(r.stays.all())
+    if stays:
+        out.append("")
+        out.append("Planned stay:")
+        for sp in stays:
+            n = sp.nights
+            out.append("  - %s : %s to %s%s" % (
+                sp.location, _d(sp.check_in), _d(sp.check_out),
+                ("" if n is None else " (%d night%s)" % (n, "" if n == 1 else "s"))))
 
     flags = [f for f in (r.policy_flags or "").split(NL) if f]
     if flags:
