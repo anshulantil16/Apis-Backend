@@ -379,7 +379,16 @@ def validate_itinerary(legs, trip_from=None, trip_to=None):
 
     for a, b in zip(ordered, ordered[1:]):
         if b['from_date'] <= a['to_date']:
-            flags.append(f"{a.get('destination_city') or 'stop'} and {b.get('destination_city') or 'stop'} overlap")
+            # Every day belongs to exactly one city - that is how DA works, one
+            # allowance per day at that city's grade. A shared day is therefore
+            # counted twice in the estimate, so say which day and what it costs
+            # rather than the bare word "overlap".
+            shared = (min(a['to_date'], b['to_date']) - b['from_date']).days + 1
+            flags.append(
+                f"{a.get('destination_city') or 'stop'} ends {a['to_date']} but "
+                f"{b.get('destination_city') or 'stop'} starts {b['from_date']} - "
+                f"{shared} day(s) counted at both stops, so DA and lodging are "
+                f"estimated twice for them. Each day should sit at one stop only.")
         elif (b['from_date'] - a['to_date']).days > 1:
             gap = (b['from_date'] - a['to_date']).days - 1
             flags.append(f"{gap} day(s) between {a.get('destination_city') or 'stop'} and "
