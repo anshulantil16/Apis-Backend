@@ -96,10 +96,12 @@ class TravelRequest(models.Model):
         ('company', 'Booked by the company — Travel Help Desk'),
     ]
     BOOKING_STATUS_CHOICES = [
-        ('not_required', 'Self-booked — nothing for the desk'),
-        ('pending',      'Awaiting booking by the Travel Help Desk'),
-        ('booked',       'Booked'),
-        ('cancelled',    'Booking cancelled'),
+        ('not_required',   'Self-booked — nothing for the desk'),
+        ('pending',        'Awaiting booking by the Travel Help Desk'),
+        ('options_sent',   'Options sent — awaiting the employee\'s choice'),
+        ('confirmed',      'Employee has chosen — awaiting ticketing'),
+        ('booked',         'Booked'),
+        ('cancelled',      'Booking cancelled'),
     ]
 
     # Most tours come back, so that is the default; a one-way leg (relocation,
@@ -144,6 +146,7 @@ class TravelRequest(models.Model):
     return_booking_remarks   = models.TextField(blank=True)
     return_booked_by         = models.CharField(max_length=200, blank=True)
     return_booked_at         = models.DateTimeField(null=True, blank=True)
+    return_booking_ticket    = models.FileField(upload_to='tada_tickets/', null=True, blank=True)
 
     # Ticketing for a single-destination trip. A company booking is paid to the
     # carrier directly, so its fare never belongs in the employee's claim.
@@ -155,6 +158,7 @@ class TravelRequest(models.Model):
     booking_remarks   = models.TextField(blank=True)
     booked_by         = models.CharField(max_length=200, blank=True)
     booked_at         = models.DateTimeField(null=True, blank=True)
+    booking_ticket    = models.FileField(upload_to='tada_tickets/', null=True, blank=True)   # the actual ticket, as proof
 
     # ── Pre-travel estimate, broken down by head ─────────────────────────────
     # Lodging / food / local are seeded from the policy matrices (band × city
@@ -197,6 +201,10 @@ class TravelRequest(models.Model):
 
     def __str__(self):
         return f"{self.get_request_type_display()} · {self.user.name} · {self.status}"
+
+    # A single-destination trip is booked as itself, not as a leg — this is
+    # what BookingOption keys against for it.
+    journey_key = 'trip'
 
     @property
     def number_of_days(self):
@@ -242,11 +250,16 @@ class TravelRequest(models.Model):
 
     @property
     def needs_booking(self):
-        """Fully approved, and something still to book."""
+        """Fully approved, and something still to book.
+
+        Anything short of booked or cancelled is still work for someone —
+        raising options, waiting on the employee, or ticketing what they chose.
+        """
         if self.request_type != 'tour_sanction' or self.status not in (
                 'hr_approved', 'finance_approved', 'paid'):
             return False
-        return any(x.booking_status == 'pending' for x in self.company_booked_legs)
+        return any(x.booking_status not in ('not_required', 'booked', 'cancelled')
+                   for x in self.company_booked_legs)
 
     @property
     def company_borne_fare(self):
@@ -289,6 +302,7 @@ class ReturnJourney:
     """
     seq = 'return'
     is_return = True
+    journey_key = 'return'
 
     def __init__(self, request):
         self._r = request
@@ -331,7 +345,7 @@ def _mirror(name):
 
 
 for _f in ('booking_mode', 'booking_status', 'booking_reference', 'booking_carrier',
-           'booking_fare', 'booking_remarks', 'booked_by', 'booked_at'):
+           'booking_fare', 'booking_remarks', 'booked_by', 'booked_at', 'booking_ticket'):
     setattr(ReturnJourney, _f, _mirror(_f))
 
 
@@ -371,6 +385,7 @@ class TravelLeg(models.Model):
     booking_remarks   = models.TextField(blank=True)
     booked_by         = models.CharField(max_length=200, blank=True)
     booked_at         = models.DateTimeField(null=True, blank=True)
+    booking_ticket    = models.FileField(upload_to='tada_tickets/', null=True, blank=True)
 
     # Per-leg estimate. Lodging/food/local come from this leg's own city grade.
     est_ticket_amount  = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -383,6 +398,10 @@ class TravelLeg(models.Model):
 
     def __str__(self):
         return f"Leg {self.seq + 1}: {self.destination_city} ({self.from_date} → {self.to_date})"
+
+    @property
+    def journey_key(self):
+        return str(self.seq)
 
     @property
     def days(self):
@@ -402,6 +421,48 @@ class TravelLeg(models.Model):
             'local_transport': float(self.est_local_amount),
             'misc': 0.0,          # misc is estimated for the trip, not per stop
         }
+
+
+class BookingOption(models.Model):
+    """One flight or train the desk found for a journey, offered to the employee.
+
+    A journey can have several viable options (three flights at different
+    times, a train and a flight), and the desk should not be the one guessing
+    which the employee wants. The desk lists what is available here; the
+    employee picks one (see BookingSelectView); only then does the desk buy it
+    and record the real PNR against the journey itself.
+
+    Keyed by `journey_key` (the request's own 'trip', a leg's seq as a string,
+    or 'return') rather than a foreign key to a specific model, because a
+    journey can be any of TravelRequest, TravelLeg or the virtual
+    ReturnJourney — see BookingActionView for how a journey_key resolves back
+    to one of them.
+    """
+    request     = models.ForeignKey(TravelRequest, on_delete=models.CASCADE, related_name='booking_options')
+    journey_key = models.CharField(max_length=20)
+    seq         = models.PositiveIntegerField(default=0)   # display order among this journey's options
+
+    mode    = models.CharField(max_length=100, blank=True)   # Flight / Train / Bus
+    carrier = models.CharField(max_length=200, blank=True)   # airline or train name
+    detail  = models.CharField(max_length=200, blank=True)   # flight/train number, route detail
+    date    = models.DateField(null=True, blank=True)
+    time    = models.CharField(max_length=20, blank=True)     # "14:30" — free text, the desk copies it off a booking site
+    amount  = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    remarks = models.TextField(blank=True)
+
+    is_selected = models.BooleanField(default=False)
+    added_by    = models.CharField(max_length=200, blank=True)
+    created_at  = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['journey_key', 'seq']
+
+    def __str__(self):
+        return f"{self.mode} {self.carrier} {self.detail} · {self.get_time_label()}"
+
+    def get_time_label(self):
+        parts = [str(self.date) if self.date else '', self.time or '']
+        return ' '.join(p for p in parts if p)
 
 
 class ExpenseItem(models.Model):

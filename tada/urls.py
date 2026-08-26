@@ -6,7 +6,8 @@ from .views import (
     MyRequestsView, RequestDetailView, ClaimableSanctionsView,
     CreateTourSanctionView, CreateTravelExpenseView, CreateLocalTravelView,
     BillDownloadView, PendingQueueView, ActionView,
-    BookingQueueView, BookingActionView,
+    BookingQueueView, BookingActionView, BookingOptionsView, BookingSelectView,
+    TicketDownloadView,
 )
 
 urlpatterns = [
@@ -37,7 +38,10 @@ urlpatterns = [
     # Approvals (Manager / HR / Finance)
     path('queue/',                         PendingQueueView.as_view()),
     # Travel Help Desk
-    path('bookings/',                      BookingQueueView.as_view()),
-    path('requests/<int:req_id>/booking/', BookingActionView.as_view()),
+    path('bookings/',                              BookingQueueView.as_view()),
+    path('requests/<int:req_id>/booking/',         BookingActionView.as_view()),
+    path('requests/<int:req_id>/booking/options/', BookingOptionsView.as_view()),
+    path('requests/<int:req_id>/booking/select/',  BookingSelectView.as_view()),
+    path('ticket/<int:req_id>/<str:journey_key>/', TicketDownloadView.as_view()),
     path('requests/<int:req_id>/action/',  ActionView.as_view()),
 ]

@@ -19,7 +19,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from .models import (TadaUser, TadaOTP, TravelRequest, TravelLeg, ExpenseItem,
-                     LocalTravelItem, ApprovalLog, ReturnJourney)
+                     LocalTravelItem, ApprovalLog, ReturnJourney, BookingOption)
 from . import policy
 
 
@@ -229,6 +229,7 @@ def serialize_request(r, detail=False):
         'return_booking_fare': float(r.return_booking_fare),
         'return_booking_remarks': r.return_booking_remarks,
         'return_booked_by': r.return_booked_by,
+        'return_ticket_url': f'/api/tada/ticket/{r.id}/return/' if r.return_booking_ticket else None,
         'return_mode_date': str(r.return_mode_date) if r.return_mode_date else None,
         'return_mode_time_pref': r.return_mode_time_pref,
         'return_mode_time_pref_label': r.get_return_mode_time_pref_display() if r.return_mode_time_pref else None,
@@ -246,6 +247,7 @@ def serialize_request(r, detail=False):
             'booking_fare': float(r.booking_fare), 'booking_remarks': r.booking_remarks,
             'booked_by': r.booked_by,
             'booked_at': r.booked_at.strftime('%Y-%m-%d %H:%M') if r.booked_at else None,
+            'ticket_url': f'/api/tada/ticket/{r.id}/trip/' if r.booking_ticket else None,
         # Per-head estimate and the policy ceiling behind it, so a claim form can
         # show both without recomputing policy in the browser.
         'heads': r.estimate_heads if r.request_type == 'tour_sanction' else None,
@@ -284,9 +286,17 @@ def serialize_request(r, detail=False):
             'booking_fare': float(l.booking_fare), 'booking_remarks': l.booking_remarks,
             'booked_by': l.booked_by,
             'booked_at': l.booked_at.strftime('%Y-%m-%d %H:%M') if l.booked_at else None,
+            'ticket_url': f'/api/tada/ticket/{r.id}/{l.seq}/' if l.booking_ticket else None,
             'policy_heads': leg_policy_heads(r.user.level, l.destination_city, l.days or 0,
                                              _leg_nights(l, i == len(_legs) - 1)),
         } for i, l in enumerate(_legs)],
+        # Every option the desk has offered on this trip, across all its
+        # journeys, keyed so each screen filters to the one it is showing.
+        'booking_options': [{
+            'id': o.id, 'journey_key': o.journey_key, 'mode': o.mode, 'carrier': o.carrier,
+            'detail': o.detail, 'date': str(o.date) if o.date else None, 'time': o.time,
+            'amount': float(o.amount), 'remarks': o.remarks, 'is_selected': o.is_selected,
+        } for o in r.booking_options.all()],
         'total_claimed': float(r.total_claimed), 'total_approved': float(r.total_approved),
         'manager_remarks': r.manager_remarks, 'hr_remarks': r.hr_remarks, 'finance_remarks': r.finance_remarks,
         'created_at': r.created_at.strftime('%Y-%m-%d %H:%M'),
@@ -1082,6 +1092,22 @@ class BillDownloadView(APIView):
         return FileResponse(it.bill.open('rb'), filename=f'bill_{item_id}.pdf')
 
 
+class TicketDownloadView(APIView):
+    """The uploaded ticket, as the record of what was actually booked."""
+    def get(self, request, req_id, journey_key):
+        from django.http import FileResponse
+        r = TravelRequest.objects.filter(id=req_id).first()
+        if not r:
+            return Response({'error': 'Not found'}, status=404)
+        target, err = _resolve_journey(r, journey_key)
+        if err:
+            return err
+        if not target.booking_ticket:
+            return Response({'error': 'No ticket on file for this journey.'}, status=404)
+        name = target.booking_ticket.name.rsplit('/', 1)[-1]
+        return FileResponse(target.booking_ticket.open('rb'), filename=name)
+
+
 # ── APPROVALS (Manager / P&C (HR) / Finance) ────────────────────────────────────────
 NL = chr(10)
 
@@ -1163,17 +1189,31 @@ def _sign_off():
             "APIS India Limited"]
 
 
-def notify(subject, greeting, lines, recipients):
+def notify(subject, greeting, lines, recipients, attachment=None):
     """Compose and send. Never raises - mail is a side effect of the workflow,
-    not a gate on it, so a bad address must not fail an approval."""
+    not a gate on it, so a bad address must not fail an approval.
+
+    attachment, when given, is the ticket itself: the mail confirming a
+    booking is also the record of it, so whoever reads it later does not have
+    to log into the portal to find what was actually bought.
+    """
     to = sorted({x.email for x in recipients if x and x.email})
     if not to:
         return
     body = NL.join([greeting, ""] + lines + _sign_off())
     try:
-        send_mail(subject=subject, message=body,
-                  from_email=settings.DEFAULT_FROM_EMAIL, recipient_list=to,
-                  fail_silently=True)
+        if attachment:
+            from django.core.mail import EmailMessage
+            msg = EmailMessage(subject=subject, body=body, from_email=settings.DEFAULT_FROM_EMAIL,
+                               to=to)
+            attachment.open('rb')
+            msg.attach(attachment.name.rsplit('/', 1)[-1], attachment.read(), None)
+            attachment.close()
+            msg.send(fail_silently=True)
+        else:
+            send_mail(subject=subject, message=body,
+                      from_email=settings.DEFAULT_FROM_EMAIL, recipient_list=to,
+                      fail_silently=True)
     except Exception:
         pass
 
@@ -1318,7 +1358,40 @@ def notify_booked(r, target, action, by_name):
         lines += ["", "Remarks: %s" % target.booking_remarks]
     lines += ["", "As this ticket is paid for by the company, please do not include "
                   "this fare in your expense claim."]
-    notify("Ticket Booked | %s" % _trip_summary(r), "Dear %s," % r.user.name, lines, [r.user])
+    if target.booking_ticket:
+        lines += ["", "The ticket is attached to this mail, and is also available in the portal."]
+    notify("Ticket Booked | %s" % _trip_summary(r), "Dear %s," % r.user.name, lines, [r.user],
+           attachment=target.booking_ticket or None)
+
+
+def notify_options_sent(r, target):
+    """The desk found more than one way to travel — the employee has to pick."""
+    where = _journey_label(target, r)
+    opts = list(BookingOption.objects.filter(request=r, journey_key=target.journey_key))
+    lines = ["The Travel Help Desk has found the following options for %s, and needs "
+             "you to confirm which one to book." % where, ""]
+    for i, o in enumerate(opts, 1):
+        lines.append("  %d. %s%s %s — %s" % (
+            i, o.mode + ' ' if o.mode else '', o.carrier or '', o.get_time_label(), _money(o.amount)))
+        if o.detail:
+            lines.append("     %s" % o.detail)
+    lines += ["", "Please open the request in the APIS TA/DA Portal and confirm your choice — "
+                  "the desk cannot book anything until you do."]
+    notify("Please Confirm Your Ticket | %s | %s" % (_trip_summary(r), where),
+           "Dear %s," % r.user.name, lines, [r.user])
+
+
+def notify_option_selected(r, target, chosen, by_name):
+    """The employee has chosen — the desk can now actually buy the ticket."""
+    where = _journey_label(target, r)
+    lines = ["%s has confirmed which option to book for %s:" % (by_name, where), "",
+             "  %s%s %s — %s" % (chosen.mode + ' ' if chosen.mode else '', chosen.carrier or '',
+                                 chosen.get_time_label(), _money(chosen.amount))]
+    if chosen.detail:
+        lines.append("  %s" % chosen.detail)
+    lines += ["", "Please complete the ticketing and upload the ticket in the portal."]
+    notify("Employee Confirmed | %s | %s" % (_trip_summary(r), where),
+           "Dear Sir/Madam,", lines, _people("travel_desk"))
 
 
 def notify_paid(r, by_name):
@@ -1411,13 +1484,138 @@ class BookingQueueView(APIView):
             legs = r.company_booked_legs
             if not legs:
                 continue
-            (pending if any(x.booking_status == 'pending' for x in legs) else booked).append(
-                serialize_request(r, detail=True))
+            # Anything short of booked or cancelled is still the desk's to
+            # watch — quoting options, waiting on the employee's choice, or
+            # ticketing what they picked.
+            still_open = any(x.booking_status not in ('booked', 'cancelled') for x in legs)
+            (pending if still_open else booked).append(serialize_request(r, detail=True))
         return Response({'pending': pending, 'booked': booked[:100]})
 
 
+def _resolve_journey(r, journey_key):
+    """journey_key -> the TravelRequest, TravelLeg or ReturnJourney it names.
+
+    One place for this, because BookingActionView, BookingOptionsView and
+    BookingSelectView all need to turn the same three-shaped key back into the
+    object whose booking_* fields actually get written.
+    """
+    key = str(journey_key)
+    if key == 'return':
+        if r.trip_type != 'round_trip':
+            return None, Response({'error': 'This is a one-way trip — there is no return to book.'}, status=400)
+        return ReturnJourney(r), None
+    if key in ('', 'trip', 'None'):
+        return r, None
+    leg = r.legs.filter(seq=int(key)).first() if key.isdigit() else None
+    if not leg:
+        return None, Response({'error': 'That stop is not part of this trip.'}, status=404)
+    return leg, None
+
+
+class BookingOptionsView(APIView):
+    """The desk lists what it found for a journey — several flights or trains,
+    not the one it has already decided on — and the employee is asked to pick.
+    """
+    def post(self, request, req_id):
+        u = _get_user(request)
+        if not u:
+            return Response({'error': 'Login required.'}, status=401)
+        if u.role not in ('travel_desk', 'admin'):
+            return Response({'error': 'Only the Travel Help Desk can offer ticket options.'}, status=403)
+
+        r = TravelRequest.objects.filter(id=req_id).first()
+        if not r:
+            return Response({'error': 'Not found'}, status=404)
+        if r.status not in ('hr_approved', 'finance_approved', 'paid'):
+            return Response({'error': f'That trip is not approved yet ({_status_label(r)}).'}, status=400)
+
+        journey_key = str(request.data.get('journey_key') or 'trip')
+        target, err = _resolve_journey(r, journey_key)
+        if err:
+            return err
+        if target.booking_mode != 'company':
+            return Response({'error': 'That journey is being booked by the employee.'}, status=400)
+
+        raw = request.data.get('options') or []
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        options = [o for o in raw if (o.get('carrier') or o.get('detail') or o.get('amount'))]
+        if len(options) < 2:
+            return Response({'error': 'Add at least two options for the employee to choose between.'}, status=400)
+        if len(options) > 6:
+            return Response({'error': 'That is a lot of options — six is plenty for anyone to choose from.'}, status=400)
+        for i, o in enumerate(options):
+            if not (o.get('carrier') or '').strip():
+                return Response({'error': f'Option {i + 1} needs the airline or train name.'}, status=400)
+            if _sf(o.get('amount')) <= 0:
+                return Response({'error': f'Option {i + 1} needs the fare.'}, status=400)
+
+        with transaction.atomic():
+            # A fresh set replaces the last — the desk is re-quoting, not adding
+            # to a stale list the employee already looked at once.
+            BookingOption.objects.filter(request=r, journey_key=journey_key).delete()
+            for i, o in enumerate(options):
+                BookingOption.objects.create(
+                    request=r, journey_key=journey_key, seq=i,
+                    mode=(o.get('mode') or '').strip(), carrier=(o.get('carrier') or '').strip(),
+                    detail=(o.get('detail') or '').strip(), date=_parse_date(o.get('date')),
+                    time=(o.get('time') or '').strip(), amount=_sf(o.get('amount')),
+                    remarks=(o.get('remarks') or '').strip(), added_by=u.name)
+            target.booking_status = 'options_sent'
+            target.save()
+
+        ApprovalLog.objects.create(request=r, stage='travel_desk', action='options_sent', by_name=u.name,
+                                   remarks=f'{len(options)} option(s) offered.')
+        notify_options_sent(r, target)
+        return Response({'message': 'Options sent to the employee.', 'request': serialize_request(r, detail=True)})
+
+
+class BookingSelectView(APIView):
+    """The employee's turn: pick one of the desk's options."""
+    def post(self, request, req_id):
+        u = _get_user(request)
+        if not u:
+            return Response({'error': 'Login required.'}, status=401)
+
+        r = TravelRequest.objects.filter(id=req_id).first()
+        if not r:
+            return Response({'error': 'Not found'}, status=404)
+        if r.user_id != u.id:
+            return Response({'error': 'This is not your request.'}, status=403)
+
+        journey_key = str(request.data.get('journey_key') or 'trip')
+        target, err = _resolve_journey(r, journey_key)
+        if err:
+            return err
+        if target.booking_status != 'options_sent':
+            return Response({'error': 'There is nothing awaiting your confirmation for this journey.'}, status=400)
+
+        option_id = request.data.get('option_id')
+        chosen = BookingOption.objects.filter(id=option_id, request=r, journey_key=journey_key).first()
+        if not chosen:
+            return Response({'error': 'Choose one of the options offered.'}, status=400)
+
+        with transaction.atomic():
+            BookingOption.objects.filter(request=r, journey_key=journey_key).update(is_selected=False)
+            chosen.is_selected = True
+            chosen.save(update_fields=['is_selected'])
+            target.booking_status = 'confirmed'
+            target.save()
+
+        ApprovalLog.objects.create(request=r, stage='employee', action='confirmed', by_name=u.name,
+                                   remarks=f'Chose: {chosen.carrier} {chosen.get_time_label()}')
+        notify_option_selected(r, target, chosen, u.name)
+        return Response({'message': 'Choice confirmed — the desk has been notified.',
+                         'request': serialize_request(r, detail=True)})
+
+
 class BookingActionView(APIView):
-    """Record what the desk booked — or that it could not be booked."""
+    """Record what the desk booked — or that it could not be booked.
+
+    When the employee has already confirmed one of the offered options, that
+    option's fare and carrier are what gets booked unless the desk overrides
+    them — the whole point of asking was to book what was actually chosen.
+    """
     def post(self, request, req_id):
         u = _get_user(request)
         if not u:
@@ -1432,19 +1630,10 @@ class BookingActionView(APIView):
             return Response({'error': f'That trip is not approved yet ({_status_label(r)}).'}, status=400)
 
         d = request.data
-        # A leg is identified by its seq; a single-destination trip has none.
-        seq = d.get('leg_seq')
-        target = r
-        if str(seq) == 'return':
-            # The journey home is its own ticket, wrapped to read and write like
-            # a leg so nothing below needs a second code path.
-            if r.trip_type != 'round_trip':
-                return Response({'error': 'This is a one-way trip — there is no return to book.'}, status=400)
-            target = ReturnJourney(r)
-        elif seq is not None and str(seq) != '':
-            target = r.legs.filter(seq=int(seq)).first()
-            if not target:
-                return Response({'error': 'That stop is not part of this trip.'}, status=404)
+        journey_key = str(d.get('leg_seq') if d.get('leg_seq') is not None else d.get('journey_key') or 'trip')
+        target, err = _resolve_journey(r, journey_key)
+        if err:
+            return err
         if target.booking_mode != 'company':
             return Response({'error': 'That journey is being booked by the employee.'}, status=400)
 
@@ -1452,16 +1641,24 @@ class BookingActionView(APIView):
         if action not in ('booked', 'cancelled'):
             return Response({'error': 'action must be booked or cancelled.'}, status=400)
 
+        chosen = BookingOption.objects.filter(request=r, journey_key=journey_key, is_selected=True).first()
+
         if action == 'booked':
             ref = (d.get('booking_reference') or '').strip()
-            fare = _sf(d.get('booking_fare'))
+            carrier = (d.get('booking_carrier') or '').strip() or (chosen.carrier if chosen else '')
+            fare_in = d.get('booking_fare')
+            fare = _sf(fare_in) if fare_in not in (None, '') else (float(chosen.amount) if chosen else 0)
             if not ref:
                 return Response({'error': 'A PNR or ticket number is needed to record a booking.'}, status=400)
             if fare <= 0:
                 return Response({'error': 'Enter the fare actually paid.'}, status=400)
+            ticket = request.FILES.get('ticket')
+            if not ticket:
+                return Response({'error': 'Upload the ticket — it is the record of what was actually booked.'}, status=400)
             target.booking_reference = ref
-            target.booking_carrier = (d.get('booking_carrier') or '').strip()
+            target.booking_carrier = carrier
             target.booking_fare = fare
+            target.booking_ticket.save(f'ticket_{r.id}_{journey_key}_{ticket.name}', ticket, save=False)
         target.booking_status = action
         target.booking_remarks = (d.get('booking_remarks') or '').strip()
         target.booked_by = u.name
