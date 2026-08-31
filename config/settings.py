@@ -182,6 +182,19 @@ EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.getenv('EMAIL_HOST_USER', '')
 
+# ── Pocket HRMS ───────────────────────────────────────────────────────────────
+# The company's hire-to-retire system, and the source of truth for who works
+# here. The intranet portal syncs its employee directory from this rather than
+# keeping a second copy that has to be re-uploaded by hand.
+#
+# The token is company-scoped and is a credential: keep it in .env, never in
+# the repo. Ask Pocket HRMS support for the production company token.
+# Note their staging host (essapistaging.pockethrms.com:8343) is unreachable
+# from the office network — port 8343 is firewalled — so production is the
+# only usable environment from here.
+POCKET_HRMS_BASE_URL = os.getenv('POCKET_HRMS_BASE_URL', 'https://api.pockethrms.com')
+POCKET_HRMS_TOKEN = os.getenv('POCKET_HRMS_TOKEN', '')
+
 # Dedicated sender for offer/appraisal letters — separate account from the one
 # used for PMS login OTPs. Falls back to the shared account above if unset.
 OFFER_LETTER_EMAIL_HOST_USER = os.getenv('OFFER_LETTER_EMAIL_HOST_USER') or EMAIL_HOST_USER

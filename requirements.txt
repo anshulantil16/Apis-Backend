@@ -18,3 +18,6 @@ dj-database-url>=2.0.0
 mysqlclient>=2.2.0
 reportlab>=4.0.0
 pypdf>=4.0.0
+
+# Pocket HRMS employee-master sync (accounts/services/hrms.py)
+requests>=2.31
