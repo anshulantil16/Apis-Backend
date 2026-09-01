@@ -186,3 +186,141 @@ class SessionTokens(TestCase):
         raw = PortalSession.start(self.user)
         PortalUser.objects.filter(pk=self.user.pk).update(is_active=False)
         self.assertEqual(self.client.get(ME, HTTP_AUTHORIZATION=f'Bearer {raw}').status_code, 401)
+
+
+@DEV_OFF
+class AdminConsolePowers(TestCase):
+    """What an administrator can actually do to an account.
+
+    The console could toggle switches but not edit an address, add a person, or
+    remove one - so the endpoint that existed was unreachable and the ones that
+    mattered were missing.
+    """
+
+    def setUp(self):
+        self.admin = PortalUser.objects.create(
+            email=SUPERADMIN_BOOTSTRAP_EMAIL, employee_code='APIS-ADMIN',
+            name='Anshul Antil', is_superadmin=True)
+        self.token = PortalSession.start(self.admin)
+        self.other = PortalUser.objects.create(
+            email='someone@apisindia.com', employee_code='E1', name='Some One',
+            app_access=['home'])
+        self.auth = {'HTTP_AUTHORIZATION': f'Bearer {self.token}'}
+
+    def patch(self, user, body):
+        return self.client.patch(f'/api/accounts/portal/admin/users/{user.id}/', body,
+                                 content_type='application/json', **self.auth)
+
+    def post(self, path, body):
+        return self.client.post(f'/api/accounts/portal/admin/{path}', body,
+                                content_type='application/json', **self.auth)
+
+    def remove(self, user, name, auth=None):
+        return self.client.delete(f'/api/accounts/portal/admin/users/{user.id}/',
+                                  {'confirm_name': name}, content_type='application/json',
+                                  **(auth or self.auth))
+
+    # -- editing someone ----------------------------------------------------
+    def test_an_address_can_be_corrected(self):
+        """A mistyped address locks that person out with no clue why."""
+        r = self.patch(self.other, {'email': 'Correct@apisindia.com'})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.other.refresh_from_db()
+        self.assertEqual(self.other.email, 'correct@apisindia.com')
+
+    def test_two_people_cannot_share_an_address(self):
+        r = self.patch(self.other, {'email': SUPERADMIN_BOOTSTRAP_EMAIL})
+        self.assertEqual(r.status_code, 400)
+
+    def test_a_malformed_address_is_refused(self):
+        r = self.patch(self.other, {'email': 'not-an-address'})
+        self.assertEqual(r.status_code, 400)
+
+    def test_the_founding_address_is_fixed(self):
+        """The bootstrap account is recognised by its address; change it and
+        the way back into an empty portal is gone."""
+        r = self.patch(self.admin, {'email': 'elsewhere@apisindia.com'})
+        self.assertEqual(r.status_code, 400)
+
+    def test_details_can_be_edited(self):
+        r = self.patch(self.other, {'name': 'New Name', 'designation': 'Manager',
+                                    'department': 'Sales', 'employee_code': 'E99'})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.other.refresh_from_db()
+        self.assertEqual((self.other.name, self.other.employee_code), ('New Name', 'E99'))
+
+    # -- adding and removing ------------------------------------------------
+    def test_a_person_can_be_added_by_hand(self):
+        r = self.post('users/', {'email': 'new@apisindia.com', 'name': 'New Joiner',
+                                 'employee_code': 'E2', 'app_access': ['home', 'tada']})
+        self.assertEqual(r.status_code, 200, r.content)
+        u = PortalUser.objects.get(email='new@apisindia.com')
+        self.assertEqual(u.app_access, ['home', 'tada'])
+
+    def test_removing_needs_the_name_typed(self):
+        """A yes/no dialog is muscle memory; typing the name is not."""
+        r = self.remove(self.other, 'wrong')
+        self.assertEqual(r.status_code, 400)
+        self.assertTrue(PortalUser.objects.filter(id=self.other.id).exists())
+
+    def test_removing_works_with_the_right_name(self):
+        r = self.remove(self.other, 'some one')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertFalse(PortalUser.objects.filter(id=self.other.id).exists())
+
+    def test_the_founding_account_cannot_be_removed(self):
+        r = self.remove(self.admin, self.admin.name)
+        self.assertEqual(r.status_code, 400)
+
+    def test_removing_an_hrms_person_warns_they_come_back(self):
+        self.other.from_hrms = True
+        self.other.save()
+        r = self.remove(self.other, self.other.name)
+        self.assertTrue(r.json()['warning'],
+                        'silently reappearing on the next sync is worse than a warning')
+
+    # -- many at once -------------------------------------------------------
+    def test_a_tool_can_be_granted_to_several_people(self):
+        third = PortalUser.objects.create(email='c@apisindia.com', employee_code='E3',
+                                          name='Third', app_access=[])
+        r = self.post('bulk-access/', {'user_ids': [self.other.id, third.id],
+                                       'action': 'grant', 'app': 'tada'})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()['changed'], 2)
+        for u in (self.other, third):
+            u.refresh_from_db()
+            self.assertIn('tada', u.app_access)
+
+    def test_revoking_in_bulk(self):
+        self.post('bulk-access/', {'user_ids': [self.other.id], 'action': 'grant', 'app': 'tada'})
+        self.post('bulk-access/', {'user_ids': [self.other.id], 'action': 'revoke', 'app': 'tada'})
+        self.other.refresh_from_db()
+        self.assertNotIn('tada', self.other.app_access)
+
+    def test_an_unknown_tool_is_refused(self):
+        r = self.post('bulk-access/', {'user_ids': [self.other.id],
+                                       'action': 'grant', 'app': 'not-a-tool'})
+        self.assertEqual(r.status_code, 400)
+
+    def test_bulk_disable_skips_the_founding_account(self):
+        r = self.post('bulk-access/', {'user_ids': [self.admin.id, self.other.id],
+                                       'action': 'disable'})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.admin.refresh_from_db()
+        self.other.refresh_from_db()
+        self.assertTrue(self.admin.is_active, 'the way back in must survive a bulk action')
+        self.assertFalse(self.other.is_active)
+        self.assertTrue(r.json()['skipped'])
+
+    def test_none_of_this_is_open_to_a_normal_user(self):
+        plain = PortalUser.objects.create(email='p@apisindia.com', employee_code='E4',
+                                          name='Plain')
+        auth = {'HTTP_AUTHORIZATION': f'Bearer {PortalSession.start(plain)}'}
+        self.assertEqual(self.client.patch(
+            f'/api/accounts/portal/admin/users/{self.other.id}/', {'name': 'Hacked'},
+            content_type='application/json', **auth).status_code, 403)
+        self.assertEqual(self.remove(self.other, 'Some One', auth).status_code, 403)
+        self.assertEqual(self.client.post(
+            '/api/accounts/portal/admin/bulk-access/',
+            {'user_ids': [self.other.id], 'action': 'grant', 'app': 'tada'},
+            content_type='application/json', **auth).status_code, 403)

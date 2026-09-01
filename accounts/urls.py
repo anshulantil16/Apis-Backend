@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .views import (AdminHrmsPreviewView, AdminSessionsView, AdminSyncView,
+from .views import (AdminBulkAccessView, AdminHrmsPreviewView, AdminSessionsView, AdminSyncView,
                     AdminUserDetailView, AdminUsersView,
                     LogoutView, MeView, RequestOTPView, VerifyOTPView)
 
@@ -14,6 +14,7 @@ urlpatterns = [
     # Console (superadmin only)
     path('portal/admin/users/',                  AdminUsersView.as_view()),
     path('portal/admin/users/<int:user_id>/',    AdminUserDetailView.as_view()),
+    path('portal/admin/bulk-access/',            AdminBulkAccessView.as_view()),
     path('portal/admin/sync/',                   AdminSyncView.as_view()),
     path('portal/admin/hrms-preview/',           AdminHrmsPreviewView.as_view()),
     path('portal/admin/sessions/',               AdminSessionsView.as_view()),

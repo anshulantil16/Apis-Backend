@@ -364,7 +364,30 @@ class AdminUserDetailView(_AdminView):
             if unknown:
                 return Response({'error': f'Unknown app(s): {", ".join(unknown)}'}, status=400)
             u.app_access = list(wanted)
-        for f in ('name', 'designation', 'department', 'location'):
+        # Email is the sign-in identity, so it is editable but guarded: a typo in
+        # an address locks that person out with no clue why, and a duplicate
+        # would make two people answer to one sign-in.
+        if 'email' in d:
+            email = (d['email'] or '').strip().lower()
+            if not email or '@' not in email:
+                return Response({'error': 'That is not an email address.'}, status=400)
+            if u.is_bootstrap_superadmin and email != SUPERADMIN_BOOTSTRAP_EMAIL.lower():
+                return Response({'error': 'The founding account is identified by its '
+                                          'address, so that one cannot be changed.'}, status=400)
+            if PortalUser.objects.filter(email__iexact=email).exclude(id=u.id).exists():
+                return Response({'error': 'Someone else already has that address.'}, status=400)
+            u.email = email
+
+        if 'employee_code' in d:
+            code = (d['employee_code'] or '').strip()
+            if not code:
+                return Response({'error': 'An employee code is required.'}, status=400)
+            if PortalUser.objects.filter(employee_code__iexact=code).exclude(id=u.id).exists():
+                return Response({'error': 'That employee code is already in use.'}, status=400)
+            u.employee_code = code
+
+        for f in ('name', 'designation', 'department', 'location',
+                  'reporting_manager_code'):
             if f in d:
                 setattr(u, f, (d[f] or '').strip())
         u.save()
@@ -373,6 +396,97 @@ class AdminUserDetailView(_AdminView):
         if not u.is_active:
             u.sessions.filter(revoked_at__isnull=True).update(revoked_at=timezone.now())
         return Response({'message': f'{u.name} updated.', 'user': serialize_user(u)})
+
+
+    def delete(self, request, user_id):
+        """Remove someone from the portal for good.
+
+        Distinct from disabling, which is the right answer for a leaver: it
+        keeps the record and can be undone. This is for a row that should never
+        have existed - a duplicate, a test account, a typo'd import - so it
+        takes the person's own name as confirmation rather than a yes/no.
+
+        Anyone synced from Pocket HRMS comes straight back on the next sync, so
+        the response says so rather than letting an admin think it stuck.
+        """
+        s, err = self._guard(request)
+        if err:
+            return err
+        u = PortalUser.objects.filter(id=user_id).first()
+        if not u:
+            return Response({'error': 'No such user.'}, status=404)
+
+        if u.is_bootstrap_superadmin:
+            return Response({'error': 'The founding administrator cannot be removed — '
+                                      'it is the way back in.'}, status=400)
+        if u.is_superadmin and PortalUser.objects.filter(
+                is_superadmin=True, is_active=True).count() <= 1:
+            return Response({'error': 'That is the last administrator. Promote someone '
+                                      'else first.'}, status=400)
+        if (request.data.get('confirm_name') or '').strip().lower() != u.name.strip().lower():
+            return Response({'error': f'Type "{u.name}" to confirm the removal.'}, status=400)
+
+        name, from_hrms = u.name, u.from_hrms
+        u.delete()
+        return Response({
+            'message': f'{name} removed.',
+            'warning': ('This person came from Pocket HRMS and will reappear on the next '
+                        'sync. Disable them instead if you want them to stay out.')
+            if from_hrms else '',
+        })
+
+
+class AdminBulkAccessView(_AdminView):
+    """Grant or revoke one tool across many people at once.
+
+    Opening thirty drawers to give thirty people the same tool is how an
+    administrator ends up not bothering, and everyone gets left with whatever
+    the default was.
+    """
+
+    def post(self, request):
+        s, err = self._guard(request)
+        if err:
+            return err
+
+        ids = request.data.get('user_ids') or []
+        action = str(request.data.get('action') or '')
+        app = str(request.data.get('app') or '')
+
+        if not ids:
+            return Response({'error': 'Choose some people first.'}, status=400)
+        if action not in ('grant', 'revoke', 'enable', 'disable'):
+            return Response({'error': 'Unknown action.'}, status=400)
+        if action in ('grant', 'revoke') and app not in AppKey.values:
+            return Response({'error': f'Unknown tool "{app}".'}, status=400)
+
+        people = PortalUser.objects.filter(id__in=ids)
+        changed, skipped = 0, []
+
+        for u in people:
+            if action == 'disable':
+                if u.is_bootstrap_superadmin:
+                    skipped.append(f'{u.name} (founding account)')
+                    continue
+                u.is_active = False
+                u.sessions.filter(revoked_at__isnull=True).update(revoked_at=timezone.now())
+            elif action == 'enable':
+                u.is_active = True
+            else:
+                access = list(u.app_access or [])
+                if action == 'grant' and app not in access:
+                    access.append(app)
+                elif action == 'revoke' and app in access:
+                    access.remove(app)
+                else:
+                    continue        # already in the state asked for
+                u.app_access = access
+            u.save()
+            changed += 1
+
+        return Response({'changed': changed, 'skipped': skipped,
+                         'message': f'{changed} '
+                                    f'{"person" if changed == 1 else "people"} updated.'})
 
 
 class AdminSyncView(_AdminView):
