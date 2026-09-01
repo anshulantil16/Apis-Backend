@@ -47,15 +47,30 @@ COLUMNS = [
      'Date of joining, written day-month-year.\n\nFor example 25-04-2024.'),
 ]
 
-# Shown on the guide sheet only, so it can never be imported.
-EXAMPLE = [
-    ['employee_id', 'name', 'reporting_manager_id', 'hod_id', 'user_type'],
-    ['APIS1001', 'Rahul Sharma', 'APIS1010', 'APIS1050', 'employee'],
-    ['APIS1010', 'Arun Mishra', 'APIS1050', 'APIS1050', 'manager'],
-    ['APIS1050', 'Narendra Gangwar', '', '', 'hod'],
+# Filled-in rows, so it is obvious what each column should look like - and
+# harmless if they are left in. Their IDs begin with SAMPLE-, and the importer
+# skips those, reporting how many it ignored. That is what makes them safe:
+# an example you must remember to delete is a trap, not a help.
+SAMPLE_ROWS = [
+    # id, name, email, designation, department, manager, hod, type, zone, subzone, phone, joined
+    ['SAMPLE-001', 'Rahul Sharma', 'rahul.sharma@apisindia.com', 'Sales Executive',
+     'Sales', 'SAMPLE-002', 'SAMPLE-003', 'employee', 'North', 'Delhi',
+     '9876543210', '25-04-2024'],
+    ['SAMPLE-002', 'Arun Mishra', 'arun.mishra@apisindia.com', 'Area Sales Manager',
+     'Sales', 'SAMPLE-003', 'SAMPLE-003', 'manager', 'North', '',
+     '9876543211', '01-06-2021'],
+    ['SAMPLE-003', 'Narendra Gangwar', 'narendra.gangwar@apisindia.com', 'Head - Sales',
+     'Sales', '', '', 'hod', 'North', '', '9876543212', '15-01-2018'],
 ]
 
 NOTES = [
+    ('The three SAMPLE rows are yours to overwrite', [
+        'They show what a filled-in row looks like, including how a reporting line '
+        'is written.',
+        'You can delete them, type over them, or simply leave them - the upload '
+        'ignores any row whose employee_id starts with SAMPLE-, and tells you how '
+        'many it skipped.',
+    ]),
     ('Two columns are compulsory', [
         'employee_id and name. Every other column may be left blank.',
         'A row with neither is skipped, and reported back to you after the upload.',
@@ -110,7 +125,20 @@ def build_template() -> bytes:
         ws.column_dimensions[get_column_letter(i)].width = width
 
     ws.row_dimensions[1].height = 26
-    ws['A2'].alignment = Alignment(horizontal='left')
+
+    # Filled-in rows, tinted so they read as examples rather than as data. Safe
+    # to leave in: the importer skips SAMPLE- ids.
+    for r, row in enumerate(SAMPLE_ROWS, start=2):
+        for i, value in enumerate(row, start=1):
+            c = ws.cell(row=r, column=i, value=value)
+            c.fill = GUIDE_FILL
+            c.font = Font(size=10, color='78350F')
+
+    # No hint text on this sheet, deliberately. Anything written in a cell below
+    # the header is read back as a row of data - a note saying "these are only
+    # examples" would itself arrive at the importer as a nameless employee. The
+    # SAMPLE- ids say what they are, the headings carry hover notes, and the
+    # second sheet holds the rest.
 
     guide = wb.create_sheet('How to fill this in')
     guide.column_dimensions['A'].width = 3
@@ -139,7 +167,13 @@ def build_template() -> bytes:
     guide.merge_cells(start_row=r, start_column=2, end_row=r, end_column=6)
     r += 2
 
-    for j, row in enumerate(EXAMPLE):
+    hierarchy = [
+        ['employee_id', 'name', 'reporting_manager_id', 'hod_id', 'user_type'],
+        ['SAMPLE-001', 'Rahul Sharma', 'SAMPLE-002', 'SAMPLE-003', 'employee'],
+        ['SAMPLE-002', 'Arun Mishra', 'SAMPLE-003', 'SAMPLE-003', 'manager'],
+        ['SAMPLE-003', 'Narendra Gangwar', '', '', 'hod'],
+    ]
+    for j, row in enumerate(hierarchy):
         for i, value in enumerate(row, start=2):
             c = guide.cell(row=r, column=i, value=value)
             if j == 0:

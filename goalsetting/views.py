@@ -20,7 +20,7 @@ from rest_framework.views import APIView
 
 from .models import (ADMIN_BOOTSTRAP_EMAIL, CATEGORIES, EmployeeProfile,
                      FREQUENCY_OPTIONS, GoalCycle, GoalPlan, KRA, OTPToken,
-                     PlanEvent)
+                     PlanEvent, PlanVersion)
 from .serializers import (CycleSerializer, EmployeeSerializer, PlanSerializer,
                           PlanSummarySerializer)
 from .services import (WorkflowError, advance, force_status, get_or_create_plan,
@@ -421,7 +421,7 @@ class EmployeeImportView(GSView):
             return Response({'error': 'The sheet needs at least an Employee ID column and a Name '
                                       'column. Found: ' + ', '.join(df.columns)}, status=400)
 
-        created = updated = 0
+        created = updated = skipped_samples = 0
         errors = []
         for i, row in df.iterrows():
             def val(field):
@@ -432,6 +432,14 @@ class EmployeeImportView(GSView):
             name = val('name')
             if not emp_id:
                 errors.append(f'Row {i + 2}: no Employee ID.')
+                continue
+
+            # The template ships filled-in SAMPLE- rows so it is obvious what a
+            # row should look like. Skipping them here is what makes leaving
+            # them in harmless - an example you must remember to delete is a
+            # trap, not a help.
+            if emp_id.upper().startswith('SAMPLE-'):
+                skipped_samples += 1
                 continue
             if not name:
                 errors.append(f'Row {i + 2}: no name for {emp_id}.')
@@ -468,6 +476,7 @@ class EmployeeImportView(GSView):
             updated += (not was_created)
 
         return Response({'created': created, 'updated': updated,
+                         'skipped_samples': skipped_samples,
                          'errors': errors[:50], 'error_count': len(errors)})
 
 
@@ -658,3 +667,71 @@ class ActivityView(GSView):
             'note': e.note,
             'created_at': e.created_at,
         } for e in events[:limit]])
+
+
+class ResetView(GSView):
+    """Clear the product's data. Guarded, and scoped.
+
+    Appraisal Hub has the same feature as one all-or-nothing button. That is
+    usually not what someone wants: the common case after a trial run is
+    "throw away the goal sheets but keep the people I just uploaded", and an
+    all-or-nothing wipe makes them re-upload the master to get back to work.
+
+    So it takes a scope. Both require the confirmation phrase, because this
+    deletes the version history too - the one thing the product promises is
+    permanent.
+    """
+
+    SCOPES = {
+        'plans': 'Goal sheets, their versions and their history',
+        'people': 'The employee list',
+        'all': 'Everything - sheets, history, people and cycles',
+    }
+
+    def get(self, request):
+        """What a reset would remove, so the count is seen before the click."""
+        return Response({
+            'scopes': [{'key': k, 'label': v} for k, v in self.SCOPES.items()],
+            'counts': {
+                'plans': GoalPlan.objects.count(),
+                'versions': PlanVersion.objects.count(),
+                'events': PlanEvent.objects.count(),
+                'people': EmployeeProfile.objects.exclude(employee_id='GS-ADMIN').count(),
+                'cycles': GoalCycle.objects.count(),
+            },
+        })
+
+    def post(self, request):
+        if request.data.get('confirm') != 'RESET_CONFIRMED':
+            return Response({'error': 'This needs confirmation. Type the phrase to proceed.'},
+                            status=400)
+
+        scope = str(request.data.get('scope') or '')
+        if scope not in self.SCOPES:
+            return Response({'error': f'Choose what to clear: {", ".join(self.SCOPES)}.'},
+                            status=400)
+
+        removed = {}
+        with transaction.atomic():
+            if scope in ('plans', 'all'):
+                removed['versions'] = PlanVersion.objects.count()
+                removed['events'] = PlanEvent.objects.count()
+                removed['plans'] = GoalPlan.objects.count()
+                # KRAs and KPIs cascade from the plan.
+                GoalPlan.objects.all().delete()
+
+            if scope in ('people', 'all'):
+                # The bootstrap admin survives, or nobody could sign back in to
+                # undo this - which would be a very poor end to a reset.
+                people = EmployeeProfile.objects.exclude(employee_id='GS-ADMIN')
+                removed['people'] = people.count()
+                people.delete()
+
+            if scope == 'all':
+                removed['cycles'] = GoalCycle.objects.count()
+                GoalCycle.objects.all().delete()
+
+        return Response({
+            'message': f'Cleared: {self.SCOPES[scope].lower()}.',
+            'removed': removed,
+        })

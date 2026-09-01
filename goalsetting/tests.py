@@ -7,8 +7,8 @@ lost or altered.
 """
 from django.test import TestCase
 
-from .models import (EmployeeProfile, GoalCycle, GoalPlan, PlanVersion,
-                     diff_snapshots)
+from .models import (EmployeeProfile, GoalCycle, GoalPlan, PlanEvent,
+                     PlanVersion, diff_snapshots)
 from .services import WorkflowError, advance, get_or_create_plan, readiness, save_kras
 
 BASE = '/api/goalsetting'
@@ -513,13 +513,18 @@ class Template(TestCase):
         for required in ('employee_id', 'name'):
             self.assertIn(required, df.columns)
 
-    def test_it_contains_no_rows_to_delete(self):
-        """It used to ship a guidance row and three example people with a note
-        saying to delete them. Forget, and four imaginary employees import."""
+    def test_it_contains_nothing_but_sample_rows(self):
+        """Filled-in examples are the point of a template - but every row in it
+        must be one the importer will skip, or a forgotten example becomes a
+        real employee. See SampleRows for the skipping itself."""
         import io as _io
         import pandas as pd
         r = self.client.get(f'{BASE}/employees/template/')
-        self.assertEqual(len(pd.read_excel(_io.BytesIO(r.content))), 0)
+        df = pd.read_excel(_io.BytesIO(r.content))
+        self.assertTrue(len(df) > 0)
+        for value in df['employee_id']:
+            self.assertTrue(str(value).startswith('SAMPLE-'),
+                            f'"{value}" would be imported as a real person')
 
     def test_a_filled_in_copy_imports(self):
         """The round trip, end to end - which is the only thing that matters."""
@@ -550,3 +555,104 @@ class Template(TestCase):
         # and the reporting line actually linked, which is the usual failure
         team = self.client.get(f'{BASE}/manager/T2/team/').json()
         self.assertEqual([p['employee_id'] for p in team], ['T1'])
+
+
+class SampleRows(TestCase):
+    """The template ships filled-in rows, and they must be harmless.
+
+    An example you have to remember to delete is a trap: forget once and three
+    imaginary employees are on the list. These are skipped on import instead.
+    """
+
+    def _upload(self, frame):
+        import io as _io
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        buf = _io.BytesIO()
+        frame.to_excel(buf, index=False)
+        return self.client.post(f'{BASE}/employees/import/',
+                                {'file': SimpleUploadedFile('x.xlsx', buf.getvalue())})
+
+    def test_the_template_now_shows_filled_in_rows(self):
+        import io as _io
+        import pandas as pd
+        df = pd.read_excel(_io.BytesIO(
+            self.client.get(f'{BASE}/employees/template/').content))
+        self.assertEqual(len(df), 3, 'the examples are the point of a template')
+        self.assertTrue(all(str(v).startswith('SAMPLE-') for v in df['employee_id']))
+
+    def test_uploading_the_untouched_template_imports_nobody(self):
+        import io as _io
+        import pandas as pd
+        df = pd.read_excel(_io.BytesIO(
+            self.client.get(f'{BASE}/employees/template/').content))
+        r = self._upload(df)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()['created'], 0)
+        self.assertEqual(r.json()['skipped_samples'], 3)
+        self.assertEqual(EmployeeProfile.objects.count(), 0)
+
+    def test_real_rows_alongside_samples_still_import(self):
+        """Someone typing under the examples rather than over them."""
+        import io as _io
+        import pandas as pd
+        df = pd.read_excel(_io.BytesIO(
+            self.client.get(f'{BASE}/employees/template/').content))
+        mine = pd.DataFrame([{'employee_id': 'R1', 'name': 'Real Person'}],
+                            columns=df.columns)
+        r = self._upload(pd.concat([df, mine], ignore_index=True))
+        self.assertEqual(r.json()['created'], 1)
+        self.assertEqual(r.json()['skipped_samples'], 3)
+        self.assertEqual([e.employee_id for e in EmployeeProfile.objects.all()], ['R1'])
+
+
+class Reset(Fixture):
+    """Clearing the data. Guarded, because it deletes the version history —
+    the one thing this product promises is permanent."""
+
+    def setUp(self):
+        super().setUp()
+        self.fill()
+        advance(self.plan, 'submit', role='employee')
+
+    def test_it_refuses_without_the_confirmation(self):
+        r = self.post('/reset/', {'scope': 'all'})
+        self.assertEqual(r.status_code, 400)
+        self.assertTrue(GoalPlan.objects.exists())
+
+    def test_it_refuses_an_unknown_scope(self):
+        r = self.post('/reset/', {'scope': 'everything', 'confirm': 'RESET_CONFIRMED'})
+        self.assertEqual(r.status_code, 400)
+        self.assertTrue(GoalPlan.objects.exists())
+
+    def test_clearing_sheets_keeps_the_people(self):
+        """The common case after a trial run — an all-or-nothing wipe would
+        make them re-upload the master just to carry on."""
+        r = self.post('/reset/', {'scope': 'plans', 'confirm': 'RESET_CONFIRMED'})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(GoalPlan.objects.count(), 0)
+        self.assertEqual(PlanVersion.objects.count(), 0)
+        self.assertEqual(EmployeeProfile.objects.count(), 3)
+        self.assertEqual(GoalCycle.objects.count(), 1)
+
+    def test_clearing_people_keeps_the_cycle(self):
+        self.post('/reset/', {'scope': 'people', 'confirm': 'RESET_CONFIRMED'})
+        self.assertEqual(EmployeeProfile.objects.count(), 0)
+        self.assertEqual(GoalCycle.objects.count(), 1)
+
+    def test_clearing_everything(self):
+        r = self.post('/reset/', {'scope': 'all', 'confirm': 'RESET_CONFIRMED'})
+        self.assertEqual(r.status_code, 200, r.content)
+        for model in (GoalPlan, PlanVersion, PlanEvent, EmployeeProfile, GoalCycle):
+            self.assertEqual(model.objects.count(), 0, model.__name__)
+
+    def test_the_bootstrap_admin_survives(self):
+        """Otherwise a reset locks the administrator out of undoing it."""
+        EmployeeProfile.objects.create(employee_id='GS-ADMIN', name='Admin', user_type='admin')
+        self.post('/reset/', {'scope': 'all', 'confirm': 'RESET_CONFIRMED'})
+        self.assertTrue(EmployeeProfile.objects.filter(employee_id='GS-ADMIN').exists())
+
+    def test_it_says_what_it_would_remove_before_you_click(self):
+        r = self.client.get(f'{BASE}/reset/')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()['counts']['plans'], 1)
+        self.assertEqual(r.json()['counts']['people'], 3)

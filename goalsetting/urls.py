@@ -35,4 +35,5 @@ urlpatterns = [
     path('employees/<str:employee_id>/', views.EmployeeDetailView.as_view()),
     path('all-plans/', views.AllPlansView.as_view()),
     path('overview/', views.OverviewView.as_view()),
+    path('reset/', views.ResetView.as_view()),
 ]
