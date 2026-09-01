@@ -735,3 +735,49 @@ class ResetView(GSView):
             'message': f'Cleared: {self.SCOPES[scope].lower()}.',
             'removed': removed,
         })
+
+
+class ExportView(GSView):
+    """Download the agreed goals as a workbook.
+
+    Defaults to accepted sheets only, because "the final goals" is what this is
+    for. ?status=all widens it to every sheet, for the mid-cycle view.
+    """
+
+    def get(self, request):
+        from django.http import HttpResponse
+        from .export import build_export
+
+        plans = _plans()
+        cycle_name = 'All cycles'
+
+        cycle_id = request.query_params.get('cycle_id')
+        if cycle_id:
+            plans = plans.filter(cycle_id=cycle_id)
+            cycle = GoalCycle.objects.filter(id=cycle_id).first()
+            cycle_name = cycle.name if cycle else cycle_name
+
+        # Kept before the status filter, so the "not agreed yet" sheet can tell
+        # a sheet sitting with the HOD from one nobody has opened.
+        all_plans = list(plans)
+
+        status = request.query_params.get('status') or 'accepted'
+        if status != 'all':
+            plans = plans.filter(status=status)
+
+        people = (EmployeeProfile.objects
+                  .filter(is_active=True)
+                  .exclude(user_type='admin')
+                  .order_by('name'))
+
+        payload = build_export(list(plans.order_by('employee__name')),
+                               all_plans, list(people), cycle_name)
+
+        safe = ''.join(ch if ch.isalnum() or ch in '-_ ' else '' for ch in cycle_name).strip()
+        name = f'goal-setting-{safe or "export"}.xlsx'.replace(' ', '-').lower()
+
+        r = HttpResponse(
+            payload,
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        r['Content-Disposition'] = f'attachment; filename="{name}"'
+        return r

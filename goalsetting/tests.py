@@ -656,3 +656,86 @@ class Reset(Fixture):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()['counts']['plans'], 1)
         self.assertEqual(r.json()['counts']['people'], 3)
+
+
+class Export(Fixture):
+    """The workbook of agreed goals.
+
+    Three sheets because an admin asks three questions of the same data: what
+    was agreed, how each sheet totals up, and who still owes goals.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # E1 agrees; E2 gets stuck with the HOD; a third person never starts.
+        self.fill()
+        for action, role in [('submit', 'employee'), ('to_hod', 'manager'),
+                             ('to_employee', 'hod'), ('accept', 'employee')]:
+            advance(self.plan, action, role=role, name='Somebody')
+
+        self.other = EmployeeProfile.objects.create(
+            employee_id='E2', name='Priya Nair', reporting_manager_id='M1', hod_id='H1')
+        stuck = get_or_create_plan(self.other, self.cycle)
+        save_kras(stuck, FULL)
+        stuck.refresh_from_db()
+        advance(stuck, 'submit', role='employee')
+        advance(stuck, 'to_hod', role='manager')
+
+        EmployeeProfile.objects.create(employee_id='E3', name='Never Started',
+                                       reporting_manager_id='M1', hod_id='H1')
+
+    def _book(self, query=''):
+        import io as _io
+        import pandas as pd
+        r = self.client.get(f'{BASE}/export/{query}')
+        self.assertEqual(r.status_code, 200)
+        return pd.ExcelFile(_io.BytesIO(r.content))
+
+    def test_it_downloads_as_a_spreadsheet(self):
+        r = self.client.get(f'{BASE}/export/')
+        self.assertIn('spreadsheetml', r['Content-Type'])
+        self.assertIn('attachment', r['Content-Disposition'])
+
+    def test_three_sheets(self):
+        self.assertEqual(self._book().sheet_names,
+                         ['Goals', 'Summary', 'Not agreed yet'])
+
+    def test_it_exports_only_the_agreed_goals_by_default(self):
+        """"The final one" is the whole point - a mid-review sheet is not final."""
+        import pandas as pd
+        book = self._book()
+        goals = pd.read_excel(book, 'Goals')
+        self.assertEqual(set(goals['Employee ID']), {'E1'})
+        self.assertEqual(len(goals), 4, 'one row per KPI')
+
+    def test_every_sheet_can_be_asked_for(self):
+        import pandas as pd
+        goals = pd.read_excel(self._book('?status=all'), 'Goals')
+        self.assertEqual(set(goals['Employee ID']), {'E1', 'E2'})
+
+    def test_a_goal_row_carries_the_person_it_belongs_to(self):
+        """Flat, so the file can be filtered and pivoted."""
+        import pandas as pd
+        row = pd.read_excel(self._book(), 'Goals').iloc[0]
+        self.assertEqual(row['Name'], 'Rahul')
+        self.assertEqual(row['Weight %'], 40)
+        self.assertTrue(row['KRA'])
+        self.assertTrue(row['Plan / Target'])
+
+    def test_the_summary_is_one_line_per_person(self):
+        import pandas as pd
+        s = pd.read_excel(self._book(), 'Summary')
+        self.assertEqual(len(s), 1)
+        self.assertEqual(s.iloc[0]['Total weight %'], 100)
+        self.assertEqual(s.iloc[0]['KPIs'], 4)
+
+    def test_pending_distinguishes_stuck_from_never_started(self):
+        """This was wrong: the sheet was built from the filtered list, so
+        anyone mid-review read as "Not started" - the opposite of the truth,
+        in the one column an admin uses to chase people."""
+        import pandas as pd
+        p = pd.read_excel(self._book(), 'Not agreed yet').set_index('Employee ID')
+        self.assertEqual(p.loc['E2', 'Where it is stuck'], 'With HOD')
+        self.assertEqual(p.loc['E2', 'Waiting on'], 'The HOD, to review')
+        self.assertEqual(p.loc['E3', 'Where it is stuck'], 'Not started')
+        self.assertNotIn('E1', p.index, 'someone who has agreed is not pending')

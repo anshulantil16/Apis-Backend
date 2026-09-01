@@ -36,4 +36,5 @@ urlpatterns = [
     path('all-plans/', views.AllPlansView.as_view()),
     path('overview/', views.OverviewView.as_view()),
     path('reset/', views.ResetView.as_view()),
+    path('export/', views.ExportView.as_view()),
 ]
