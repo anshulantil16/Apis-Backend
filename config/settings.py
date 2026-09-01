@@ -195,6 +195,18 @@ DEFAULT_FROM_EMAIL = os.getenv('EMAIL_HOST_USER', '')
 POCKET_HRMS_BASE_URL = os.getenv('POCKET_HRMS_BASE_URL', 'https://api.pockethrms.com')
 POCKET_HRMS_TOKEN = os.getenv('POCKET_HRMS_TOKEN', '')
 
+# Local development sign-in. When on, the portal will register any company
+# address on first use and hand the sign-in code straight back in the response
+# instead of emailing it — because a developer's machine has no SMTP
+# credentials and no synced employee directory, so otherwise nobody but the
+# bootstrap superadmin can sign in locally at all.
+#
+# Gated on its own variable rather than on DEBUG, deliberately: DEBUG above
+# defaults to True when unset, so a server whose .env forgot the line would
+# silently turn this on. This one is off unless someone writes it down, and it
+# belongs only in a local .env — never on QA or PROD.
+PORTAL_DEV_LOGIN = os.getenv('PORTAL_DEV_LOGIN', '') == '1'
+
 # Dedicated sender for offer/appraisal letters — separate account from the one
 # used for PMS login OTPs. Falls back to the shared account above if unset.
 OFFER_LETTER_EMAIL_HOST_USER = os.getenv('OFFER_LETTER_EMAIL_HOST_USER') or EMAIL_HOST_USER

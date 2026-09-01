@@ -93,6 +93,15 @@ def _bootstrap_superadmin():
     return u
 
 
+def _dev_login():
+    """True only on a developer's machine, and only if they opted in.
+
+    Read through getattr so an older .env or a settings module without the
+    flag simply means 'off' rather than an AttributeError at sign-in.
+    """
+    return bool(getattr(settings, 'PORTAL_DEV_LOGIN', False))
+
+
 class PortalAPIView(APIView):
     """Base for every portal endpoint.
 
@@ -119,6 +128,24 @@ class RequestOTPView(PortalAPIView):
         else:
             user = PortalUser.objects.filter(email__iexact=email, is_active=True).first()
 
+        # On a developer's machine there is no HRMS sync, so the directory is
+        # empty and nobody but the bootstrap account can get in. Register a
+        # company address on first use so the whole team can run the app
+        # locally. Off unless PORTAL_DEV_LOGIN=1 is in their own .env.
+        #
+        # Note the second condition. The lookup above filters on is_active, so
+        # a DISABLED person also comes back as None — creating then would both
+        # break on the unique email and, but for that constraint, hand a
+        # switched-off account a way back in. Someone who has been disabled
+        # must stay disabled, on a developer's machine as much as anywhere.
+        if (user is None and _dev_login() and email.endswith('@apisindia.com')
+                and not PortalUser.objects.filter(email__iexact=email).exists()):
+            user = PortalUser.objects.create(
+                email=email, name=email.split('@')[0].replace('.', ' ').title(),
+                employee_code=f'DEV-{email.split("@")[0][:12]}',
+                designation='Developer', department='IT',
+                app_access=[c.value for c in AppKey])
+
         # A wrong address and an unknown address answer identically. This
         # endpoint is reachable from the internet, and answering "no such
         # person" turns it into a directory of who works here.
@@ -136,6 +163,16 @@ class RequestOTPView(PortalAPIView):
                                       'and try again.'}, status=429)
 
         code = PortalOTP.issue(user)
+
+        # Locally there are no SMTP credentials, so emailing the code would
+        # fail and lock the developer out of their own build. Hand it back in
+        # the response instead — the login screen fills it in. This is the one
+        # place a code is ever exposed, and it cannot happen on a server:
+        # PORTAL_DEV_LOGIN is absent from every deployed .env.
+        if _dev_login():
+            print(f'[portal] dev sign-in code for {email}: {code}')
+            return Response({**generic.data, 'dev_otp': code})
+
         try:
             send_mail(
                 subject='Your APIS Intranet sign-in code',
