@@ -216,3 +216,50 @@ def get_or_create_plan(employee, cycle):
     """
     plan, _ = GoalPlan.objects.get_or_create(employee=employee, cycle=cycle)
     return plan
+
+
+@transaction.atomic
+def force_status(plan, status, *, name='', note=''):
+    """Admin override: put a sheet at whatever stage it needs to be at.
+
+    Exists because real processes go wrong in ways a workflow cannot predict -
+    someone leaves mid-cycle, a sheet is accepted by mistake, an HOD is away for
+    a month. The alternative to an override is people editing the database by
+    hand, which leaves no trace at all.
+
+    So it records both a version and an event: an overridden sheet carries the
+    fact that it was overridden, by whom, and why.
+    """
+    valid = dict(GoalPlan.STATUS_CHOICES)
+    if status not in valid:
+        raise WorkflowError(f'"{status}" is not a stage a sheet can be at.')
+
+    was = plan.get_status_display()
+    if plan.status == status:
+        raise WorkflowError(f'This sheet is already "{was}".')
+
+    plan.status = status
+    stamp = _STAMP.get(status)
+    if stamp:
+        setattr(plan, stamp, timezone.now())
+    plan.save()
+
+    detail = f'Moved from "{was}" to "{valid[status]}".' + (f' {note}' if note else '')
+    PlanVersion.record(plan, role='admin', name=name, action='admin_moved', note=detail)
+    PlanEvent.objects.create(plan=plan, actor_role='admin', actor_name=name,
+                             action='admin_moved', note=detail)
+    return plan
+
+
+@transaction.atomic
+def record_admin_edit(plan, *, name='', note=''):
+    """Freeze an admin's change to the sheet straight away.
+
+    An employee or reviewer's edits are only versioned when they hand the sheet
+    on, because a draft in progress is not yet a statement of anything. An admin
+    edit has no hand-off - it can land on a sheet that was agreed weeks ago - so
+    it is versioned the moment it is saved, or it would be the one change nobody
+    could see.
+    """
+    return PlanVersion.record(plan, role='admin', name=name, action='admin_edit',
+                              note=note or 'Edited by an administrator.')

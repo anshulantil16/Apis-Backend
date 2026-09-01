@@ -23,8 +23,8 @@ from .models import (ADMIN_BOOTSTRAP_EMAIL, CATEGORIES, EmployeeProfile,
                      PlanEvent)
 from .serializers import (CycleSerializer, EmployeeSerializer, PlanSerializer,
                           PlanSummarySerializer)
-from .services import (WorkflowError, advance, get_or_create_plan, readiness,
-                       save_kras)
+from .services import (WorkflowError, advance, force_status, get_or_create_plan,
+                       readiness, record_admin_edit, save_kras)
 
 
 class GSView(APIView):
@@ -258,16 +258,25 @@ class PlanView(GSView):
         role = str(request.data.get('role') or 'employee')
         plan = get_or_create_plan(emp, cycle)
 
-        if not cycle.accepts_edits:
-            return Response({'error': f'The {cycle.name} cycle is '
-                                      f'{cycle.get_status_display().lower()}, so it cannot be edited.'},
-                            status=403)
-        if not plan.may_edit(role):
-            holder = dict(GoalPlan.STATUS_CHOICES).get(plan.status, plan.status)
-            return Response({'error': f'This sheet is "{holder}", so it is not yours to edit '
-                                      f'right now.'}, status=403)
+        # An admin edits regardless of the cycle being locked, or of whose turn
+        # it is. That is the point of the seat: the workflow exists to keep
+        # ordinary users in sequence, not to leave someone stuck.
+        if role != 'admin':
+            if not cycle.accepts_edits:
+                return Response({'error': f'The {cycle.name} cycle is '
+                                          f'{cycle.get_status_display().lower()}, so it cannot be edited.'},
+                                status=403)
+            if not plan.may_edit(role):
+                holder = dict(GoalPlan.STATUS_CHOICES).get(plan.status, plan.status)
+                return Response({'error': f'This sheet is "{holder}", so it is not yours to edit '
+                                          f'right now.'}, status=403)
 
-        save_kras(plan, request.data.get('kras'))
+        with transaction.atomic():
+            save_kras(plan, request.data.get('kras'))
+            plan.refresh_from_db()
+            if role == 'admin':
+                record_admin_edit(plan, name=str(request.data.get('actor_name') or 'Administrator'),
+                                  note=str(request.data.get('note') or ''))
         plan.refresh_from_db()
         data = PlanSerializer(_plans().get(id=plan.id)).data
         data['problems'] = readiness(plan)
@@ -552,3 +561,81 @@ class PlanReopenView(GSView):
                                  action='reopened',
                                  note=f'Reopened from "{was}". {note}'.strip())
         return Response(PlanSerializer(_plans().get(id=plan.id)).data)
+
+
+class PlanStatusView(GSView):
+    """Admin override: put a sheet at any stage."""
+
+    def post(self, request, plan_id):
+        plan = _plans().filter(id=plan_id).first()
+        if not plan:
+            return Response({'error': 'Goal sheet not found.'}, status=404)
+        try:
+            force_status(plan, str(request.data.get('status') or ''),
+                         name=str(request.data.get('actor_name') or 'Administrator'),
+                         note=str(request.data.get('note') or ''))
+        except WorkflowError as e:
+            return Response({'error': e.message}, status=e.status)
+        return Response(PlanSerializer(_plans().get(id=plan.id)).data)
+
+
+class EmployeeCreateView(GSView):
+    """Add one person by hand, for the joiner who missed the upload."""
+
+    def post(self, request):
+        emp_id = str(request.data.get('employee_id') or '').strip()
+        name = str(request.data.get('name') or '').strip()
+        if not emp_id or not name:
+            return Response({'error': 'An Employee ID and a name are both required.'}, status=400)
+        if EmployeeProfile.objects.filter(employee_id__iexact=emp_id).exists():
+            return Response({'error': f'{emp_id} is already on the list.'}, status=400)
+
+        emp = EmployeeProfile.objects.create(
+            employee_id=emp_id, name=name,
+            email=str(request.data.get('email') or '').strip(),
+            phone=str(request.data.get('phone') or '').strip(),
+            designation=str(request.data.get('designation') or '').strip(),
+            department=str(request.data.get('department') or '').strip(),
+            zone=str(request.data.get('zone') or '').strip(),
+            reporting_manager_id=str(request.data.get('reporting_manager_id') or '').strip(),
+            hod_id=str(request.data.get('hod_id') or '').strip(),
+            user_type=str(request.data.get('user_type') or 'employee'),
+        )
+        return Response(EmployeeSerializer(emp).data, status=201)
+
+
+class ActivityView(GSView):
+    """Every step taken across the whole product, newest first.
+
+    The admin's answer to "what has actually been happening?" - a manager
+    returning sheets nobody asked them to, an HOD who has not touched theirs in
+    a fortnight. Per-plan history answers one case at a time; this is the view
+    across all of them.
+    """
+
+    def get(self, request):
+        events = (PlanEvent.objects
+                  .select_related('plan', 'plan__employee', 'plan__cycle')
+                  .order_by('-created_at'))
+        if request.query_params.get('cycle_id'):
+            events = events.filter(plan__cycle_id=request.query_params['cycle_id'])
+        if request.query_params.get('role'):
+            events = events.filter(actor_role=request.query_params['role'])
+
+        try:
+            limit = min(int(request.query_params.get('limit', 100)), 500)
+        except ValueError:
+            limit = 100
+
+        return Response([{
+            'id': e.id,
+            'plan_id': e.plan_id,
+            'employee_name': e.plan.employee.name,
+            'employee_code': e.plan.employee.employee_id,
+            'cycle_name': e.plan.cycle.name,
+            'actor_role': e.actor_role,
+            'actor_name': e.actor_name,
+            'action': e.action,
+            'note': e.note,
+            'created_at': e.created_at,
+        } for e in events[:limit]])

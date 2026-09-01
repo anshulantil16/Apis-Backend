@@ -156,6 +156,15 @@ class GoalPlan(models.Model):
         return f'{self.employee.name} - {self.cycle.name}'
 
     def may_edit(self, role):
+        """Admin may edit at any stage; everyone else only when they hold it.
+
+        The override is deliberate and it is NOT a hole in the audit trail:
+        an admin save records a version like any other change, so a sheet that
+        was altered after both sides agreed it says so, with a name on it. The
+        power to fix a mistake is useless if using it cannot be seen.
+        """
+        if role == 'admin':
+            return True
         return role in self.EDITORS.get(self.status, [])
 
     @property

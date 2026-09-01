@@ -19,6 +19,7 @@ urlpatterns = [
     path('plans/<int:plan_id>/', views.PlanDetailView.as_view()),
     path('plans/<int:plan_id>/action/', views.PlanActionView.as_view()),
     path('plans/<int:plan_id>/reopen/', views.PlanReopenView.as_view()),
+    path('plans/<int:plan_id>/status/', views.PlanStatusView.as_view()),
     path('my/<str:employee_id>/plans/', views.MyPlansView.as_view()),
 
     # reviewers
@@ -28,6 +29,8 @@ urlpatterns = [
     # admin
     path('employees/import/', views.EmployeeImportView.as_view()),
     path('employees/', views.EmployeeListView.as_view()),
+    path('employees/create/', views.EmployeeCreateView.as_view()),
+    path('activity/', views.ActivityView.as_view()),
     path('employees/<str:employee_id>/', views.EmployeeDetailView.as_view()),
     path('all-plans/', views.AllPlansView.as_view()),
     path('overview/', views.OverviewView.as_view()),

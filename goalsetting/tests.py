@@ -106,10 +106,16 @@ class WhoMayEdit(Fixture):
         self.assertFalse(self.plan.may_edit('manager'))
         self.assertTrue(self.plan.may_edit('hod'))
 
-    def test_an_accepted_sheet_is_closed_to_everyone(self):
+    def test_an_accepted_sheet_is_closed_to_the_people_who_agreed_it(self):
+        """Nobody who took part may quietly reopen what they signed off.
+
+        The admin is the deliberate exception - see AdminPowers, where the
+        override is only allowed because every admin edit is versioned.
+        """
         self.plan.status = 'accepted'
-        for role in ('employee', 'manager', 'hod', 'admin'):
+        for role in ('employee', 'manager', 'hod'):
             self.assertFalse(self.plan.may_edit(role), role)
+        self.assertTrue(self.plan.may_edit('admin'))
 
 
 class Workflow(Fixture):
@@ -355,3 +361,125 @@ class Regressions(Fixture):
         self.assertEqual(self.plan.status, 'submitted')
         self.assertTrue(self.plan.may_edit('manager'))
         self.assertFalse(self.plan.may_edit('employee'))
+
+
+class AdminPowers(Fixture):
+    """The admin seat overrides the workflow — and is recorded doing it.
+
+    The override is only safe because it is visible. These tests exist to keep
+    it that way: if an admin change could ever land without a version, the
+    product's promise that history is complete would quietly become false.
+    """
+
+    def test_admin_edits_a_sheet_that_is_with_someone_else(self):
+        self.fill()
+        advance(self.plan, 'submit', role='employee')          # now with the manager
+        r = self.post(f'/plans/E1/{self.cycle.id}/', {
+            'role': 'admin', 'actor_name': 'Anshul',
+            'kras': sheet(('Corrected metric', 100)),
+        })
+        self.assertEqual(r.status_code, 200, r.content)
+        self.plan.refresh_from_db()
+        self.assertEqual(self.plan.kras.first().kpis.first().metric, 'Corrected metric')
+
+    def test_admin_edits_an_agreed_sheet(self):
+        """The hardest case: changing something both sides already signed off."""
+        self.fill()
+        for action, role in [('submit', 'employee'), ('to_hod', 'manager'),
+                             ('to_employee', 'hod'), ('accept', 'employee')]:
+            advance(self.plan, action, role=role)
+        self.assertEqual(self.plan.status, 'accepted')
+
+        r = self.post(f'/plans/E1/{self.cycle.id}/', {
+            'role': 'admin', 'actor_name': 'Anshul', 'kras': sheet(('Late correction', 100)),
+        })
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_an_admin_edit_is_always_recorded(self):
+        """Without this, an admin is the one actor who can change goals invisibly."""
+        self.fill()
+        advance(self.plan, 'submit', role='employee')
+        before = self.plan.versions.count()
+
+        self.post(f'/plans/E1/{self.cycle.id}/', {
+            'role': 'admin', 'actor_name': 'Anshul',
+            'kras': sheet(('Corrected metric', 100)),
+        })
+        self.plan.refresh_from_db()
+        self.assertEqual(self.plan.versions.count(), before + 1)
+
+        v = self.plan.versions.order_by('-version_no').first()
+        self.assertEqual(v.actor_role, 'admin')
+        self.assertEqual(v.actor_name, 'Anshul')
+        self.assertTrue(v.changes, 'the version must say what the admin changed')
+
+    def test_admin_edits_even_when_the_cycle_is_locked(self):
+        self.fill()
+        self.cycle.status = 'locked'
+        self.cycle.save()
+        r = self.post(f'/plans/E1/{self.cycle.id}/', {
+            'role': 'admin', 'actor_name': 'Anshul', 'kras': sheet(('After lock', 100)),
+        })
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_a_normal_user_still_cannot(self):
+        """The override belongs to the admin alone."""
+        self.fill()
+        advance(self.plan, 'submit', role='employee')
+        for role in ('employee', 'hod'):
+            r = self.post(f'/plans/E1/{self.cycle.id}/', {'role': role, 'kras': FULL})
+            self.assertEqual(r.status_code, 403, role)
+
+    def test_admin_moves_a_sheet_to_any_stage(self):
+        self.fill()
+        r = self.post(f'/plans/{self.plan.id}/status/',
+                      {'status': 'with_hod', 'actor_name': 'Anshul', 'note': 'Manager is away.'})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.plan.refresh_from_db()
+        self.assertEqual(self.plan.status, 'with_hod')
+
+    def test_an_override_says_where_it_came_from(self):
+        self.fill()
+        self.post(f'/plans/{self.plan.id}/status/',
+                  {'status': 'accepted', 'actor_name': 'Anshul', 'note': 'Agreed offline.'})
+        v = self.plan.versions.order_by('-version_no').first()
+        self.assertEqual(v.action, 'admin_moved')
+        self.assertIn('Draft with Employee', v.note)
+        self.assertIn('Agreed offline', v.note)
+
+    def test_a_nonsense_stage_is_refused(self):
+        r = self.post(f'/plans/{self.plan.id}/status/', {'status': 'banana'})
+        self.assertEqual(r.status_code, 400)
+
+    def test_admin_adds_a_person_by_hand(self):
+        r = self.post('/employees/create/', {
+            'employee_id': 'E9', 'name': 'Late Joiner', 'email': 'late@apisindia.com',
+            'reporting_manager_id': 'M1', 'user_type': 'employee',
+        })
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertTrue(EmployeeProfile.objects.filter(employee_id='E9').exists())
+
+    def test_a_duplicate_id_is_refused(self):
+        r = self.post('/employees/create/', {'employee_id': 'E1', 'name': 'Clash'})
+        self.assertEqual(r.status_code, 400)
+
+    def test_admin_edits_employee_details(self):
+        r = self.client.patch(f'{BASE}/employees/E1/',
+                              {'designation': 'Senior Executive', 'hod_id': 'H1'},
+                              content_type='application/json')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.emp.refresh_from_db()
+        self.assertEqual(self.emp.designation, 'Senior Executive')
+
+    def test_the_activity_feed_shows_every_step(self):
+        self.fill()
+        advance(self.plan, 'submit', role='employee', name='Rahul')
+        advance(self.plan, 'to_hod', role='manager', name='Arun')
+
+        r = self.client.get(f'{BASE}/activity/')
+        self.assertEqual(r.status_code, 200)
+        feed = r.json()
+        self.assertEqual([e['action'] for e in feed], ['to_hod', 'submit'],
+                         'newest first')
+        self.assertEqual(feed[0]['employee_name'], 'Rahul')
+        self.assertEqual(feed[0]['actor_name'], 'Arun')
