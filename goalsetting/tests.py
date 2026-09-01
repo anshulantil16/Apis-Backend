@@ -483,3 +483,70 @@ class AdminPowers(Fixture):
                          'newest first')
         self.assertEqual(feed[0]['employee_name'], 'Rahul')
         self.assertEqual(feed[0]['actor_name'], 'Arun')
+
+
+class Template(TestCase):
+    """The blank sheet an admin downloads, fills in and uploads back.
+
+    Generated from the importer's own column list, so the two cannot drift; the
+    tests below are what keep that true.
+    """
+
+    def test_it_downloads_as_a_spreadsheet(self):
+        r = self.client.get(f'{BASE}/employees/template/')
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('spreadsheetml', r['Content-Type'])
+        self.assertIn('attachment', r['Content-Disposition'])
+
+    def test_its_headings_are_what_the_importer_reads(self):
+        """A template whose columns have drifted fails at upload with a
+        complaint about a column the person is certain they included."""
+        import io as _io
+        import pandas as pd
+        from .views import COLUMN_MAP
+
+        r = self.client.get(f'{BASE}/employees/template/')
+        df = pd.read_excel(_io.BytesIO(r.content))
+        for heading in df.columns:
+            self.assertIn(heading, COLUMN_MAP,
+                          f'"{heading}" is in the template but the importer ignores it')
+        for required in ('employee_id', 'name'):
+            self.assertIn(required, df.columns)
+
+    def test_it_contains_no_rows_to_delete(self):
+        """It used to ship a guidance row and three example people with a note
+        saying to delete them. Forget, and four imaginary employees import."""
+        import io as _io
+        import pandas as pd
+        r = self.client.get(f'{BASE}/employees/template/')
+        self.assertEqual(len(pd.read_excel(_io.BytesIO(r.content))), 0)
+
+    def test_a_filled_in_copy_imports(self):
+        """The round trip, end to end - which is the only thing that matters."""
+        import io as _io
+        import pandas as pd
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        blank = pd.read_excel(_io.BytesIO(
+            self.client.get(f'{BASE}/employees/template/').content))
+
+        filled = pd.DataFrame([{
+            'employee_id': 'T1', 'name': 'Filled In', 'email': 't1@apisindia.com',
+            'reporting_manager_id': 'T2', 'user_type': 'employee',
+        }, {
+            'employee_id': 'T2', 'name': 'Their Manager', 'user_type': 'manager',
+        }], columns=blank.columns)
+
+        buf = _io.BytesIO()
+        filled.to_excel(buf, index=False)
+
+        r = self.client.post(f'{BASE}/employees/import/', {
+            'file': SimpleUploadedFile('filled.xlsx', buf.getvalue()),
+        })
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()['created'], 2)
+        self.assertEqual(r.json()['error_count'], 0)
+
+        # and the reporting line actually linked, which is the usual failure
+        team = self.client.get(f'{BASE}/manager/T2/team/').json()
+        self.assertEqual([p['employee_id'] for p in team], ['T1'])

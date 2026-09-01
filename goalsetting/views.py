@@ -471,6 +471,25 @@ class EmployeeImportView(GSView):
                          'errors': errors[:50], 'error_count': len(errors)})
 
 
+class EmployeeTemplateView(GSView):
+    """Hand back a filled-in-shape .xlsx for the admin to complete.
+
+    Built on the fly from the same column list the importer uses, so the two
+    cannot drift apart - a stale template fails at upload with a complaint
+    about a column the person is sure they included.
+    """
+
+    def get(self, request):
+        from django.http import HttpResponse
+        from .template import build_template
+
+        r = HttpResponse(
+            build_template(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        r['Content-Disposition'] = 'attachment; filename="goal-setting-employees-template.xlsx"'
+        return r
+
+
 class EmployeeListView(GSView):
     def get(self, request):
         qs = EmployeeProfile.objects.all()

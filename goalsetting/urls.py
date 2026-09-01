@@ -28,6 +28,7 @@ urlpatterns = [
 
     # admin
     path('employees/import/', views.EmployeeImportView.as_view()),
+    path('employees/template/', views.EmployeeTemplateView.as_view()),
     path('employees/', views.EmployeeListView.as_view()),
     path('employees/create/', views.EmployeeCreateView.as_view()),
     path('activity/', views.ActivityView.as_view()),
