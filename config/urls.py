@@ -26,6 +26,7 @@ urlpatterns = [
     path('api/user_management/', include('user_management.urls')),
     path('api/performance/', include('performance.urls')),
     path('api/appraisal/',   include('appraisal.urls')),
+    path('api/goalsetting/', include('goalsetting.urls')),
     path('api/eom/',         include('eom.urls')),
     path('api/pms/',         include('pms.urls')),
     path('api/tada/',        include('tada.urls')),

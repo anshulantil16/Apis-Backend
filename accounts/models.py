@@ -39,6 +39,7 @@ class AppKey(models.TextChoices):
     EXTRACTOR      = 'extractor',      'Data Extractor'
     PERFORMANCE    = 'performance',    'Performance Hub'
     APPRAISAL      = 'appraisal',      'Appraisal Hub'
+    GOAL_SETTING   = 'goal-setting',   'Goal Setting Hub'
     EOM            = 'eom',            'EOM Hub'
     PMS            = 'pms',            'PMS Simulator'
     OFFER_LETTERS  = 'offer-letters',  'Letters Generator'

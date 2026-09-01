@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'user_management',
     'performance',
     'appraisal',
+    'goalsetting',
     'eom',
     'pms',
     'tada',
