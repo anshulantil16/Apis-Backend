@@ -11,6 +11,7 @@ from datetime import timedelta
 import pandas as pd
 from django.conf import settings
 from django.core.mail import send_mail
+from django.db import transaction
 from django.db.models import Prefetch
 from django.utils import timezone
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -225,11 +226,24 @@ class PlanView(GSView):
     """GET or save one employee's sheet for one cycle."""
 
     def get(self, request, employee_id, cycle_id):
+        """Read a sheet. Only the employee's own visit may CREATE one.
+
+        A reviewer opening a colleague's sheet used to call get_or_create,
+        so merely looking at someone marked them as started: the admin's
+        "not started" count fell every time a manager clicked a name. A read
+        must not change what it is reporting on.
+        """
         emp = EmployeeProfile.objects.filter(employee_id__iexact=employee_id).first()
         cycle = GoalCycle.objects.filter(id=cycle_id).first()
         if not emp or not cycle:
             return Response({'error': 'Employee or cycle not found.'}, status=404)
-        plan = get_or_create_plan(emp, cycle)
+
+        plan = GoalPlan.objects.filter(employee=emp, cycle=cycle).first()
+        if not plan:
+            if request.query_params.get('role') != 'employee':
+                return Response({'error': f'{emp.name} has not started a goal sheet for '
+                                          f'{cycle.name} yet.', 'not_started': True}, status=404)
+            plan = get_or_create_plan(emp, cycle)
         return Response(PlanSerializer(_plans().get(id=plan.id)).data)
 
     def post(self, request, employee_id, cycle_id):
@@ -268,20 +282,29 @@ class PlanActionView(GSView):
         if not plan:
             return Response({'error': 'Goal sheet not found.'}, status=404)
 
-        # Save whatever is on screen first, so an edit is never lost to the
-        # act of sending it on.
         role = str(request.data.get('role') or '')
-        if request.data.get('kras') is not None and plan.may_edit(role):
-            save_kras(plan, request.data.get('kras'))
-            plan.refresh_from_db()
 
+        # The save and the hand-off are ONE transaction, deliberately.
+        #
+        # Saving whatever is on screen first means a reviewer's last edit is
+        # never lost to the act of sending it on. But when they were separate,
+        # a refused hand-off still left its edit written: a manager could post
+        # an edit against a locked cycle, be told "the cycle is locked", and
+        # have the change land anyway. A request that is refused must change
+        # nothing, so the WorkflowError has to escape the atomic block to roll
+        # the save back.
         try:
-            advance(plan, str(request.data.get('action') or ''),
-                    role=role,
-                    name=str(request.data.get('actor_name') or ''),
-                    employee_id=str(request.data.get('actor_employee_id') or ''),
-                    note=str(request.data.get('note') or ''))
+            with transaction.atomic():
+                if request.data.get('kras') is not None and plan.may_edit(role):
+                    save_kras(plan, request.data.get('kras'))
+                    plan.refresh_from_db()
+                advance(plan, str(request.data.get('action') or ''),
+                        role=role,
+                        name=str(request.data.get('actor_name') or ''),
+                        employee_id=str(request.data.get('actor_employee_id') or ''),
+                        note=str(request.data.get('note') or ''))
         except WorkflowError as e:
+            plan.refresh_from_db()
             return Response({'error': e.message, 'problems': e.problems}, status=e.status)
 
         return Response(PlanSerializer(_plans().get(id=plan.id)).data)

@@ -52,13 +52,15 @@ class Fixture(TestCase):
         self.plan.refresh_from_db()
         return self.plan
 
+    def post(self, path, body):
+        return self.client.post(BASE + path, body, content_type='application/json')
+
 
 class SheetRules(Fixture):
-    def test_a_new_plan_opens_with_the_four_categories(self):
-        """A blank page does not tell someone what is expected of them."""
-        self.assertEqual([k.category for k in self.plan.kras.all()],
-                         ['Financial', 'Customer Enhancement',
-                          'Internal Business Process', 'People Development'])
+    def test_a_new_plan_starts_empty(self):
+        """The form supplies the four category headings and their empty states;
+        the plan itself holds nothing until the employee writes something."""
+        self.assertEqual(self.plan.kras.count(), 0)
 
     def test_empty_rows_are_not_saved(self):
         save_kras(self.plan, [{'category': 'Financial', 'title': '',
@@ -215,9 +217,11 @@ class History(Fixture):
         advance(self.plan, 'to_hod', role='manager')
 
         changes = self.plan.versions.get(version_no=2).changes
-        weight = [c for c in changes if c['type'] == 'kpi_changed' and c['field'] == 'weightage']
-        self.assertTrue(weight)
-        self.assertEqual((weight[0]['from'], weight[0]['to']), (40, 60))
+        moved = {c['kpi']: (c['from'], c['to']) for c in changes
+                 if c['type'] == 'kpi_changed' and c['field'] == 'weightage'}
+        self.assertEqual(moved.get('Primary sales'), (40, 60))
+        self.assertEqual(moved.get('Retail coverage'), (30, 20))
+        self.assertNotIn('Team training', moved, 'an unchanged weight is not a change')
 
 
 class Diff(TestCase):
@@ -242,9 +246,6 @@ class Diff(TestCase):
 
 class Api(Fixture):
     """The HTTP surface, since the permission checks live in the views too."""
-
-    def post(self, path, body):
-        return self.client.post(BASE + path, body, content_type='application/json')
 
     def test_save_and_submit_over_http(self):
         r = self.post(f'/plans/E1/{self.cycle.id}/', {'role': 'employee', 'kras': FULL})
@@ -294,3 +295,63 @@ class Api(Fixture):
         r = self.client.get(f'{BASE}/meta/')
         self.assertEqual(len(r.json()['categories']), 4)
         self.assertIn('Monthly', r.json()['frequencies'])
+
+
+class Regressions(Fixture):
+    """One test per bug found reviewing the finished product.
+
+    Each of these passed review by eye and failed against a running server,
+    which is the reason they are written down rather than just fixed.
+    """
+
+    def test_reading_someone_elses_sheet_does_not_create_one(self):
+        """A manager clicking a name used to mark that person as started, so
+        the admin's "not started" count fell every time anyone looked."""
+        GoalPlan.objects.all().delete()
+        before = GoalPlan.objects.count()
+        r = self.client.get(f'{BASE}/plans/E1/{self.cycle.id}/?role=manager')
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(r.json().get('not_started'))
+        self.assertEqual(GoalPlan.objects.count(), before)
+
+    def test_the_employees_own_visit_still_creates_one(self):
+        GoalPlan.objects.all().delete()
+        r = self.client.get(f'{BASE}/plans/E1/{self.cycle.id}/?role=employee')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(GoalPlan.objects.count(), 1)
+
+    def test_a_refused_action_writes_nothing(self):
+        """The edit used to land even when the hand-off was refused: a manager
+        could edit a locked cycle, be told it was locked, and have it saved."""
+        self.fill()
+        advance(self.plan, 'submit', role='employee')
+        self.cycle.status = 'locked'
+        self.cycle.save()
+
+        r = self.post(f'/plans/{self.plan.id}/action/', {
+            'role': 'manager', 'action': 'to_hod',
+            'kras': sheet(('Rewritten', 100)),
+        })
+        self.assertEqual(r.status_code, 403)
+        self.plan.refresh_from_db()
+        self.assertEqual(self.plan.kras.count(), 4, 'the refused edit must be rolled back')
+        self.assertEqual(self.plan.kras.first().kpis.first().metric, 'Primary sales')
+
+    def test_a_new_sheet_starts_empty(self):
+        """It used to be seeded with four blank KRAs, which the form marks
+        invalid — so the sheet opened as four red error boxes."""
+        GoalPlan.objects.all().delete()
+        plan = get_or_create_plan(self.emp, self.cycle)
+        self.assertEqual(plan.kras.count(), 0)
+
+    def test_requesting_changes_sends_it_to_the_manager(self):
+        """The button says "sends it back to your manager", so it must."""
+        self.fill()
+        advance(self.plan, 'submit', role='employee')
+        advance(self.plan, 'to_hod', role='manager')
+        advance(self.plan, 'to_employee', role='hod')
+
+        advance(self.plan, 'employee_return', role='employee', note='The target is unrealistic')
+        self.assertEqual(self.plan.status, 'submitted')
+        self.assertTrue(self.plan.may_edit('manager'))
+        self.assertFalse(self.plan.may_edit('employee'))

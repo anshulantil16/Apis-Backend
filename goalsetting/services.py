@@ -8,7 +8,7 @@ to call it.
 from django.db import transaction
 from django.utils import timezone
 
-from .models import CATEGORIES, GoalKPI, GoalPlan, KRA, PlanEvent, PlanVersion
+from .models import GoalKPI, GoalPlan, KRA, PlanEvent, PlanVersion
 
 # A KPI is worth keeping only if someone typed something into it. Rows that are
 # entirely blank are the empty row the form always shows at the bottom, not a
@@ -127,7 +127,11 @@ TRANSITIONS = {
     'to_employee':   (('with_hod',),            'awaiting_employee',  'hod'),
     'hod_return':    (('with_hod',),            'returned',           'hod'),
     'accept':        (('awaiting_employee',),   'accepted',           'employee'),
-    'employee_return': (('awaiting_employee',), 'returned',           'employee'),
+    # Back to the MANAGER, not to the employee. The employee is disputing
+    # edits the reviewers made, so the pen belongs with the person who made
+    # them - handing it back to the employee would just invite them to undo
+    # the changes and resubmit, which is not a conversation.
+    'employee_return': (('awaiting_employee',), 'submitted',         'employee'),
 }
 
 _STAMP = {
@@ -201,17 +205,14 @@ def advance(plan, action, *, role, name='', employee_id='', note=''):
     return plan
 
 
-def seed_categories(plan):
-    """Give a brand-new plan one empty KRA per category, so the employee opens
-    a sheet with the shape of the task rather than a blank page."""
-    if plan.kras.exists():
-        return
-    for i, cat in enumerate(CATEGORIES):
-        KRA.objects.create(plan=plan, category=cat, title='', order=i)
-
-
 def get_or_create_plan(employee, cycle):
-    plan, created = GoalPlan.objects.get_or_create(employee=employee, cycle=cycle)
-    if created:
-        seed_categories(plan)
+    """A new plan starts genuinely empty.
+
+    It used to be seeded with one blank KRA per category, to show the shape of
+    the task. That backfired: a blank title is invalid, so the employee opened
+    their sheet to four red-bordered error boxes and no KPI rows, before typing
+    anything. The category cards already carry an empty state that says what to
+    do, which does the same job without accusing anyone of a mistake.
+    """
+    plan, _ = GoalPlan.objects.get_or_create(employee=employee, cycle=cycle)
     return plan
