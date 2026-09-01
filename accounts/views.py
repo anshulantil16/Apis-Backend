@@ -304,7 +304,12 @@ class AdminUsersView(_AdminView):
             designation=(request.data.get('designation') or '').strip(),
             department=(request.data.get('department') or '').strip(),
             location=(request.data.get('location') or '').strip(),
-            app_access=list(request.data.get('app_access') or DEFAULT_APPS))
+            # An empty list means "grant nothing", which is a deliberate choice;
+            # `or DEFAULT_APPS` read it as "not specified" and quietly handed the
+            # person three tools the administrator had just unticked.
+            app_access=(list(request.data['app_access'])
+                        if isinstance(request.data.get('app_access'), list)
+                        else list(DEFAULT_APPS)))
         return Response({'message': f'{u.name} can now sign in.', 'user': serialize_user(u)})
 
 

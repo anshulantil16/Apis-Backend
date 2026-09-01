@@ -257,6 +257,23 @@ class AdminConsolePowers(TestCase):
         u = PortalUser.objects.get(email='new@apisindia.com')
         self.assertEqual(u.app_access, ['home', 'tada'])
 
+    def test_adding_with_no_tools_grants_no_tools(self):
+        """An empty list is a deliberate "grant nothing". It used to be read as
+        "not specified" and silently handed over the three defaults - so an
+        administrator who unticked everything got the opposite of what they
+        asked for."""
+        r = self.post('users/', {'email': 'none@apisindia.com', 'name': 'No Tools',
+                                 'employee_code': 'E5', 'app_access': []})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(PortalUser.objects.get(email='none@apisindia.com').app_access, [])
+
+    def test_adding_without_mentioning_tools_uses_the_defaults(self):
+        """Not saying anything is different from saying none."""
+        r = self.post('users/', {'email': 'def@apisindia.com', 'name': 'Defaults',
+                                 'employee_code': 'E6'})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertTrue(PortalUser.objects.get(email='def@apisindia.com').app_access)
+
     def test_removing_needs_the_name_typed(self):
         """A yes/no dialog is muscle memory; typing the name is not."""
         r = self.remove(self.other, 'wrong')
