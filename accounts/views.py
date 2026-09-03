@@ -560,16 +560,26 @@ class AdminHrmsPreviewView(_AdminView):
             limit = min(int(request.query_params.get('limit') or 5), 25)
         except (TypeError, ValueError):
             limit = 5
+
+        # ?discover=1 leaves the EmployeeFields header off entirely, which is
+        # Pocket HRMS support's own recommended way to find this tenant's real
+        # configured column names rather than guess at EmailId vs Email.
+        discover = request.query_params.get('discover') in ('1', 'true', 'True')
         try:
-            rows = hrms.fetch_page(take=limit, offset=0, emp_status='ALL')
+            if discover:
+                columns, rows = hrms.discover_fields(sample_size=limit)
+            else:
+                rows = hrms.fetch_page(take=limit, offset=0, emp_status='ALL')
+                # The union of keys across the sample, so a column absent from
+                # the first record is still reported rather than silently missed.
+                columns = sorted({k for r in rows if isinstance(r, dict) for k in r})
         except hrms.HrmsError as e:
             return Response({'error': str(e), 'configured': True}, status=502)
-        # The union of keys across the sample, so a column absent from the
-        # first record is still reported rather than silently missed.
-        columns = sorted({k for r in rows if isinstance(r, dict) for k in r})
+
         return Response({
             'configured': True,
-            'requested_fields': hrms.EMPLOYEE_FIELDS,
+            'discovered': discover,
+            'requested_fields': hrms.EMPLOYEE_FIELDS if not discover else None,
             'returned_columns': columns,
             'sample': rows,
             'count': len(rows),

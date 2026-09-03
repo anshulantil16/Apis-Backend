@@ -1,18 +1,29 @@
 """Client for Pocket HRMS GetEmployeeMaster, and the sync that feeds the portal.
 
-Two things the vendor's documentation gets wrong, both found by calling the
-live API rather than reading the PDF:
+Things the vendor's documentation gets wrong, or leaves for their support to
+clarify by hand:
 
   * ModifiedDate is documented as an ISO date ("2024-01-01"). It is actually a
     RANGE, "dd/MM/yyyy - dd/MM/yyyy". The doc's own example cURL fails with
-    400 as printed.
+    400 as printed. Confirmed correct by their support after we reported it.
   * An unauthenticated or bad-token request answers 500, not 401/403 - so a
     500 here means "your token is wrong", not "their server is broken".
+  * EmployeeFields is not a fixed vocabulary shared across every tenant - it
+    is whatever field names THIS company's Pocket HRMS admin configured under
+    Cloud Portal > Settings > Configurations > Fields. "EmailId" and "Email"
+    are guesses, not confirmed names, until a real call proves them. See
+    discover_fields() below - it is the vendor-recommended way to find out
+    which names actually exist for APIS's tenant, and it works by leaving the
+    EmployeeFields header off entirely rather than guessing at it.
+  * Their staging documentation pointed at essapistaging.pockethrms.com:8343,
+    which is firewalled from the office network. Their support corrected this
+    to https://pockethrmsnext.pockethrms.com - see POCKET_HRMS_BASE_URL in
+    settings.py. This is STAGING; production may or may not be the same host,
+    and nobody here has confirmed that yet with a working token.
 
 Employee master data is read-only to us. Nothing in this module writes back.
 """
-import json
-from datetime import date, timedelta
+from datetime import date
 
 import requests
 from django.conf import settings
@@ -22,14 +33,31 @@ from django.utils import timezone
 from ..models import (DEFAULT_APPS, SUPERADMIN_BOOTSTRAP_EMAIL,
                       HrmsSyncLog, PortalUser)
 
-# The fields the portal actually needs. Asked for explicitly rather than
-# "everything", so a change upstream cannot quietly start shipping salary or
-# password columns into a directory that does not need them.
-EMPLOYEE_FIELDS = [
+# The fields the portal asks for by default. These are GUESSES at common
+# Pocket HRMS column names, not confirmed for this tenant - APIS's actual
+# configured field names are only known once discover_fields() has been run
+# with a real token and someone has read the result. Override via
+# POCKET_HRMS_EMPLOYEE_FIELDS (comma-separated) once they are known, rather
+# than editing code - see settings.py.
+_DEFAULT_FIELDS = [
     'Id', 'Code', 'Fname', 'Lname', 'EmailId', 'Email',
     'Department', 'Designation', 'Location', 'EmpStatus',
     'PocketReportingManager',
 ]
+
+
+def _configured_fields():
+    override = getattr(settings, 'POCKET_HRMS_EMPLOYEE_FIELDS', '')
+    if override:
+        return [f.strip() for f in override.split(',') if f.strip()]
+    return list(_DEFAULT_FIELDS)
+
+
+# Kept as a module-level name for the admin preview endpoint and tests, which
+# read EMPLOYEE_FIELDS to show "what we currently ask for". Resolved once at
+# import, same as every other Django setting - change POCKET_HRMS_EMPLOYEE_
+# FIELDS in .env and restart the process, same as any other config change.
+EMPLOYEE_FIELDS = _configured_fields()
 
 PAGE_SIZE = 200          # tuned down if the API starts timing out
 MAX_PAGES = 100          # a stop, so a paging bug cannot loop forever
@@ -48,23 +76,30 @@ def is_configured():
     return bool(_cfg('POCKET_HRMS_TOKEN'))
 
 
-def _headers(extra=None):
+def _headers(extra=None, fields=EMPLOYEE_FIELDS):
+    """`fields=None` deliberately omits the EmployeeFields header rather than
+    sending an empty one - that is what makes fetch_page(fields=None) the
+    vendor-recommended discovery call, not just a request for zero columns."""
     token = _cfg('POCKET_HRMS_TOKEN')
     if not token:
         raise HrmsError(
             'No Pocket HRMS token configured. Set POCKET_HRMS_TOKEN in the '
             'environment (ask Pocket HRMS for the company token).')
-    h = {
-        'Content-Type': 'application/json',
-        'authorization': token,
-        'EmployeeFields': ','.join(EMPLOYEE_FIELDS),
-    }
+    h = {'Content-Type': 'application/json', 'authorization': token}
+    if fields:
+        h['EmployeeFields'] = ','.join(fields)
     h.update(extra or {})
     return h
 
 
-def fetch_page(take=PAGE_SIZE, offset=0, emp_status='ALL', modified_since=None):
-    """One page of the employee master."""
+def fetch_page(take=PAGE_SIZE, offset=0, emp_status='ALL', modified_since=None,
+               fields=EMPLOYEE_FIELDS):
+    """One page of the employee master.
+
+    Pass fields=None to leave the EmployeeFields header off entirely - Pocket
+    HRMS then returns whatever columns are configured for this tenant, which
+    is the supported way to find out their real names (see discover_fields).
+    """
     base = _cfg('POCKET_HRMS_BASE_URL', 'https://api.pockethrms.com').rstrip('/')
     extra = {'Take': str(take), 'OffSet': str(offset), 'EmpStatus': emp_status}
     if modified_since:
@@ -73,7 +108,7 @@ def fetch_page(take=PAGE_SIZE, offset=0, emp_status='ALL', modified_since=None):
             modified_since.strftime('%d/%m/%Y'), date.today().strftime('%d/%m/%Y'))
     try:
         r = requests.get(f'{base}/api/EmployeeMaster/GetEmployeeMaster',
-                         headers=_headers(extra), timeout=60)
+                         headers=_headers(extra, fields=fields), timeout=60)
     except requests.RequestException as e:
         raise HrmsError(f'Could not reach Pocket HRMS: {e}') from e
 
@@ -95,18 +130,30 @@ def fetch_page(take=PAGE_SIZE, offset=0, emp_status='ALL', modified_since=None):
     return body
 
 
-def fetch_all(emp_status='ALL', modified_since=None):
+def fetch_all(emp_status='ALL', modified_since=None, fields=EMPLOYEE_FIELDS):
     """Every employee, walking the pagination to the end."""
     rows, offset = [], 0
     for _ in range(MAX_PAGES):
-        page = fetch_page(take=PAGE_SIZE, offset=offset,
-                          emp_status=emp_status, modified_since=modified_since)
+        page = fetch_page(take=PAGE_SIZE, offset=offset, emp_status=emp_status,
+                          modified_since=modified_since, fields=fields)
         rows.extend(page)
         if len(page) < PAGE_SIZE:
             return rows
         offset += PAGE_SIZE
     raise HrmsError(f'Stopped after {MAX_PAGES} pages ({len(rows)} records) - '
                     'the API kept returning full pages, which looks like a paging loop.')
+
+
+def discover_fields(sample_size=3):
+    """What Pocket HRMS is actually configured to call each employee column,
+    for THIS tenant - straight from their support: call the API with no
+    EmployeeFields header and read back whatever it sends.
+
+    A handful of rows is enough; this exists to read column NAMES, not data.
+    """
+    rows = fetch_page(take=sample_size, offset=0, emp_status='ALL', fields=None)
+    columns = sorted({k for r in rows if isinstance(r, dict) for k in r})
+    return columns, rows
 
 
 def _pick(row, *names):
@@ -137,7 +184,7 @@ def _is_active(row):
 
 @transaction.atomic
 def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
-                   deactivate_missing=True):
+                   deactivate_missing=True, fields=EMPLOYEE_FIELDS):
     """Pull the employee master into PortalUser rows.
 
     A sync owns identity and nothing else. is_superadmin, app_access and the
@@ -150,7 +197,7 @@ def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
     """
     log = HrmsSyncLog(triggered_by=triggered_by or 'unknown')
     try:
-        rows = fetch_all(emp_status=emp_status, modified_since=modified_since)
+        rows = fetch_all(emp_status=emp_status, modified_since=modified_since, fields=fields)
     except HrmsError as e:
         log.ok, log.message, log.finished_at = False, str(e), timezone.now()
         log.save()

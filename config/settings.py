@@ -189,12 +189,25 @@ DEFAULT_FROM_EMAIL = os.getenv('EMAIL_HOST_USER', '')
 # keeping a second copy that has to be re-uploaded by hand.
 #
 # The token is company-scoped and is a credential: keep it in .env, never in
-# the repo. Ask Pocket HRMS support for the production company token.
-# Note their staging host (essapistaging.pockethrms.com:8343) is unreachable
-# from the office network — port 8343 is firewalled — so production is the
-# only usable environment from here.
+# the repo. Ask Pocket HRMS support for the company token.
+#
+# Their staging documentation originally pointed at
+# essapistaging.pockethrms.com:8343, which is firewalled from the office
+# network. Their support corrected this (2026-09-03): the current staging
+# host is https://pockethrmsnext.pockethrms.com. That is STAGING — nobody has
+# yet confirmed with a working token whether production uses the same host or
+# the default below, so don't assume one implies the other.
 POCKET_HRMS_BASE_URL = os.getenv('POCKET_HRMS_BASE_URL', 'https://api.pockethrms.com')
 POCKET_HRMS_TOKEN = os.getenv('POCKET_HRMS_TOKEN', '')
+
+# The EmployeeFields header is not a shared vocabulary — it's whatever column
+# names APIS's own Pocket HRMS admin configured under Cloud Portal > Settings
+# > Configurations > Fields. accounts/services/hrms.py ships a guessed default
+# list; once accounts.services.hrms.discover_fields() has been run against a
+# real token and the actual names are known, set them here as a comma-
+# separated list rather than editing code:
+#   POCKET_HRMS_EMPLOYEE_FIELDS=Id,Code,Fname,Lname,OfficialEmail,...
+POCKET_HRMS_EMPLOYEE_FIELDS = os.getenv('POCKET_HRMS_EMPLOYEE_FIELDS', '')
 
 # Local development sign-in. When on, the portal will register any company
 # address on first use and hand the sign-in code straight back in the response

@@ -10,6 +10,10 @@ forgot the line would silently enable it.
 Most of what follows is therefore about proving the gate is shut by default.
 """
 from django.test import TestCase, override_settings
+from unittest import mock
+from datetime import date
+
+from accounts.services import hrms
 
 from .models import PortalOTP, PortalSession, PortalUser, SUPERADMIN_BOOTSTRAP_EMAIL
 
@@ -341,3 +345,80 @@ class AdminConsolePowers(TestCase):
             '/api/accounts/portal/admin/bulk-access/',
             {'user_ids': [self.other.id], 'action': 'grant', 'app': 'tada'},
             content_type='application/json', **auth).status_code, 403)
+
+
+class FakeResponse:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+        self.text = str(payload)[:300]
+
+    def json(self):
+        return self._payload
+
+
+@override_settings(POCKET_HRMS_TOKEN='test-token', POCKET_HRMS_BASE_URL='https://hrms.example')
+class HrmsFieldDiscovery(TestCase):
+    """The vendor's own recommended fix for the "wrong field name" problem:
+    call the API with no EmployeeFields header, and it returns whatever
+    columns are actually configured for this tenant. Guessing at EmailId vs
+    Email is what caused the original sync failures.
+    """
+
+    def test_a_normal_call_asks_for_the_configured_fields(self):
+        with mock.patch('accounts.services.hrms.requests.get') as get:
+            get.return_value = FakeResponse([])
+            hrms.fetch_page(take=5, fields=['Id', 'Code'])
+        headers = get.call_args.kwargs['headers']
+        self.assertEqual(headers['EmployeeFields'], 'Id,Code')
+
+    def test_fields_none_omits_the_header_entirely(self):
+        """Not an empty header - genuinely absent, which is what makes this
+        the discovery call rather than a request for zero columns."""
+        with mock.patch('accounts.services.hrms.requests.get') as get:
+            get.return_value = FakeResponse([])
+            hrms.fetch_page(take=5, fields=None)
+        headers = get.call_args.kwargs['headers']
+        self.assertNotIn('EmployeeFields', headers)
+
+    def test_discover_fields_reads_back_whatever_the_tenant_actually_has(self):
+        """The whole point: this tenant might call it OfficialEmail, not
+        EmailId or Email - discovery is how that gets found out instead of
+        guessed at."""
+        sample = [{'Id': '1', 'Code': 'E1', 'OfficialEmail': 'a@apisindia.com'},
+                  {'Id': '2', 'Code': 'E2', 'OfficialEmail': 'b@apisindia.com',
+                   'MobileNo': '9999999999'}]
+        with mock.patch('accounts.services.hrms.requests.get') as get:
+            get.return_value = FakeResponse(sample)
+            columns, rows = hrms.discover_fields(sample_size=2)
+        self.assertEqual(columns, ['Code', 'Id', 'MobileNo', 'OfficialEmail'])
+        self.assertEqual(rows, sample)
+        # And the call that produced it used no EmployeeFields header.
+        self.assertNotIn('EmployeeFields', get.call_args.kwargs['headers'])
+
+    def test_a_configured_override_replaces_the_guessed_defaults(self):
+        """Once discover_fields() has told someone the real names, they go in
+        POCKET_HRMS_EMPLOYEE_FIELDS rather than a code change."""
+        with override_settings(POCKET_HRMS_EMPLOYEE_FIELDS='Id,OfficialEmail,MobileNo'):
+            fields = hrms._configured_fields()
+        self.assertEqual(fields, ['Id', 'OfficialEmail', 'MobileNo'])
+
+    def test_modified_date_is_sent_as_a_range_not_an_iso_date(self):
+        """The vendor's own doc example (a bare ISO date) 400s. Confirmed
+        correct by their support after we reported it - pinned here so a
+        future "helpful" cleanup cannot quietly revert it."""
+        with mock.patch('accounts.services.hrms.requests.get') as get:
+            get.return_value = FakeResponse([])
+            hrms.fetch_page(modified_since=date(2026, 1, 1), fields=['Id'])
+        sent = get.call_args.kwargs['headers']['ModifiedDate']
+        self.assertRegex(sent, r'^\d{2}/\d{2}/\d{4} - \d{2}/\d{2}/\d{4}$')
+        self.assertTrue(sent.startswith('01/01/2026'))
+
+    def test_a_500_is_reported_as_an_auth_problem_not_a_server_crash(self):
+        """Their own quirk: an unauthenticated or bad-token call answers 500,
+        not 401/403."""
+        with mock.patch('accounts.services.hrms.requests.get') as get:
+            get.return_value = FakeResponse({}, status=500)
+            with self.assertRaises(hrms.HrmsError) as e:
+                hrms.fetch_page(fields=['Id'])
+        self.assertIn('token', str(e.exception).lower())
