@@ -13,7 +13,13 @@ from django.test import TestCase, override_settings
 from unittest import mock
 from datetime import date
 
+import io
+
 from accounts.services import hrms
+from django.core.management import call_command
+from django.core.management.base import CommandError
+
+from .models import HrmsSyncLog
 
 from .models import PortalOTP, PortalSession, PortalUser, SUPERADMIN_BOOTSTRAP_EMAIL
 
@@ -422,3 +428,57 @@ class HrmsFieldDiscovery(TestCase):
             with self.assertRaises(hrms.HrmsError) as e:
                 hrms.fetch_page(fields=['Id'])
         self.assertIn('token', str(e.exception).lower())
+
+
+class SyncHrmsCommand(TestCase):
+    """The management command a cron job runs. No token exists to test the
+    real Pocket HRMS call, so sync_employees itself is mocked here - what
+    matters for a scheduled job is that it never crashes with a traceback,
+    that a real failure still exits non-zero for cron's own monitoring to see,
+    and that success is logged the same way a manual click is.
+    """
+
+    @override_settings(POCKET_HRMS_TOKEN='')
+    def test_an_unconfigured_token_exits_cleanly_not_as_an_error(self):
+        """A cron job must not treat "nobody has set this up yet" as a
+        failure worth paging anyone about."""
+        out = io.StringIO()
+        call_command('sync_hrms', stdout=out)
+        self.assertIn('not configured', out.getvalue())
+
+    @override_settings(POCKET_HRMS_TOKEN='test-token')
+    def test_a_successful_sync_is_logged_same_as_a_manual_one(self):
+        fake_log = HrmsSyncLog.objects.create(
+            triggered_by='cron', ok=True, fetched=3, created=1, updated=2,
+            message='1 created, 2 updated, 0 deactivated, 0 skipped (no email).')
+        with mock.patch('accounts.services.hrms.sync_employees', return_value=fake_log) as m:
+            out = io.StringIO()
+            call_command('sync_hrms', stdout=out)
+        self.assertEqual(m.call_args.kwargs['triggered_by'], 'cron')
+        self.assertIn('1 created', out.getvalue())
+
+    @override_settings(POCKET_HRMS_TOKEN='test-token')
+    def test_a_real_failure_exits_non_zero_for_cron_to_notice(self):
+        with mock.patch('accounts.services.hrms.sync_employees',
+                        side_effect=hrms.HrmsError('token rejected')):
+            with self.assertRaises(CommandError):
+                call_command('sync_hrms')
+
+    @override_settings(POCKET_HRMS_TOKEN='test-token')
+    def test_since_days_is_passed_through_as_a_date(self):
+        with mock.patch('accounts.services.hrms.sync_employees') as m:
+            m.return_value = HrmsSyncLog.objects.create(triggered_by='cron', ok=True,
+                                                         message='ok')
+            call_command('sync_hrms', '--since-days', '2')
+        self.assertIsNotNone(m.call_args.kwargs['modified_since'])
+
+    @override_settings(POCKET_HRMS_TOKEN='test-token')
+    def test_without_since_days_it_runs_the_full_unfiltered_sync(self):
+        """The scheduled job's whole point includes catching leavers, and that
+        only happens on a full sync - modified_since must default to None,
+        not to "today" or some other accidental value."""
+        with mock.patch('accounts.services.hrms.sync_employees') as m:
+            m.return_value = HrmsSyncLog.objects.create(triggered_by='cron', ok=True,
+                                                         message='ok')
+            call_command('sync_hrms')
+        self.assertIsNone(m.call_args.kwargs['modified_since'])
