@@ -304,7 +304,16 @@ class PlanActionView(GSView):
         # the save back.
         try:
             with transaction.atomic():
-                if request.data.get('kras') is not None and plan.may_edit(role):
+                if request.data.get('kras') is not None:
+                    if not plan.may_edit(role):
+                        # Dropping the edit silently is how someone ends up
+                        # believing their changes saved when they didn't - if
+                        # the sheet moved out from under them, say so instead.
+                        holder = dict(GoalPlan.STATUS_CHOICES).get(plan.status, plan.status)
+                        raise WorkflowError(
+                            f'This sheet is "{holder}" now, so your edits were not saved. '
+                            f'Someone may have moved it - reload to see the current version.',
+                            status=409)
                     save_kras(plan, request.data.get('kras'))
                     plan.refresh_from_db()
                 advance(plan, str(request.data.get('action') or ''),
@@ -464,14 +473,25 @@ class EmployeeImportView(GSView):
                     errors.append(f'Row {i + 2}: could not read the joining date '
                                   f'"{val("joined_date")}" - left blank.')
 
-            _, was_created = EmployeeProfile.objects.update_or_create(
-                employee_id=emp_id,
-                defaults={'name': name, 'email': val('email'), 'phone': val('phone'),
-                          'designation': val('designation'), 'department': val('department'),
-                          'zone': val('zone'), 'subzone': val('subzone'),
-                          'reporting_manager_id': val('reporting_manager_id'),
-                          'hod_id': val('hod_id'), 'user_type': user_type,
-                          'joined_date': joined, 'is_active': True})
+            # Matched case-insensitively: manager/HOD lookups elsewhere resolve
+            # employee_id with __iexact, so a re-upload with different casing
+            # ("e002" vs "E002") must update the same row rather than create a
+            # second profile that those lookups then can't find.
+            existing = EmployeeProfile.objects.filter(employee_id__iexact=emp_id).first()
+            defaults = {'name': name, 'email': val('email'), 'phone': val('phone'),
+                        'designation': val('designation'), 'department': val('department'),
+                        'zone': val('zone'), 'subzone': val('subzone'),
+                        'reporting_manager_id': val('reporting_manager_id'),
+                        'hod_id': val('hod_id'), 'user_type': user_type,
+                        'joined_date': joined, 'is_active': True}
+            if existing:
+                for k, v in defaults.items():
+                    setattr(existing, k, v)
+                existing.save()
+                was_created = False
+            else:
+                EmployeeProfile.objects.create(employee_id=emp_id, **defaults)
+                was_created = True
             created += was_created
             updated += (not was_created)
 

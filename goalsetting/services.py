@@ -134,6 +134,16 @@ TRANSITIONS = {
     'employee_return': (('awaiting_employee',), 'submitted',         'employee'),
 }
 
+# Keyed by action, not by the target status: 'submit' and 'employee_return'
+# both land on 'submitted', but only 'submit' is an actual submission. Keying
+# by status alone re-stamped submitted_at on every dispute-and-return cycle,
+# losing the original submission date.
+_STAMP_BY_ACTION = {
+    'submit': 'submitted_at',
+    'to_hod': 'manager_acted_at',
+    'to_employee': 'hod_acted_at',
+    'accept': 'accepted_at',
+}
 _STAMP = {
     'submitted': 'submitted_at',
     'with_hod': 'manager_acted_at',
@@ -193,7 +203,7 @@ def advance(plan, action, *, role, name='', employee_id='', note=''):
     elif action in ('accept', 'employee_return'):
         plan.employee_acceptance_note = note or plan.employee_acceptance_note
 
-    stamp = _STAMP.get(target)
+    stamp = _STAMP_BY_ACTION.get(action)
     if stamp:
         setattr(plan, stamp, timezone.now())
     plan.save()
@@ -237,6 +247,17 @@ def force_status(plan, status, *, name='', note=''):
     was = plan.get_status_display()
     if plan.status == status:
         raise WorkflowError(f'This sheet is already "{was}".')
+
+    # Stamps for stages at or beyond the new one no longer describe anything
+    # real - a sheet force-moved back to "draft" should not still claim an
+    # acceptance date. Only stages this move actually passes through keep
+    # their timestamp; anything later is cleared.
+    order = [s for s, _ in GoalPlan.STATUS_CHOICES]
+    if status in order:
+        for later_status in order[order.index(status):]:
+            later_stamp = _STAMP.get(later_status)
+            if later_stamp:
+                setattr(plan, later_stamp, None)
 
     plan.status = status
     stamp = _STAMP.get(status)

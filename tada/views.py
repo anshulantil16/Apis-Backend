@@ -18,6 +18,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
+from config.tz import local_str
 from .models import (TadaUser, TadaOTP, TravelRequest, TravelLeg, ExpenseItem,
                      LocalTravelItem, ApprovalLog, ReturnJourney, BookingOption, StayPlan)
 from . import policy
@@ -246,7 +247,7 @@ def serialize_request(r, detail=False):
             'booking_reference': r.booking_reference, 'booking_carrier': r.booking_carrier,
             'booking_fare': float(r.booking_fare), 'booking_remarks': r.booking_remarks,
             'booked_by': r.booked_by,
-            'booked_at': r.booked_at.strftime('%Y-%m-%d %H:%M') if r.booked_at else None,
+            'booked_at': local_str(r.booked_at, '%Y-%m-%d %H:%M'),
             'ticket_url': f'/api/tada/ticket/{r.id}/trip/' if r.booking_ticket else None,
         # Per-head estimate and the policy ceiling behind it, so a claim form can
         # show both without recomputing policy in the browser.
@@ -285,7 +286,7 @@ def serialize_request(r, detail=False):
             'booking_reference': l.booking_reference, 'booking_carrier': l.booking_carrier,
             'booking_fare': float(l.booking_fare), 'booking_remarks': l.booking_remarks,
             'booked_by': l.booked_by,
-            'booked_at': l.booked_at.strftime('%Y-%m-%d %H:%M') if l.booked_at else None,
+            'booked_at': local_str(l.booked_at, '%Y-%m-%d %H:%M'),
             'ticket_url': f'/api/tada/ticket/{r.id}/{l.seq}/' if l.booking_ticket else None,
             'policy_heads': leg_policy_heads(r.user.level, l.destination_city, l.days or 0,
                                              _leg_nights(l, i == len(_legs) - 1)),
@@ -306,8 +307,8 @@ def serialize_request(r, detail=False):
         } for sp in r.stays.all()],
         'total_claimed': float(r.total_claimed), 'total_approved': float(r.total_approved),
         'manager_remarks': r.manager_remarks, 'hr_remarks': r.hr_remarks, 'finance_remarks': r.finance_remarks,
-        'created_at': r.created_at.strftime('%Y-%m-%d %H:%M'),
-        'submitted_at': r.submitted_at.strftime('%Y-%m-%d %H:%M') if r.submitted_at else None,
+        'created_at': local_str(r.created_at, '%Y-%m-%d %H:%M'),
+        'submitted_at': local_str(r.submitted_at, '%Y-%m-%d %H:%M'),
     }
     if detail:
         # Policy vs sanctioned vs claimed — the whole picture an approver needs.
@@ -319,8 +320,8 @@ def serialize_request(r, detail=False):
             'date': str(i.date) if i.date else None,
             'to_date': str(i.to_date) if i.to_date else None,
             'description': i.description, 'vendor': i.vendor, 'reference_no': i.reference_no,
-            'check_in': i.check_in.strftime('%Y-%m-%d %H:%M') if i.check_in else None,
-            'check_out': i.check_out.strftime('%Y-%m-%d %H:%M') if i.check_out else None,
+            'check_in': local_str(i.check_in, '%Y-%m-%d %H:%M'),
+            'check_out': local_str(i.check_out, '%Y-%m-%d %H:%M'),
             'nights': i.nights, 'per_night': i.per_night, 'days_covered': i.days_covered,
             'cap_units': i.cap_units, 'cap_basis': i.cap_basis, 'cap_explained': i.cap_explained,
             'from_location': i.from_location, 'to_location': i.to_location, 'mode': i.mode,
@@ -341,7 +342,7 @@ def serialize_request(r, detail=False):
             'briefing': l.briefing, 'tour_justification': l.tour_justification,
             'advance_remarks': l.advance_remarks,
             'deviation_justification': l.deviation_justification,
-            'remarks': l.remarks, 'timestamp': l.timestamp.strftime('%Y-%m-%d %H:%M'),
+            'remarks': l.remarks, 'timestamp': local_str(l.timestamp, '%Y-%m-%d %H:%M'),
         } for l in r.logs.all()]
     return d
 

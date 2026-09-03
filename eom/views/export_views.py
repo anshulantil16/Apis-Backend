@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from eom.models import EOMNomination, EOMCycle
+from config.tz import local_str
 
 
 def _border():
@@ -161,7 +162,7 @@ class EOMExportView(APIView):
                 nom.track,
                 nom.get_status_display(),
                 'YES ★' if nom.is_winner else '',
-                nom.submitted_at.strftime('%d-%m-%Y %H:%M') if nom.submitted_at else '',
+                local_str(nom.submitted_at, '%d-%m-%Y %H:%M') or '',
 
                 nom.part_a_achievement,
                 nom.smart_specific,
@@ -180,7 +181,7 @@ class EOMExportView(APIView):
                 nom.hod_recommendation,
                 nom.hod_panel_name,
                 nom.hod_remarks,
-                nom.hod_reviewed_at.strftime('%d-%m-%Y %H:%M') if nom.hod_reviewed_at else '',
+                local_str(nom.hod_reviewed_at, '%d-%m-%Y %H:%M') or '',
 
                 nom.panel_dim2_score,
                 nom.panel_dim2_comments,
@@ -198,7 +199,7 @@ class EOMExportView(APIView):
                 nom.panel_recommendation,
                 nom.panel_panel_name,
                 nom.panel_remarks,
-                nom.panel_reviewed_at.strftime('%d-%m-%Y %H:%M') if nom.panel_reviewed_at else '',
+                local_str(nom.panel_reviewed_at, '%d-%m-%Y %H:%M') or '',
 
                 hod_total,
                 panel_total,
@@ -206,7 +207,7 @@ class EOMExportView(APIView):
                 grand_total,
 
                 nom.hr_remarks,
-                nom.hr_finalized_at.strftime('%d-%m-%Y %H:%M') if nom.hr_finalized_at else '',
+                local_str(nom.hr_finalized_at, '%d-%m-%Y %H:%M') or '',
             ]
 
             fill = _winner_fill() if nom.is_winner else None

@@ -182,7 +182,6 @@ def _is_active(row):
     return _pick(row, 'EmpStatus', 'Status').strip().lower() in ('active', 'a', '1', 'true')
 
 
-@transaction.atomic
 def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
                    deactivate_missing=True, fields=EMPLOYEE_FIELDS):
     """Pull the employee master into PortalUser rows.
@@ -194,6 +193,11 @@ def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
     Employees without an email address are counted and skipped rather than
     failing the run: email is the login identity, and a row that cannot sign in
     is worse than absent because it looks like an account that should work.
+
+    The write loop runs in its own transaction so that any failure - not just
+    a known HrmsError - rolls back the half-written batch of PortalUser rows
+    while still leaving a log entry behind. Losing the writes but keeping no
+    record of what happened is what made a bad sync invisible.
     """
     log = HrmsSyncLog(triggered_by=triggered_by or 'unknown')
     try:
@@ -203,6 +207,18 @@ def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
         log.save()
         raise
 
+    try:
+        with transaction.atomic():
+            _write_employees(log, rows, deactivate_missing, modified_since, emp_status)
+    except Exception as e:
+        log.ok, log.message, log.finished_at = False, f'Sync failed partway through: {e}', timezone.now()
+        log.save()
+        raise
+
+    return log
+
+
+def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
     log.fetched = len(rows)
     seen_codes = []
 
@@ -267,4 +283,3 @@ def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
     log.message = (f'{log.created} created, {log.updated} updated, '
                    f'{log.deactivated} deactivated, {log.skipped_no_email} skipped (no email).')
     log.save()
-    return log

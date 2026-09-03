@@ -16,6 +16,7 @@ from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from config.tz import local_str
 from .models import (AppKey, DEFAULT_APPS, SUPERADMIN_BOOTSTRAP_EMAIL,
                      HrmsSyncLog, PortalOTP, PortalSession, PortalUser)
 from .services import hrms
@@ -53,8 +54,8 @@ def serialize_user(u):
         'is_bootstrap': u.is_bootstrap_superadmin,
         'allowed_apps': u.allowed_apps,
         'from_hrms': u.from_hrms,
-        'last_login_at': u.last_login_at.strftime('%d-%m-%Y %H:%M') if u.last_login_at else None,
-        'last_synced_at': u.last_synced_at.strftime('%d-%m-%Y %H:%M') if u.last_synced_at else None,
+        'last_login_at': local_str(u.last_login_at, '%d-%m-%Y %H:%M'),
+        'last_synced_at': local_str(u.last_synced_at, '%d-%m-%Y %H:%M'),
     }
 
 
@@ -333,7 +334,7 @@ class AdminUserDetailView(_AdminView):
             'sessions': [{
                 'id': x.id, 'ip_address': x.ip_address,
                 'user_agent': x.user_agent[:120],
-                'last_seen_at': x.last_seen_at.strftime('%d-%m-%Y %H:%M'),
+                'last_seen_at': local_str(x.last_seen_at, '%d-%m-%Y %H:%M'),
             } for x in u.sessions.filter(revoked_at__isnull=True,
                                          expires_at__gt=timezone.now())[:20]],
         })
@@ -466,12 +467,21 @@ class AdminBulkAccessView(_AdminView):
             return Response({'error': f'Unknown tool "{app}".'}, status=400)
 
         people = PortalUser.objects.filter(id__in=ids)
+        # Active superadmins outside this batch survive the operation no matter
+        # what. If there are none, at least one superadmin inside the batch has
+        # to be kept active, the same protection the one-by-one disable gives.
+        outside_survivors = PortalUser.objects.filter(
+            is_superadmin=True, is_active=True).exclude(id__in=ids).count()
         changed, skipped = 0, []
 
         for u in people:
             if action == 'disable':
                 if u.is_bootstrap_superadmin:
                     skipped.append(f'{u.name} (founding account)')
+                    continue
+                if u.is_superadmin and u.is_active and outside_survivors < 1:
+                    skipped.append(f'{u.name} (last administrator)')
+                    outside_survivors += 1   # this one is now the protected survivor
                     continue
                 u.is_active = False
                 u.sessions.filter(revoked_at__isnull=True).update(revoked_at=timezone.now())
@@ -506,7 +516,7 @@ class AdminSyncView(_AdminView):
             'base_url': getattr(settings, 'POCKET_HRMS_BASE_URL', ''),
             'logs': [{
                 'id': l.id, 'ok': l.ok,
-                'started_at': l.started_at.strftime('%d-%m-%Y %H:%M'),
+                'started_at': local_str(l.started_at, '%d-%m-%Y %H:%M'),
                 'triggered_by': l.triggered_by, 'fetched': l.fetched,
                 'created': l.created, 'updated': l.updated,
                 'deactivated': l.deactivated, 'skipped_no_email': l.skipped_no_email,

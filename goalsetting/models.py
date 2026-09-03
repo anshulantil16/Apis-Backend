@@ -67,11 +67,15 @@ class EmployeeProfile(models.Model):
 
     @property
     def manager(self):
-        return EmployeeProfile.objects.filter(employee_id=self.reporting_manager_id).first()
+        if not self.reporting_manager_id:
+            return None
+        return EmployeeProfile.objects.filter(employee_id__iexact=self.reporting_manager_id).first()
 
     @property
     def hod(self):
-        return EmployeeProfile.objects.filter(employee_id=self.hod_id).first()
+        if not self.hod_id:
+            return None
+        return EmployeeProfile.objects.filter(employee_id__iexact=self.hod_id).first()
 
 
 class GoalCycle(models.Model):

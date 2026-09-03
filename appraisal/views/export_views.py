@@ -9,6 +9,7 @@ from django.http import HttpResponse
 from rest_framework.views import APIView
 
 from appraisal.models import GoalCard, PerformanceCycle
+from config.tz import local_str
 
 
 def _thin_border():
@@ -161,9 +162,9 @@ class AppraisalExportView(APIView):
                 emp.department, emp.zone, emp.subzone,
                 emp.reporting_manager_id, emp.hod_id,
                 gc.get_status_display(),
-                gc.submitted_at.strftime('%d-%m-%Y %H:%M') if gc.submitted_at else '',
-                gc.manager_reviewed_at.strftime('%d-%m-%Y %H:%M') if gc.manager_reviewed_at else '',
-                gc.hod_reviewed_at.strftime('%d-%m-%Y %H:%M') if gc.hod_reviewed_at else '',
+                local_str(gc.submitted_at, '%d-%m-%Y %H:%M') or '',
+                local_str(gc.manager_reviewed_at, '%d-%m-%Y %H:%M') or '',
+                local_str(gc.hod_reviewed_at, '%d-%m-%Y %H:%M') or '',
                 gc.training_programs,
                 gc.feedback_manager,
                 gc.feedback_manager_rating,
@@ -321,7 +322,7 @@ class AppraisalExportView(APIView):
             for log in gc.approval_logs.all():
                 row = [gc.cycle.name, emp.employee_id, emp.name,
                        log.actor_role, log.actor_name, log.action,
-                       log.comment, log.timestamp.strftime('%d-%m-%Y %H:%M')]
+                       log.comment, local_str(log.timestamp, '%d-%m-%Y %H:%M')]
                 for ci, v in enumerate(row, 1):
                     c = ws4.cell(row=ri, column=ci, value=v)
                     c.font = Font(name='Calibri', size=9)
@@ -473,8 +474,8 @@ class AppraisalExportView(APIView):
                 gc.manager_salary_correction or '', gc.hod_salary_correction or '',
                 gc.feedback_manager_rating if gc.feedback_manager_rating else '',
                 gc.feedback_organization_rating if gc.feedback_organization_rating else '',
-                gc.submitted_at.strftime('%d-%m-%Y %H:%M') if gc.submitted_at else '',
-                gc.hod_reviewed_at.strftime('%d-%m-%Y %H:%M') if gc.hod_reviewed_at else '',
+                local_str(gc.submitted_at, '%d-%m-%Y %H:%M') or '',
+                local_str(gc.hod_reviewed_at, '%d-%m-%Y %H:%M') or '',
             ]
             for ci, v in enumerate(row, 1):
                 c = ws0.cell(row=ri, column=ci, value=v)

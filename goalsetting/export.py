@@ -15,6 +15,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from config.tz import local_str
+
 HEAD_FILL = PatternFill('solid', fgColor='1A1410')
 GROUP_FILL = PatternFill('solid', fgColor='B45309')
 THIN = Side(style='thin', color='E2E8F0')
@@ -52,8 +54,10 @@ WAITING_ON = {
 
 
 def _d(value):
-    """dd-mm-yyyy, matching the rest of the intranet."""
-    return value.strftime('%d-%m-%Y') if value else ''
+    """dd-mm-yyyy in IST, matching the rest of the intranet. These are
+    DateTimeFields stored in UTC, so a bare strftime would print the UTC
+    calendar day, not the day it actually was in India."""
+    return local_str(value, '%d-%m-%Y') or ''
 
 
 def _header(ws, columns, fill=HEAD_FILL):
