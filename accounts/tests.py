@@ -230,6 +230,35 @@ class AdminConsolePowers(TestCase):
                                   {'confirm_name': name}, content_type='application/json',
                                   **(auth or self.auth))
 
+    # -- the directory listing ----------------------------------------------
+    def test_everyone_is_listed_not_just_the_first_screenful(self):
+        """An HRMS sync took the directory past the old 500-row cap, and the
+        people beyond it simply weren't in the console - not searchable, not
+        grantable, and with nothing on screen to say they'd been left out."""
+        PortalUser.objects.bulk_create([
+            PortalUser(email=f'p{i}@apisindia.com', employee_code=f'X{i}', name=f'Person {i}')
+            for i in range(600)
+        ])
+        r = self.client.get('/api/accounts/portal/admin/users/', **self.auth)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data['total'], 602)
+        self.assertEqual(len(r.data['users']), 602)
+        self.assertFalse(r.data['truncated'])
+
+    def test_tool_coverage_counts_everyone_not_the_rows_that_loaded(self):
+        """The count sat next to a percentage of the whole company, so counting
+        the loaded page instead quietly understated it."""
+        PortalUser.objects.create(email='a@apisindia.com', employee_code='A9',
+                                  name='A', app_access=['tada'])
+        PortalUser.objects.create(email='b@apisindia.com', employee_code='B9',
+                                  name='B', app_access=['tada', 'home'])
+        r = self.client.get('/api/accounts/portal/admin/users/', **self.auth)
+        by_key = {a['key']: a['can_open'] for a in r.data['apps']}
+        # Two granted, plus the superadmin who can open everything.
+        self.assertEqual(by_key['tada'], 3)
+        # 'home' for one of them, the pre-existing E1, and the superadmin.
+        self.assertEqual(by_key['home'], 3)
+
     # -- editing someone ----------------------------------------------------
     def test_an_address_can_be_corrected(self):
         """A mistyped address locks that person out with no clue why."""

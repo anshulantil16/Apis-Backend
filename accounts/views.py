@@ -22,6 +22,15 @@ from .models import (AppKey, DEFAULT_APPS, SUPERADMIN_BOOTSTRAP_EMAIL,
 from .services import hrms
 
 
+# How many directory rows one admin request will return. High enough to hold
+# the whole company - APIS has ~740 employed people and the HRMS sync brings
+# in everyone with an email - because a directory that silently stops at N is
+# a directory where the people past N cannot be granted anything, and nobody
+# can see that happening. Kept as a real limit anyway so a runaway table can
+# never try to serialise itself into one response.
+ADMIN_LIST_CAP = 5000
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 def _mask_email(email):
     """a****l@apisindia.com - enough to recognise your own address, not someone else's."""
@@ -277,12 +286,30 @@ class AdminUsersView(_AdminView):
             from django.db.models import Q
             rows = rows.filter(Q(name__icontains=q) | Q(email__icontains=q)
                                | Q(employee_code__icontains=q) | Q(department__icontains=q))
+
+        matched = rows.count()
+        users = [serialize_user(u) for u in rows[:ADMIN_LIST_CAP]]
+
+        # Counted here, over EVERY user, rather than in the browser over the
+        # page that happened to be sent. An HRMS sync took this past the old
+        # 500-row cap, and "2 of 500" was being read as the whole company when
+        # it was really the truncated list talking about itself.
+        per_app = {c.value: 0 for c in AppKey}
+        for access, is_super in PortalUser.objects.values_list('app_access', 'is_superadmin'):
+            for key in per_app:
+                if is_super or key in (access or []):
+                    per_app[key] += 1
+
         return Response({
-            'users': [serialize_user(u) for u in rows[:500]],
+            'users': users,
             'total': PortalUser.objects.count(),
+            'matched': matched,          # how many the search found
+            'returned': len(users),      # how many were actually sent
+            'truncated': matched > len(users),
             'active': PortalUser.objects.filter(is_active=True).count(),
             'superadmins': PortalUser.objects.filter(is_superadmin=True).count(),
-            'apps': [{'key': c.value, 'label': c.label} for c in AppKey],
+            'apps': [{'key': c.value, 'label': c.label,
+                      'can_open': per_app.get(c.value, 0)} for c in AppKey],
             'hrms_configured': hrms.is_configured(),
         })
 
