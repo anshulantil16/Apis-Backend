@@ -290,12 +290,18 @@ class AdminUsersView(_AdminView):
         matched = rows.count()
         users = [serialize_user(u) for u in rows[:ADMIN_LIST_CAP]]
 
-        # Counted here, over EVERY user, rather than in the browser over the
-        # page that happened to be sent. An HRMS sync took this past the old
-        # 500-row cap, and "2 of 500" was being read as the whole company when
-        # it was really the truncated list talking about itself.
+        # Counted here, over every ACTIVE user, rather than in the browser over
+        # the page that happened to be sent. An HRMS sync took this past the
+        # old 500-row cap, and "2 of 500" was being read as the whole company
+        # when it was really the truncated list talking about itself.
+        #
+        # Disabled people are excluded because the card answers "who can open
+        # this" - and somebody who cannot sign in cannot open anything, whatever
+        # their app_access still says. Counting them made every tool look more
+        # widely available than it is.
         per_app = {c.value: 0 for c in AppKey}
-        for access, is_super in PortalUser.objects.values_list('app_access', 'is_superadmin'):
+        for access, is_super in (PortalUser.objects.filter(is_active=True)
+                                 .values_list('app_access', 'is_superadmin')):
             for key in per_app:
                 if is_super or key in (access or []):
                     per_app[key] += 1
