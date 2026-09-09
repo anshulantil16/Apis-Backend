@@ -638,14 +638,26 @@ class CelebrationsView(PortalAPIView):
     every employee is meant to see about their colleagues.
     """
 
+    # What the small dashboard cards show: the next few weeks, a handful of rows.
     WINDOW_DAYS = 30          # how far ahead birthdays and anniversaries look
     JOINED_DAYS = 45          # how far back "new joiner" reaches
     LIMIT = 12
+
+    # ?scope=all, behind "View all". A birthday list is a loop, so a full year
+    # ahead is everyone exactly once; joiners just stop being filtered by date.
+    # The row cap stays, well above the ~740 employed people, so this can never
+    # try to serialise an unbounded table into one response.
+    ALL_WINDOW_DAYS = 366
+    ALL_LIMIT = 2000
 
     def get(self, request):
         s = current_session(request)
         if not s:
             return Response({'error': 'Sign in to see this.'}, status=401)
+
+        everyone = request.query_params.get('scope') == 'all'
+        window = self.ALL_WINDOW_DAYS if everyone else self.WINDOW_DAYS
+        limit = self.ALL_LIMIT if everyone else self.LIMIT
 
         today = timezone.localtime(timezone.now(), IST).date()
         people = PortalUser.objects.filter(is_active=True)
@@ -671,10 +683,10 @@ class CelebrationsView(PortalAPIView):
                 if nxt < today:
                     nxt = date(today.year + 1, d.month, day)
                 delta = (nxt - today).days
-                if delta <= self.WINDOW_DAYS:
+                if delta <= window:
                     out.append((delta, nxt, u, d))
             out.sort(key=lambda x: (x[0], x[2].name))
-            return out[:self.LIMIT]
+            return out[:limit]
 
         def shown(u):
             return {'name': u.name, 'department': u.department,
@@ -699,14 +711,18 @@ class CelebrationsView(PortalAPIView):
             people.exclude(date_of_joining=None), 'date_of_joining')
             if nxt.year - orig.year >= 1]
 
-        since = today - timedelta(days=self.JOINED_DAYS)
+        joined = people.exclude(date_of_joining=None).filter(date_of_joining__lte=today)
+        if not everyone:
+            joined = joined.filter(date_of_joining__gte=today - timedelta(days=self.JOINED_DAYS))
         joiners = [{
             **shown(u),
-            'date': u.date_of_joining.strftime('%d %b').lstrip('0'),
+            # Newest first, so "View all" opens on the most recent arrivals
+            # rather than on 2002. The year is shown here because a list
+            # spanning two decades without one is unreadable.
+            'date': (u.date_of_joining.strftime('%d %b').lstrip('0') if not everyone
+                     else u.date_of_joining.strftime('%d %b %Y').lstrip('0')),
             'days_ago': (today - u.date_of_joining).days,
-        } for u in people.filter(date_of_joining__gte=since,
-                                 date_of_joining__lte=today)
-                         .order_by('-date_of_joining', 'name')[:self.LIMIT]]
+        } for u in joined.order_by('-date_of_joining', 'name')[:limit]]
 
         return Response({
             'birthdays': birthdays,

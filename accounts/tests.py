@@ -647,6 +647,30 @@ class Celebrations(TestCase):
         names = [j['name'] for j in self.get()['new_joiners']]
         self.assertEqual(names, ['Joined Recently'])
 
+    def test_view_all_drops_the_window(self):
+        """"View all" means all. The cards show the next few weeks; the popup
+        behind them must not silently keep the same cap."""
+        far = self.today + timedelta(days=200)
+        self.person('Months Away', born=date(1990, far.month, far.day))
+        self.person('Joined Ages Ago', joined=self.today - timedelta(days=900))
+
+        card = self.get()
+        self.assertNotIn('Months Away', [b['name'] for b in card['birthdays']])
+        self.assertNotIn('Joined Ages Ago', [j['name'] for j in card['new_joiners']])
+
+        every = self.client.get('/api/accounts/portal/celebrations/?scope=all',
+                                **self.auth).data
+        self.assertIn('Months Away', [b['name'] for b in every['birthdays']])
+        self.assertIn('Joined Ages Ago', [j['name'] for j in every['new_joiners']])
+
+    def test_view_all_still_hides_leavers(self):
+        """Widening the window must not widen who is in it."""
+        far = self.today + timedelta(days=120)
+        self.person('Gone For Good', born=date(1990, far.month, far.day), active=False)
+        every = self.client.get('/api/accounts/portal/celebrations/?scope=all',
+                                **self.auth).data
+        self.assertNotIn('Gone For Good', [b['name'] for b in every['birthdays']])
+
     def test_has_data_separates_quiet_month_from_no_feed(self):
         """An empty widget means two opposite things - nobody has a birthday
         this month, or HRMS has never run - and they must not look alike."""
