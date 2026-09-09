@@ -430,6 +430,93 @@ class HrmsFieldDiscovery(TestCase):
         self.assertIn('token', str(e.exception).lower())
 
 
+@override_settings(POCKET_HRMS_TOKEN='test-token', POCKET_HRMS_BASE_URL='https://hrms.example')
+class HrmsLiveTenantQuirks(TestCase):
+    """Behaviour confirmed against APIS's real Pocket HRMS tenant on
+    09-09-2026, after their support explained the empty responses.
+
+    Every case here is something that returns a cheerful 200 OK while being
+    completely wrong, which is exactly the kind of thing a test has to hold
+    down - none of it fails loudly on its own.
+    """
+
+    def test_paging_starts_at_one_because_offset_zero_returns_nothing(self):
+        """The bug that made this look like a bad token for weeks: OffSet=0 is
+        a valid request that answers 200 with an empty list."""
+        with mock.patch('accounts.services.hrms.requests.get') as get:
+            get.return_value = FakeResponse([])
+            hrms.fetch_page(fields=['Id'])
+        self.assertEqual(get.call_args.kwargs['headers']['OffSet'], '1')
+
+    def test_fetch_all_keeps_paging_from_one_not_zero(self):
+        pages = [FakeResponse([{'Code': f'E{i}'} for i in range(hrms.PAGE_SIZE)]),
+                 FakeResponse([{'Code': 'last'}])]
+        with mock.patch('accounts.services.hrms.requests.get', side_effect=pages) as get:
+            rows = hrms.fetch_all(fields=['Code'])
+        self.assertEqual(len(rows), hrms.PAGE_SIZE + 1)
+        offsets = [c.kwargs['headers']['OffSet'] for c in get.call_args_list]
+        self.assertEqual(offsets, ['1', str(1 + hrms.PAGE_SIZE)])
+
+    def test_only_live_counts_as_employed(self):
+        """EmpStatus is a word, and every other word means "has left"."""
+        self.assertTrue(hrms._is_active({'EmpStatus': 'Live'}))
+        for gone in ('Resignation', 'Separation', 'Suspension',
+                     'Termination', 'Abscond', 'Expired', 'Other'):
+            self.assertFalse(hrms._is_active({'EmpStatus': gone}), gone)
+
+    def test_lookup_columns_read_the_name_never_the_numeric_id(self):
+        """Department comes back twice - 37 and "SALES (MT)". Storing the
+        number would look like data and read like nonsense."""
+        row = {'Department': 37, 'DepartmentString': 'SALES (MT)'}
+        self.assertEqual(hrms._resolved(row, 'Department'), 'SALES (MT)')
+        # And with no resolved name, blank rather than the id.
+        self.assertEqual(hrms._resolved({'Department': 37}, 'Department'), '')
+
+    def test_the_raw_id_columns_are_still_requested(self):
+        """DepartmentString is null unless Department is asked for alongside
+        it. Dropping the ids as "unused" silently blanks every department."""
+        for base in ('Department', 'Designation', 'Location'):
+            self.assertIn(base, hrms._DEFAULT_FIELDS)
+            self.assertIn(f'{base}String', hrms._DEFAULT_FIELDS)
+
+    def test_a_whole_name_in_fname_survives_intact(self):
+        """This tenant puts the entire name in FName and leaves LName empty."""
+        self.assertEqual(hrms._name_of({'FName': 'Ankit Kumar Sharma'}),
+                         'Ankit Kumar Sharma')
+        self.assertEqual(hrms._name_of({'FName': 'Kishan', 'LName': 'Singh'}),
+                         'Kishan Singh')
+
+    def _sync(self, rows):
+        with mock.patch('accounts.services.hrms.fetch_all', return_value=rows):
+            return hrms.sync_employees(triggered_by='test')
+
+    def test_a_leaver_with_no_account_is_counted_not_imported(self):
+        """Two thirds of the feed is ex-staff. Importing them would bury the
+        people who actually work here."""
+        log = self._sync([
+            {'Code': 'E1', 'FName': 'Still Here', 'Email': 'here@apisindia.com',
+             'EmpStatus': 'Live'},
+            {'Code': 'E2', 'FName': 'Long Gone', 'Email': 'gone@apisindia.com',
+             'EmpStatus': 'Resignation'},
+        ])
+        self.assertEqual(log.created, 1)
+        self.assertEqual(log.skipped_leavers, 1)
+        self.assertTrue(PortalUser.objects.filter(employee_code='E1').exists())
+        self.assertFalse(PortalUser.objects.filter(employee_code='E2').exists())
+
+    def test_a_leaver_who_already_had_an_account_is_deactivated_not_skipped(self):
+        """The other half of the rule: history stays attributable for anyone
+        who ever actually used the portal."""
+        PortalUser.objects.create(employee_code='E9', email='was@apisindia.com',
+                                  name='Was Here', is_active=True, from_hrms=True)
+        log = self._sync([{'Code': 'E9', 'FName': 'Was Here',
+                           'Email': 'was@apisindia.com', 'EmpStatus': 'Resignation'}])
+        self.assertEqual(log.skipped_leavers, 0)
+        self.assertEqual(log.updated, 1)
+        u = PortalUser.objects.get(employee_code='E9')
+        self.assertFalse(u.is_active)
+
+
 class SyncHrmsCommand(TestCase):
     """The management command a cron job runs. No token exists to test the
     real Pocket HRMS call, so sync_employees itself is mocked here - what

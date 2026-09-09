@@ -3,23 +3,41 @@
 Things the vendor's documentation gets wrong, or leaves for their support to
 clarify by hand:
 
+  * OffSet is 1-BASED, and 0 is not "start at the beginning" - it returns an
+    empty array. Every request must start at OffSet=1 or nothing comes back
+    at all, with a perfectly healthy 200 OK and an empty list to show for it.
+    This cost us weeks of "the token must be wrong"; confirmed by their
+    support 09-09-2026.
   * ModifiedDate is documented as an ISO date ("2024-01-01"). It is actually a
     RANGE, "dd/MM/yyyy - dd/MM/yyyy". The doc's own example cURL fails with
     400 as printed. Confirmed correct by their support after we reported it.
   * An unauthenticated or bad-token request answers 500, not 401/403 - so a
     500 here means "your token is wrong", not "their server is broken".
-  * EmployeeFields is not a fixed vocabulary shared across every tenant - it
-    is whatever field names THIS company's Pocket HRMS admin configured under
-    Cloud Portal > Settings > Configurations > Fields. "EmailId" and "Email"
-    are guesses, not confirmed names, until a real call proves them. See
-    discover_fields() below - it is the vendor-recommended way to find out
-    which names actually exist for APIS's tenant, and it works by leaving the
-    EmployeeFields header off entirely rather than guessing at it.
+  * EmployeeFields is REQUIRED to get values, not just to narrow the payload.
+    Without it the API still returns a row per employee, but almost every
+    column comes back null - so an omitted header looks like "we have 2000
+    blank employees" rather than an error.
+  * The resolved-name columns (DepartmentString, DesignationString,
+    LocationString, GradeString, CategoryString) only populate if the RAW
+    numeric column is requested alongside them. Asking for DepartmentString
+    on its own returns null; asking for "Department,DepartmentString" returns
+    "SALES (MT)". Hence the pairs in _DEFAULT_FIELDS below - do not "tidy" the
+    raw ids out of that list, they are load-bearing.
+  * EmpStatus as a REQUEST header does not filter anything - Live, ALL and A
+    all return the same complete list. The filtering has to happen here. As a
+    RESPONSE value it is a word: Live, Resignation, Separation, Suspension,
+    Termination, Abscond, Expired, Other. Only "Live" is currently employed.
   * Their staging documentation pointed at essapistaging.pockethrms.com:8343,
     which is firewalled from the office network. Their support corrected this
     to https://pockethrmsnext.pockethrms.com - see POCKET_HRMS_BASE_URL in
-    settings.py. This is STAGING; production may or may not be the same host,
-    and nobody here has confirmed that yet with a working token.
+    settings.py. This is STAGING; production is api.pockethrms.com, confirmed
+    working 09-09-2026.
+
+Not available on APIS's tenant as of 09-09-2026: the reporting-manager link.
+PocketReportingManager, POCKETREPORTINGMANAGERstring, ManagerNames, LeaderId
+and Employeeleaderstring are all empty for all 2,365 employees, so who reports
+to whom cannot be synced yet and still has to be maintained by hand. They are
+requested anyway, so the day HR fills them in this starts working on its own.
 
 Employee master data is read-only to us. Nothing in this module writes back.
 """
@@ -33,17 +51,30 @@ from django.utils import timezone
 from ..models import (DEFAULT_APPS, SUPERADMIN_BOOTSTRAP_EMAIL,
                       HrmsSyncLog, PortalUser)
 
-# The fields the portal asks for by default. These are GUESSES at common
-# Pocket HRMS column names, not confirmed for this tenant - APIS's actual
-# configured field names are only known once discover_fields() has been run
-# with a real token and someone has read the result. Override via
-# POCKET_HRMS_EMPLOYEE_FIELDS (comma-separated) once they are known, rather
-# than editing code - see settings.py.
+# The fields the portal asks for. Confirmed against APIS's live tenant on
+# 09-09-2026 - these are the real column names, no longer guesses.
+#
+# The raw/String pairs are deliberate: DepartmentString is null unless
+# Department is asked for too (see the module docstring). Override via
+# POCKET_HRMS_EMPLOYEE_FIELDS (comma-separated) rather than editing code.
 _DEFAULT_FIELDS = [
-    'Id', 'Code', 'Fname', 'Lname', 'EmailId', 'Email',
-    'Department', 'Designation', 'Location', 'EmpStatus',
-    'PocketReportingManager',
+    'Id', 'Code', 'FName', 'MName', 'LName',
+    'Email', 'PersonalEmail',
+    'Department', 'DepartmentString',
+    'Designation', 'DesignationString',
+    'Location', 'LocationString',
+    'Grade', 'GradeString',
+    'Category', 'CategoryString',
+    # Empty on this tenant today, requested so it starts working by itself if
+    # HR ever fills the reporting line in. See the module docstring.
+    'PocketReportingManager', 'POCKETREPORTINGMANAGERstring',
+    'EmpStatus', 'DateOfJoining', 'OfficeMobileNo', 'PersonalMobileNo',
 ]
+
+# The one EmpStatus that means "works here today". Everything else - the
+# resignations, separations, suspensions, terminations - is a former employee
+# and must not get a working portal login.
+ACTIVE_EMP_STATUS = 'live'
 
 
 def _configured_fields():
@@ -61,6 +92,7 @@ EMPLOYEE_FIELDS = _configured_fields()
 
 PAGE_SIZE = 200          # tuned down if the API starts timing out
 MAX_PAGES = 100          # a stop, so a paging bug cannot loop forever
+FIRST_OFFSET = 1         # 1-based, and 0 silently returns nothing at all
 
 
 class HrmsError(RuntimeError):
@@ -92,13 +124,17 @@ def _headers(extra=None, fields=EMPLOYEE_FIELDS):
     return h
 
 
-def fetch_page(take=PAGE_SIZE, offset=0, emp_status='ALL', modified_since=None,
+def fetch_page(take=PAGE_SIZE, offset=FIRST_OFFSET, emp_status='ALL', modified_since=None,
                fields=EMPLOYEE_FIELDS):
     """One page of the employee master.
 
+    offset is 1-based and offset=0 returns an empty list, not the first page -
+    see the module docstring. Nothing here should ever pass 0.
+
     Pass fields=None to leave the EmployeeFields header off entirely - Pocket
     HRMS then returns whatever columns are configured for this tenant, which
-    is the supported way to find out their real names (see discover_fields).
+    is how discover_fields() reads their names. Note that this also blanks
+    almost every VALUE, so it is only good for discovery.
     """
     base = _cfg('POCKET_HRMS_BASE_URL', 'https://api.pockethrms.com').rstrip('/')
     extra = {'Take': str(take), 'OffSet': str(offset), 'EmpStatus': emp_status}
@@ -132,7 +168,7 @@ def fetch_page(take=PAGE_SIZE, offset=0, emp_status='ALL', modified_since=None,
 
 def fetch_all(emp_status='ALL', modified_since=None, fields=EMPLOYEE_FIELDS):
     """Every employee, walking the pagination to the end."""
-    rows, offset = [], 0
+    rows, offset = [], FIRST_OFFSET
     for _ in range(MAX_PAGES):
         page = fetch_page(take=PAGE_SIZE, offset=offset, emp_status=emp_status,
                           modified_since=modified_since, fields=fields)
@@ -151,7 +187,7 @@ def discover_fields(sample_size=3):
 
     A handful of rows is enough; this exists to read column NAMES, not data.
     """
-    rows = fetch_page(take=sample_size, offset=0, emp_status='ALL', fields=None)
+    rows = fetch_page(take=sample_size, offset=FIRST_OFFSET, emp_status='ALL', fields=None)
     columns = sorted({k for r in rows if isinstance(r, dict) for k in r})
     return columns, rows
 
@@ -171,15 +207,39 @@ def _pick(row, *names):
     return ''
 
 
+def _resolved(row, base, string_name=None):
+    """The readable name behind one of the lookup columns.
+
+    Department, Designation, Location and the rest come back twice: a numeric
+    id under the plain name and the text under "<name>String". Only the text
+    is ever wanted here, and there is deliberately no fallback to the id - a
+    department recorded as "0" or "37" is worse than a blank one, because it
+    looks like data and reads like nonsense on the screen.
+    """
+    return _pick(row, string_name or f'{base}String')
+
+
 def _name_of(row):
-    first = _pick(row, 'Fname', 'FName', 'FirstName')
-    last = _pick(row, 'Lname', 'LName', 'LastName')
-    return ' '.join(p for p in (first, last) if p).strip()
+    """Whole name, however this tenant happens to have split it.
+
+    APIS's data mostly puts the entire name in FName ("Ankit Kumar Sharma")
+    and leaves MName and LName empty, but a handful of records do use all
+    three, so all three are joined rather than assuming either shape.
+    """
+    parts = [_pick(row, 'FName', 'Fname', 'FirstName'),
+             _pick(row, 'MName', 'Mname', 'MiddleName'),
+             _pick(row, 'LName', 'Lname', 'LastName')]
+    return ' '.join(p for p in parts if p).strip()
 
 
 def _is_active(row):
-    """EmpStatus comes back as a word when asked for by name."""
-    return _pick(row, 'EmpStatus', 'Status').strip().lower() in ('active', 'a', '1', 'true')
+    """Whether this person still works here.
+
+    EmpStatus is a word, and "Live" is the only one that means employed - see
+    the module docstring for the full list. Everything else (Resignation,
+    Separation, Suspension, Termination, Abscond, Expired) is a leaver.
+    """
+    return _pick(row, 'EmpStatus', 'Status').strip().lower() == ACTIVE_EMP_STATUS
 
 
 def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
@@ -224,7 +284,11 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
 
     for row in rows:
         code = _pick(row, 'Code', 'EmpCode', 'EmployeeCode')
-        email = _pick(row, 'EmailId', 'Email', 'OfficialEmail', 'EmailAddress').lower()
+        # Official mailbox first. PersonalEmail is a deliberate fallback, not a
+        # preference: it is the login identity, and a personal address that
+        # reaches the person beats no account at all.
+        email = _pick(row, 'Email', 'EmailId', 'OfficialEmail', 'EmailAddress',
+                      'PersonalEmail').lower()
         if not code:
             continue
         if not email:
@@ -235,10 +299,11 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
         fields = {
             'email': email,
             'name': _name_of(row) or code,
-            'designation': _pick(row, 'Designation'),
-            'department': _pick(row, 'Department'),
-            'location': _pick(row, 'Location'),
-            'reporting_manager_code': _pick(row, 'PocketReportingManager', 'ReportingManager'),
+            'designation': _resolved(row, 'Designation'),
+            'department': _resolved(row, 'Department'),
+            'location': _resolved(row, 'Location'),
+            'reporting_manager_code': _resolved(row, 'PocketReportingManager',
+                                                'POCKETREPORTINGMANAGERstring'),
             'hrms_id': _pick(row, 'Id'),
             'is_active': _is_active(row),
             'from_hrms': True,
@@ -262,9 +327,17 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
                 existing.is_superadmin = True
             existing.save()
             log.updated += 1
-        else:
+        elif fields['is_active']:
             PortalUser.objects.create(employee_code=code, app_access=list(DEFAULT_APPS), **fields)
             log.created += 1
+        else:
+            # A leaver who never had a portal account does not get one now.
+            # The feed carries every employee APIS has ever had - 1,500 of the
+            # 2,365 rows are resignations - and importing them would bury the
+            # 700 people who actually work here under a directory of ex-staff.
+            # Anyone who DID have an account still takes the branch above and
+            # is deactivated there, so no history is lost.
+            log.skipped_leavers += 1
 
     # Someone who has left stops appearing in the feed. Their access is closed
     # rather than their record deleted, so their history stays attributable.
@@ -281,5 +354,6 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
 
     log.ok, log.finished_at = True, timezone.now()
     log.message = (f'{log.created} created, {log.updated} updated, '
-                   f'{log.deactivated} deactivated, {log.skipped_no_email} skipped (no email).')
+                   f'{log.deactivated} deactivated, {log.skipped_no_email} skipped (no email), '
+                   f'{log.skipped_leavers} skipped (already left).')
     log.save()

@@ -244,6 +244,9 @@ class HrmsSyncLog(models.Model):
     updated     = models.PositiveIntegerField(default=0)
     deactivated = models.PositiveIntegerField(default=0)
     skipped_no_email = models.PositiveIntegerField(default=0)
+    # Ex-employees in the feed who never had a portal account. Counted rather
+    # than imported - see hrms._write_employees.
+    skipped_leavers = models.PositiveIntegerField(default=0)
     message     = models.TextField(blank=True)
 
     class Meta:
