@@ -647,29 +647,39 @@ class Celebrations(TestCase):
         names = [j['name'] for j in self.get()['new_joiners']]
         self.assertEqual(names, ['Joined Recently'])
 
-    def test_view_all_drops_the_window(self):
-        """"View all" means all. The cards show the next few weeks; the popup
-        behind them must not silently keep the same cap."""
-        far = self.today + timedelta(days=200)
-        self.person('Months Away', born=date(1990, far.month, far.day))
-        self.person('Joined Ages Ago', joined=self.today - timedelta(days=900))
+    def every(self):
+        return self.client.get('/api/accounts/portal/celebrations/?scope=all',
+                               **self.auth).data
 
-        card = self.get()
-        self.assertNotIn('Months Away', [b['name'] for b in card['birthdays']])
-        self.assertNotIn('Joined Ages Ago', [j['name'] for j in card['new_joiners']])
+    def test_view_all_reaches_the_end_of_the_year(self):
+        """The cards stop at 30 days; "View all" runs to 31 December."""
+        self.person('New Year Eve', born=date(1990, 12, 31))
+        names = [b['name'] for b in self.every()['birthdays']]
+        self.assertIn('New Year Eve', names)
 
-        every = self.client.get('/api/accounts/portal/celebrations/?scope=all',
-                                **self.auth).data
-        self.assertIn('Months Away', [b['name'] for b in every['birthdays']])
-        self.assertIn('Joined Ages Ago', [j['name'] for j in every['new_joiners']])
+    def test_view_all_stops_at_the_year_end(self):
+        """Not a rolling year - "who else has a birthday this year" is the
+        question, so January belongs to the next list, not this one."""
+        year_end = date(self.today.year, 12, 31)
+        for b in self.every()['birthdays']:
+            self.assertLessEqual(b['days_away'], (year_end - self.today).days)
+
+    def test_new_joiners_are_this_year_only(self):
+        """Everyone who ever joined is not a list of new joiners - it is the
+        staff list in date order, which is not what the heading promises."""
+        self.person('Joined In January', joined=date(self.today.year, 1, 1))
+        self.person('Joined Last Year', joined=date(self.today.year - 1, 12, 31))
+        names = [j['name'] for j in self.every()['new_joiners']]
+        self.assertIn('Joined In January', names)
+        self.assertNotIn('Joined Last Year', names)
 
     def test_view_all_still_hides_leavers(self):
         """Widening the window must not widen who is in it."""
-        far = self.today + timedelta(days=120)
-        self.person('Gone For Good', born=date(1990, far.month, far.day), active=False)
-        every = self.client.get('/api/accounts/portal/celebrations/?scope=all',
-                                **self.auth).data
+        self.person('Gone For Good', born=date(1990, 12, 31),
+                    joined=date(self.today.year, 1, 2), active=False)
+        every = self.every()
         self.assertNotIn('Gone For Good', [b['name'] for b in every['birthdays']])
+        self.assertNotIn('Gone For Good', [j['name'] for j in every['new_joiners']])
 
     def test_has_data_separates_quiet_month_from_no_feed(self):
         """An empty widget means two opposite things - nobody has a birthday

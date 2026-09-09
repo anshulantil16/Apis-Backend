@@ -643,11 +643,11 @@ class CelebrationsView(PortalAPIView):
     JOINED_DAYS = 45          # how far back "new joiner" reaches
     LIMIT = 12
 
-    # ?scope=all, behind "View all". A birthday list is a loop, so a full year
-    # ahead is everyone exactly once; joiners just stop being filtered by date.
-    # The row cap stays, well above the ~740 employed people, so this can never
-    # try to serialise an unbounded table into one response.
-    ALL_WINDOW_DAYS = 366
+    # ?scope=all, behind "View all", is the REST OF THIS CALENDAR YEAR - not a
+    # rolling year and not all of history. "Who else has a birthday this year"
+    # and "who joined this year" are the questions people actually ask; a
+    # rolling window answers neither, and dragging joiners back to 2002 under a
+    # heading that says "New Joiners" answers something nobody asked.
     ALL_LIMIT = 2000
 
     def get(self, request):
@@ -656,17 +656,23 @@ class CelebrationsView(PortalAPIView):
             return Response({'error': 'Sign in to see this.'}, status=401)
 
         everyone = request.query_params.get('scope') == 'all'
-        window = self.ALL_WINDOW_DAYS if everyone else self.WINDOW_DAYS
         limit = self.ALL_LIMIT if everyone else self.LIMIT
 
         today = timezone.localtime(timezone.now(), IST).date()
         people = PortalUser.objects.filter(is_active=True)
 
+        # "View all" runs to 31 December; the cards run a few weeks out. The
+        # card window still wraps into January, because in mid-December "the
+        # next 30 days" genuinely includes New Year - it is only the full list
+        # that is deliberately cut at the year end.
+        year_end = date(today.year, 12, 31)
+        window = (year_end - today).days if everyone else self.WINDOW_DAYS
+
         def upcoming(rows, field):
             """Sorted by how many days until the next occurrence.
 
-            Compared on month and day only, so it wraps across the new year:
-            on 20 December, a 5 January birthday is 16 days away, not 349.
+            Compared on month and day only, so the card wraps across the new
+            year: on 20 December, a 5 January birthday is 16 days away, not 349.
             """
             out = []
             for u in rows:
@@ -711,18 +717,18 @@ class CelebrationsView(PortalAPIView):
             people.exclude(date_of_joining=None), 'date_of_joining')
             if nxt.year - orig.year >= 1]
 
-        joined = people.exclude(date_of_joining=None).filter(date_of_joining__lte=today)
-        if not everyone:
-            joined = joined.filter(date_of_joining__gte=today - timedelta(days=self.JOINED_DAYS))
+        # This year's arrivals, newest first. Everyone who ever joined is not a
+        # list of new joiners - it is the staff list in date order, and under
+        # that heading it reads as a bug.
+        since = (date(today.year, 1, 1) if everyone
+                 else today - timedelta(days=self.JOINED_DAYS))
         joiners = [{
             **shown(u),
-            # Newest first, so "View all" opens on the most recent arrivals
-            # rather than on 2002. The year is shown here because a list
-            # spanning two decades without one is unreadable.
-            'date': (u.date_of_joining.strftime('%d %b').lstrip('0') if not everyone
-                     else u.date_of_joining.strftime('%d %b %Y').lstrip('0')),
+            'date': u.date_of_joining.strftime('%d %b').lstrip('0'),
             'days_ago': (today - u.date_of_joining).days,
-        } for u in joined.order_by('-date_of_joining', 'name')[:limit]]
+        } for u in people.filter(date_of_joining__gte=since,
+                                 date_of_joining__lte=today)
+                         .order_by('-date_of_joining', 'name')[:limit]]
 
         return Response({
             'birthdays': birthdays,
