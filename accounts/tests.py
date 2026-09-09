@@ -533,6 +533,28 @@ class HrmsLiveTenantQuirks(TestCase):
         self.assertTrue(PortalUser.objects.filter(employee_code='E1').exists())
         self.assertFalse(PortalUser.objects.filter(employee_code='E2').exists())
 
+    def test_two_people_sharing_an_email_do_not_overwrite_each_other(self):
+        """Real in APIS's data - two field staff share one gmail. Email is the
+        unique login identity and the sync falls back to matching on it, so the
+        second row used to take over the first person's account and employee
+        code, and one of them lost their login silently."""
+        log = self._sync([
+            {'Code': 'SL01', 'FName': 'First Person', 'Email': 'shared@gmail.com',
+             'EmpStatus': 'Live'},
+            {'Code': 'SL02', 'FName': 'Second Person', 'Email': 'shared@gmail.com',
+             'EmpStatus': 'Live'},
+        ])
+        self.assertEqual(log.created, 1)
+        self.assertEqual(log.skipped_duplicate_email, 1)
+        # The first one keeps the account, untouched.
+        u = PortalUser.objects.get(email='shared@gmail.com')
+        self.assertEqual(u.employee_code, 'SL01')
+        self.assertEqual(u.name, 'First Person')
+        # And the clash names both codes, so it can actually be fixed upstream.
+        self.assertIn('SL01', log.message)
+        self.assertIn('SL02', log.message)
+        self.assertIn('shared@gmail.com', log.message)
+
     def test_a_leaver_who_already_had_an_account_is_deactivated_not_skipped(self):
         """The other half of the rule: history stays attributable for anyone
         who ever actually used the portal."""

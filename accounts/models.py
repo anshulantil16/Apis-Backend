@@ -247,6 +247,10 @@ class HrmsSyncLog(models.Model):
     # Ex-employees in the feed who never had a portal account. Counted rather
     # than imported - see hrms._write_employees.
     skipped_leavers = models.PositiveIntegerField(default=0)
+    # Rows whose email was already taken by an earlier employee in the same
+    # run. Skipped rather than allowed to overwrite; the codes are named in
+    # `message` so the clash can be fixed upstream.
+    skipped_duplicate_email = models.PositiveIntegerField(default=0)
     message     = models.TextField(blank=True)
 
     class Meta:

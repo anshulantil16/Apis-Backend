@@ -281,6 +281,8 @@ def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
 def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
     log.fetched = len(rows)
     seen_codes = []
+    claimed_by = {}          # email -> the employee code that got there first
+    clashes = []
 
     for row in rows:
         code = _pick(row, 'Code', 'EmpCode', 'EmployeeCode')
@@ -294,7 +296,36 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
         if not email:
             log.skipped_no_email += 1
             continue
+
         seen_codes.append(code)
+        active = _is_active(row)
+
+        existing = (PortalUser.objects.filter(employee_code=code).first()
+                    or PortalUser.objects.filter(email__iexact=email).first())
+
+        # A leaver who never had a portal account does not get one now. The
+        # feed carries every employee APIS has ever had - two thirds of the
+        # rows are resignations - and importing them would bury the people who
+        # actually work here under a directory of ex-staff. Anyone who DID have
+        # an account falls through and is deactivated below, so no history is
+        # lost. Checked before the email claim on purpose: 58 of these leavers
+        # share an address with someone still employed, and letting them claim
+        # it would lock the live person out of the portal entirely.
+        if not existing and not active:
+            log.skipped_leavers += 1
+            continue
+
+        # Two people with the same address, both still here. Real in APIS's
+        # data. Email is the unique login identity and the lookup above falls
+        # back to matching on it, so without this the second row would quietly
+        # take over the first person's account, employee code and all, and one
+        # of them would lose their login with nothing saying so. First row
+        # keeps it; the clash is named in the log so HR can fix it upstream.
+        if claimed_by.get(email, code) != code:
+            log.skipped_duplicate_email += 1
+            clashes.append(f'{code} and {claimed_by[email]} both use {email}')
+            continue
+        claimed_by[email] = code
 
         fields = {
             'email': email,
@@ -305,15 +336,13 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
             'reporting_manager_code': _resolved(row, 'PocketReportingManager',
                                                 'POCKETREPORTINGMANAGERstring'),
             'hrms_id': _pick(row, 'Id'),
-            'is_active': _is_active(row),
+            'is_active': active,
             'from_hrms': True,
             'last_synced_at': timezone.now(),
             # Verbatim, so the console can show what upstream actually sent.
             'hrms_raw': row,
         }
 
-        existing = (PortalUser.objects.filter(employee_code=code).first()
-                    or PortalUser.objects.filter(email__iexact=email).first())
         if existing:
             # A row typed into the console before HRMS knew about this person
             # is adopted rather than duplicated.
@@ -327,17 +356,9 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
                 existing.is_superadmin = True
             existing.save()
             log.updated += 1
-        elif fields['is_active']:
+        else:
             PortalUser.objects.create(employee_code=code, app_access=list(DEFAULT_APPS), **fields)
             log.created += 1
-        else:
-            # A leaver who never had a portal account does not get one now.
-            # The feed carries every employee APIS has ever had - 1,500 of the
-            # 2,365 rows are resignations - and importing them would bury the
-            # 700 people who actually work here under a directory of ex-staff.
-            # Anyone who DID have an account still takes the branch above and
-            # is deactivated there, so no history is lost.
-            log.skipped_leavers += 1
 
     # Someone who has left stops appearing in the feed. Their access is closed
     # rather than their record deleted, so their history stays attributable.
@@ -356,4 +377,11 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
     log.message = (f'{log.created} created, {log.updated} updated, '
                    f'{log.deactivated} deactivated, {log.skipped_no_email} skipped (no email), '
                    f'{log.skipped_leavers} skipped (already left).')
+    if clashes:
+        # Named, not just counted - "1 duplicate address" is not something
+        # anyone can act on; two employee codes and the address is.
+        log.message += ('\n\nShared email addresses, second record skipped — '
+                        'needs fixing in Pocket HRMS:\n  ' + '\n  '.join(clashes[:20]))
+        if len(clashes) > 20:
+            log.message += f'\n  ...and {len(clashes) - 20} more.'
     log.save()
