@@ -8,7 +8,7 @@ Everything below is deliberately explicit about failure. A door that says
 "something went wrong" teaches people to file a ticket; a door that says
 "that code has expired, ask for a new one" teaches them to press the button.
 """
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.conf import settings
 from django.core.mail import send_mail
@@ -16,7 +16,7 @@ from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from config.tz import local_str
+from config.tz import IST, local_str
 from .models import (AppKey, DEFAULT_APPS, SUPERADMIN_BOOTSTRAP_EMAIL,
                      HrmsSyncLog, PortalOTP, PortalSession, PortalUser)
 from .services import hrms
@@ -624,6 +624,98 @@ class AdminHrmsPreviewView(_AdminView):
             'returned_columns': columns,
             'sample': rows,
             'count': len(rows),
+        })
+
+
+class CelebrationsView(PortalAPIView):
+    """Birthdays, work anniversaries and new joiners, for the home dashboard.
+
+    Only people who currently work here. A leaver's birthday appearing on the
+    intranet is the kind of mistake nobody forgets, so is_active does the
+    filtering here rather than the caller being trusted to remember.
+
+    Deliberately NOT an admin endpoint - this is the one bit of directory data
+    every employee is meant to see about their colleagues.
+    """
+
+    WINDOW_DAYS = 30          # how far ahead birthdays and anniversaries look
+    JOINED_DAYS = 45          # how far back "new joiner" reaches
+    LIMIT = 12
+
+    def get(self, request):
+        s = current_session(request)
+        if not s:
+            return Response({'error': 'Sign in to see this.'}, status=401)
+
+        today = timezone.localtime(timezone.now(), IST).date()
+        people = PortalUser.objects.filter(is_active=True)
+
+        def upcoming(rows, field):
+            """Sorted by how many days until the next occurrence.
+
+            Compared on month and day only, so it wraps across the new year:
+            on 20 December, a 5 January birthday is 16 days away, not 349.
+            """
+            out = []
+            for u in rows:
+                d = getattr(u, field)
+                if not d:
+                    continue
+                # 29 February falls back to the 28th in a non-leap year, so the
+                # person still gets a birthday every year.
+                day = min(d.day, 28) if (d.month == 2 and d.day == 29) else d.day
+                try:
+                    nxt = date(today.year, d.month, day)
+                except ValueError:
+                    continue
+                if nxt < today:
+                    nxt = date(today.year + 1, d.month, day)
+                delta = (nxt - today).days
+                if delta <= self.WINDOW_DAYS:
+                    out.append((delta, nxt, u, d))
+            out.sort(key=lambda x: (x[0], x[2].name))
+            return out[:self.LIMIT]
+
+        def shown(u):
+            return {'name': u.name, 'department': u.department,
+                    'designation': u.designation}
+
+        birthdays = [{
+            **shown(u),
+            # Day and month only. The year is stored because anniversaries need
+            # it, but a colleague's age is nobody's business on a dashboard.
+            'date': nxt.strftime('%d %b').lstrip('0'),
+            'days_away': delta, 'is_today': delta == 0,
+        } for delta, nxt, u, _ in upcoming(people.exclude(date_of_birth=None), 'date_of_birth')]
+
+        anniversaries = [{
+            **shown(u),
+            'date': nxt.strftime('%d %b').lstrip('0'),
+            'days_away': delta, 'is_today': delta == 0,
+            # "5 years" is the whole point of an anniversary; a first one has
+            # not happened yet, so it is not one.
+            'years': nxt.year - orig.year,
+        } for delta, nxt, u, orig in upcoming(
+            people.exclude(date_of_joining=None), 'date_of_joining')
+            if nxt.year - orig.year >= 1]
+
+        since = today - timedelta(days=self.JOINED_DAYS)
+        joiners = [{
+            **shown(u),
+            'date': u.date_of_joining.strftime('%d %b').lstrip('0'),
+            'days_ago': (today - u.date_of_joining).days,
+        } for u in people.filter(date_of_joining__gte=since,
+                                 date_of_joining__lte=today)
+                         .order_by('-date_of_joining', 'name')[:self.LIMIT]]
+
+        return Response({
+            'birthdays': birthdays,
+            'anniversaries': anniversaries,
+            'new_joiners': joiners,
+            # So the widgets can tell "nobody this month" apart from "the feed
+            # has never run", which look identical and mean opposite things.
+            'has_data': people.exclude(date_of_birth=None).exists()
+                        or people.exclude(date_of_joining=None).exists(),
         })
 
 

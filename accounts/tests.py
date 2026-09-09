@@ -10,8 +10,10 @@ forgot the line would silently enable it.
 Most of what follows is therefore about proving the gate is shut by default.
 """
 from django.test import TestCase, override_settings
+from django.utils import timezone
+from config.tz import IST
 from unittest import mock
-from datetime import date
+from datetime import date, timedelta
 
 import io
 
@@ -566,6 +568,91 @@ class HrmsLiveTenantQuirks(TestCase):
         self.assertEqual(log.updated, 1)
         u = PortalUser.objects.get(employee_code='E9')
         self.assertFalse(u.is_active)
+
+
+class Celebrations(TestCase):
+    """Birthdays, anniversaries and new joiners on the home dashboard."""
+
+    def setUp(self):
+        self.me = PortalUser.objects.create(
+            email='me@apisindia.com', employee_code='ME', name='Me')
+        self.auth = {'HTTP_AUTHORIZATION': f'Bearer {PortalSession.start(self.me)}'}
+        self.today = timezone.localtime(timezone.now(), IST).date()
+
+    def get(self):
+        return self.client.get('/api/accounts/portal/celebrations/', **self.auth).data
+
+    def person(self, name, *, born=None, joined=None, active=True):
+        return PortalUser.objects.create(
+            email=f'{name.lower().replace(" ", "")}@apisindia.com',
+            employee_code=name.upper()[:8], name=name, is_active=active,
+            date_of_birth=born, date_of_joining=joined)
+
+    def test_signing_in_is_required(self):
+        """This is colleagues' personal dates - not something to serve to the
+        open internet."""
+        r = self.client.get('/api/accounts/portal/celebrations/')
+        self.assertEqual(r.status_code, 401)
+
+    def test_a_leaver_never_appears(self):
+        """The mistake nobody forgets: the intranet wishing a happy birthday to
+        someone who left last month."""
+        soon = self.today + timedelta(days=3)
+        self.person('Still Here', born=date(1990, soon.month, soon.day))
+        self.person('Long Gone', born=date(1990, soon.month, soon.day), active=False)
+        names = [b['name'] for b in self.get()['birthdays']]
+        self.assertIn('Still Here', names)
+        self.assertNotIn('Long Gone', names)
+
+    def test_a_birthday_next_month_wraps_the_year(self):
+        """On 20 December a 5 January birthday is 16 days away, not 349 - so
+        comparing whole dates rather than month-and-day empties the widget
+        every December."""
+        ahead = self.today + timedelta(days=20)
+        self.person('Wraps Around', born=date(1985, ahead.month, ahead.day))
+        rows = self.get()['birthdays']
+        self.assertEqual([r['name'] for r in rows], ['Wraps Around'])
+        self.assertEqual(rows[0]['days_away'], 20)
+
+    def test_a_birthday_that_has_passed_is_not_shown(self):
+        gone_by = self.today - timedelta(days=5)
+        self.person('Last Week', born=date(1985, gone_by.month, gone_by.day))
+        self.assertEqual(self.get()['birthdays'], [])
+
+    def test_a_birth_year_is_never_sent_to_the_browser(self):
+        """Stored because anniversaries need a year to count from. A
+        colleague's age is still nobody's business on a dashboard."""
+        soon = self.today + timedelta(days=2)
+        self.person('Private Person', born=date(1979, soon.month, soon.day))
+        row = self.get()['birthdays'][0]
+        self.assertNotIn('1979', str(row))
+        self.assertNotIn('79', row['date'])
+
+    def test_an_anniversary_counts_the_years(self):
+        soon = self.today + timedelta(days=4)
+        self.person('Five Years', joined=date(soon.year - 5, soon.month, soon.day))
+        row = self.get()['anniversaries'][0]
+        self.assertEqual(row['years'], 5)
+
+    def test_someone_who_joined_this_year_has_no_anniversary_yet(self):
+        """A first anniversary has not happened; listing it as '0 years' reads
+        as a bug to everyone who sees it."""
+        soon = self.today + timedelta(days=4)
+        self.person('Brand New', joined=date(soon.year, soon.month, soon.day))
+        self.assertEqual(self.get()['anniversaries'], [])
+
+    def test_new_joiners_look_backwards_not_forwards(self):
+        self.person('Joined Recently', joined=self.today - timedelta(days=10))
+        self.person('Joined Ages Ago', joined=self.today - timedelta(days=200))
+        names = [j['name'] for j in self.get()['new_joiners']]
+        self.assertEqual(names, ['Joined Recently'])
+
+    def test_has_data_separates_quiet_month_from_no_feed(self):
+        """An empty widget means two opposite things - nobody has a birthday
+        this month, or HRMS has never run - and they must not look alike."""
+        self.assertFalse(self.get()['has_data'])
+        self.person('Someone', born=date(1990, 1, 1))
+        self.assertTrue(self.get()['has_data'])
 
 
 class SyncHrmsCommand(TestCase):

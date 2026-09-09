@@ -73,6 +73,14 @@ class PortalUser(models.Model):
     location      = models.CharField(max_length=200, blank=True)
     reporting_manager_code = models.CharField(max_length=50, blank=True)
 
+    # Birthdays and work anniversaries. Both are complete for every employee in
+    # the HRMS feed, and both are only ever read a day-and-month at a time - the
+    # year is kept because joining year is what makes an anniversary countable
+    # ("5 years today"), not because anyone needs to see a date of birth in
+    # full. Nothing renders the birth year; see the celebrations endpoint.
+    date_of_birth   = models.DateField(null=True, blank=True)
+    date_of_joining = models.DateField(null=True, blank=True)
+
     # HRMS's own row id, kept so a sync can match a record whose code was
     # corrected upstream without creating a duplicate person.
     hrms_id       = models.CharField(max_length=50, blank=True, db_index=True)

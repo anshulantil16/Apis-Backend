@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (AdminBulkAccessView, AdminHrmsPreviewView, AdminSessionsView, AdminSyncView,
+                    CelebrationsView,
                     AdminUserDetailView, AdminUsersView,
                     LogoutView, MeView, RequestOTPView, VerifyOTPView)
 
@@ -9,6 +10,9 @@ urlpatterns = [
     path('portal/request-otp/', RequestOTPView.as_view()),
     path('portal/verify-otp/',  VerifyOTPView.as_view()),
     path('portal/me/',          MeView.as_view()),
+
+    # Birthdays, anniversaries and new joiners - any signed-in employee.
+    path('portal/celebrations/', CelebrationsView.as_view()),
     path('portal/logout/',      LogoutView.as_view()),
 
     # Console (superadmin only)

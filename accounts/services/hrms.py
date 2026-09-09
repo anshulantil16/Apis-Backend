@@ -41,7 +41,7 @@ requested anyway, so the day HR fills them in this starts working on its own.
 
 Employee master data is read-only to us. Nothing in this module writes back.
 """
-from datetime import date
+from datetime import date, datetime
 
 import requests
 from django.conf import settings
@@ -68,7 +68,8 @@ _DEFAULT_FIELDS = [
     # Empty on this tenant today, requested so it starts working by itself if
     # HR ever fills the reporting line in. See the module docstring.
     'PocketReportingManager', 'POCKETREPORTINGMANAGERstring',
-    'EmpStatus', 'DateOfJoining', 'OfficeMobileNo', 'PersonalMobileNo',
+    'EmpStatus', 'DateOfJoining', 'DateOfBirth',
+    'OfficeMobileNo', 'PersonalMobileNo',
 ]
 
 # The one EmpStatus that means "works here today". Everything else - the
@@ -219,6 +220,24 @@ def _resolved(row, base, string_name=None):
     return _pick(row, string_name or f'{base}String')
 
 
+def _date(row, *names):
+    """A date out of the feed, or None.
+
+    Values arrive as "1994-03-22T00:00:00". Anything unparseable is dropped
+    rather than guessed at - a wrong birthday is worse than a missing one.
+    Pocket HRMS also uses 0001-01-01 as its empty date, which is not a real
+    date and must not become one.
+    """
+    raw = _pick(row, *names)
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace('Z', '+00:00')).date()
+    except ValueError:
+        return None
+    return parsed if parsed.year > 1900 else None
+
+
 def _name_of(row):
     """Whole name, however this tenant happens to have split it.
 
@@ -335,6 +354,8 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
             'location': _resolved(row, 'Location'),
             'reporting_manager_code': _resolved(row, 'PocketReportingManager',
                                                 'POCKETREPORTINGMANAGERstring'),
+            'date_of_birth': _date(row, 'DateOfBirth'),
+            'date_of_joining': _date(row, 'DateOfJoining'),
             'hrms_id': _pick(row, 'Id'),
             'is_active': active,
             'from_hrms': True,
