@@ -191,22 +191,22 @@ DEFAULT_FROM_EMAIL = os.getenv('EMAIL_HOST_USER', '')
 # The token is company-scoped and is a credential: keep it in .env, never in
 # the repo. Ask Pocket HRMS support for the company token.
 #
-# Their staging documentation originally pointed at
-# essapistaging.pockethrms.com:8343, which is firewalled from the office
-# network. Their support corrected this (2026-09-03): the current staging
-# host is https://pockethrmsnext.pockethrms.com. That is STAGING — nobody has
-# yet confirmed with a working token whether production uses the same host or
-# the default below, so don't assume one implies the other.
+# The default below is PRODUCTION, and it is confirmed working (09-09-2026):
+# 2,365 employees come back from it. Their staging documentation originally
+# pointed at essapistaging.pockethrms.com:8343, which is firewalled from the
+# office network; support corrected that to pockethrmsnext.pockethrms.com,
+# which still only answers with a redirect loop. Staging has never worked and
+# nothing depends on it.
 POCKET_HRMS_BASE_URL = os.getenv('POCKET_HRMS_BASE_URL', 'https://api.pockethrms.com')
 POCKET_HRMS_TOKEN = os.getenv('POCKET_HRMS_TOKEN', '')
 
 # The EmployeeFields header is not a shared vocabulary — it's whatever column
 # names APIS's own Pocket HRMS admin configured under Cloud Portal > Settings
-# > Configurations > Fields. accounts/services/hrms.py ships a guessed default
-# list; once accounts.services.hrms.discover_fields() has been run against a
-# real token and the actual names are known, set them here as a comma-
-# separated list rather than editing code:
-#   POCKET_HRMS_EMPLOYEE_FIELDS=Id,Code,Fname,Lname,OfficialEmail,...
+# > Configurations > Fields. The list in accounts/services/hrms.py is no longer
+# guesswork: it was confirmed against the live tenant on 09-09-2026 and works.
+# Only set this override if those field names ever change upstream — and read
+# the quirks in that module's docstring first, because the raw/String column
+# pairs are load-bearing and an "obvious" tidy-up silently blanks the data.
 POCKET_HRMS_EMPLOYEE_FIELDS = os.getenv('POCKET_HRMS_EMPLOYEE_FIELDS', '')
 
 # Local development sign-in. When on, the portal will register any company
