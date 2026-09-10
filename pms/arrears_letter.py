@@ -173,111 +173,164 @@ def generate_arrears_pdf(letter):
         title=f'Arrears Compensation Structure - {letter.employee_name}',
     )
     ss = getSampleStyleSheet()
-    label = ParagraphStyle('lbl', parent=ss['Normal'], fontSize=8.5, leading=11)
-    label_b = ParagraphStyle('lblb', parent=label, fontName='Helvetica-Bold')
-    band = ParagraphStyle('band', parent=ss['Normal'], fontSize=9.5, leading=12,
-                          fontName='Helvetica-Bold', alignment=TA_CENTER)
-    title = ParagraphStyle('t', parent=ss['Normal'], fontSize=14, leading=17,
-                           fontName='Helvetica-Bold', alignment=TA_CENTER)
-    sub = ParagraphStyle('s', parent=ss['Normal'], fontSize=10, leading=13,
-                         alignment=TA_CENTER)
-
     t = totals(letter.salary_breakup or {})
-    W = [3.9 * inch, 2.2 * inch]
-    rows, styles = [], []
-
-    def band_row(text, fill, fg=colors.white):
-        rows.append([Paragraph(f'<font color="{fg}">{text}</font>', band), ''])
-        i = len(rows) - 1
-        # .extend, not += : inside a closure "styles += ..." rebinds the name
-        # and Python treats it as local, so the whole build fails.
-        styles.extend([('SPAN', (0, i), (1, i)), ('BACKGROUND', (0, i), (1, i), fill)])
-
-    def money_row(text, amount, *, fill=None, bold=False, fg=None):
-        style = label_b if bold else label
-        txt = f'<font color="{fg}">{text}</font>' if fg else text
-        amt = f'<font color="{fg}">{_rs(amount)}</font>' if fg else _rs(amount)
-        rows.append([Paragraph(txt, style), Paragraph(amt, style)])
-        i = len(rows) - 1
-        styles.append(('ALIGN', (1, i), (1, i), 'RIGHT'))
-        if fill:
-            styles.append(('BACKGROUND', (0, i), (1, i), fill))
-        return i
-
-    def total_row(text, amount, fill=GREY):
-        """A subtotal: centred white label on a filled band, amount alongside."""
-        rows.append([Paragraph(f'<font color="#FFFFFF">{text}</font>', band),
-                     Paragraph(f'<font color="#FFFFFF">{_rs(amount)}</font>', band)])
-        i = len(rows) - 1
-        styles.append(('BACKGROUND', (0, i), (1, i), fill))
-
-    # ── masthead ────────────────────────────────────────────────────────────
-    rows.append([Paragraph('APIS INDIA LIMITED', title), ''])
-    styles += [('SPAN', (0, 0), (1, 0)), ('BACKGROUND', (0, 0), (1, 0), YELLOW)]
-    rows.append([Paragraph('<u>Arrears Compensation Structure</u>', sub), ''])
-    styles.append(('SPAN', (0, 1), (1, 1)))
-
-    # ── employee details ────────────────────────────────────────────────────
-    band_row('Employee Details', BLUE)
-    for attr, text in EMP_FIELDS:
-        value = getattr(letter, attr, '') or ''
-        rows.append([Paragraph(text, label_b), Paragraph(str(value), label)])
-
-    # ── the money ───────────────────────────────────────────────────────────
-    rows.append([Paragraph('<font color="#FFFFFF">Salary Component #</font>', band),
-                 Paragraph('<font color="#FFFFFF">Total Arrears Amount</font>', band)])
-    i = len(rows) - 1
-    styles.append(('BACKGROUND', (0, i), (1, i), BLUE))
-
     breakup = letter.salary_breakup or {}
-    for key, section, text in ARREARS_COMPONENTS:
-        if section == 'earn':
-            money_row(text, _f(breakup.get(key)))
-    total_row('GROSS EARNINGS (A)', t['gross_earnings'])
 
-    for key, section, text in ARREARS_COMPONENTS:
-        if section == 'reimb':
-            # Every reimbursement row shares one fill, car lease included -
-            # a single unshaded row in the middle of a block reads as an
-            # error rather than a distinction.
-            money_row(text, _f(breakup.get(key)), fill=PEACH)
-    total_row('Reimbursement Salary (B)', t['reimbursement'])
-    total_row('Gross Salary( A+B)', t['gross'])
+    def build(s):
+        """The whole letter at shrink factor `s` (1.0 = full size).
 
-    band_row('Employee Deductions', BLUE)
-    for key, section, text in ARREARS_COMPONENTS:
-        if section == 'ded':
-            money_row(text, _f(breakup.get(key)))
-    total_row('Total Employee Deductions', t['deductions'])
-    total_row('Total In Hand Salary', t['in_hand'], fill=GREEN)
+        Type sizes and cell padding both scale, because a table row's height
+        is leading plus padding - shrinking only the type leaves the padding
+        holding the page open and buys almost nothing.
+        """
+        label = ParagraphStyle('lbl', parent=ss['Normal'], fontSize=8.5 * s, leading=11 * s)
+        label_b = ParagraphStyle('lblb', parent=label, fontName='Helvetica-Bold')
+        band = ParagraphStyle('band', parent=ss['Normal'], fontSize=9.5 * s, leading=12 * s,
+                              fontName='Helvetica-Bold', alignment=TA_CENTER)
+        title = ParagraphStyle('t', parent=ss['Normal'], fontSize=14 * s, leading=17 * s,
+                               fontName='Helvetica-Bold', alignment=TA_CENTER)
+        sub = ParagraphStyle('s', parent=ss['Normal'], fontSize=10 * s, leading=13 * s,
+                             alignment=TA_CENTER)
 
-    band_row('Other Payments (Payout on Quarterly Basis)', BLUE)
-    for key, section, text in ARREARS_COMPONENTS:
-        if section == 'other':
-            money_row(text, _f(breakup.get(key)))
-    total_row('TOTAL  In Hand with Other Payments CTC ( Monthly)',
-              t['total_with_other'], fill=GREEN)
+        # Column widths stay put: it is the height that overflows, and
+        # narrowing the label column would only wrap long component names
+        # onto a second line and make the table taller again.
+        W = [3.9 * inch, 2.2 * inch]
+        rows, styles = [], []
 
-    styles += [
-        ('GRID', (0, 0), (-1, -1), 0.75, LINE),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-    ]
-    table = Table(rows, colWidths=W, repeatRows=0)
-    table.setStyle(TableStyle(styles))
+        def band_row(text, fill, fg=colors.white):
+            rows.append([Paragraph(f'<font color="{fg}">{text}</font>', band), ''])
+            i = len(rows) - 1
+            # .extend, not += : inside a closure "styles += ..." rebinds the name
+            # and Python treats it as local, so the whole build fails.
+            styles.extend([('SPAN', (0, i), (1, i)), ('BACKGROUND', (0, i), (1, i), fill)])
 
-    note = Paragraph(
-        'Note: This is a computer generated Compensation Component Break-up Structure. '
-        'In case of any discrepancy, please contact P &amp; C Dept.',
-        ParagraphStyle('n', parent=ss['Normal'], fontSize=7.5, leading=10))
-    sign = Paragraph('APIS - Approved_P &amp; C',
-                     ParagraphStyle('sg', parent=ss['Normal'], fontSize=7.5,
-                                    leading=10, alignment=2))
+        def money_row(text, amount, *, fill=None, bold=False, fg=None):
+            style = label_b if bold else label
+            txt = f'<font color="{fg}">{text}</font>' if fg else text
+            amt = f'<font color="{fg}">{_rs(amount)}</font>' if fg else _rs(amount)
+            rows.append([Paragraph(txt, style), Paragraph(amt, style)])
+            i = len(rows) - 1
+            styles.append(('ALIGN', (1, i), (1, i), 'RIGHT'))
+            if fill:
+                styles.append(('BACKGROUND', (0, i), (1, i), fill))
+            return i
 
-    doc.build([table, Spacer(1, 10), KeepTogether([note, Spacer(1, 6), sign])])
+        def total_row(text, amount, fill=GREY):
+            """A subtotal: centred white label on a filled band, amount alongside."""
+            rows.append([Paragraph(f'<font color="#FFFFFF">{text}</font>', band),
+                         Paragraph(f'<font color="#FFFFFF">{_rs(amount)}</font>', band)])
+            i = len(rows) - 1
+            styles.append(('BACKGROUND', (0, i), (1, i), fill))
+
+        # ── masthead ────────────────────────────────────────────────────────
+        rows.append([Paragraph('APIS INDIA LIMITED', title), ''])
+        styles += [('SPAN', (0, 0), (1, 0)), ('BACKGROUND', (0, 0), (1, 0), YELLOW)]
+        rows.append([Paragraph('<u>Arrears Compensation Structure</u>', sub), ''])
+        styles.append(('SPAN', (0, 1), (1, 1)))
+
+        # ── employee details ────────────────────────────────────────────────
+        band_row('Employee Details', BLUE)
+        for attr, text in EMP_FIELDS:
+            value = getattr(letter, attr, '') or ''
+            rows.append([Paragraph(text, label_b), Paragraph(str(value), label)])
+
+        # ── the money ───────────────────────────────────────────────────────
+        rows.append([Paragraph('<font color="#FFFFFF">Salary Component #</font>', band),
+                     Paragraph('<font color="#FFFFFF">Total Arrears Amount</font>', band)])
+        i = len(rows) - 1
+        styles.append(('BACKGROUND', (0, i), (1, i), BLUE))
+
+        for key, section, text in ARREARS_COMPONENTS:
+            if section == 'earn':
+                money_row(text, _f(breakup.get(key)))
+        total_row('GROSS EARNINGS (A)', t['gross_earnings'])
+
+        for key, section, text in ARREARS_COMPONENTS:
+            if section == 'reimb':
+                # Every reimbursement row shares one fill, car lease included -
+                # a single unshaded row in the middle of a block reads as an
+                # error rather than a distinction.
+                money_row(text, _f(breakup.get(key)), fill=PEACH)
+        total_row('Reimbursement Salary (B)', t['reimbursement'])
+        total_row('Gross Salary( A+B)', t['gross'])
+
+        band_row('Employee Deductions', BLUE)
+        for key, section, text in ARREARS_COMPONENTS:
+            if section == 'ded':
+                money_row(text, _f(breakup.get(key)))
+        total_row('Total Employee Deductions', t['deductions'])
+        total_row('Total In Hand Salary', t['in_hand'], fill=GREEN)
+
+        band_row('Other Payments (Payout on Quarterly Basis)', BLUE)
+        for key, section, text in ARREARS_COMPONENTS:
+            if section == 'other':
+                money_row(text, _f(breakup.get(key)))
+        total_row('TOTAL  In Hand with Other Payments CTC ( Monthly)',
+                  t['total_with_other'], fill=GREEN)
+
+        styles += [
+            ('GRID', (0, 0), (-1, -1), 0.75, LINE),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6 * s),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6 * s),
+            ('TOPPADDING', (0, 0), (-1, -1), 4 * s),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4 * s),
+        ]
+        table = Table(rows, colWidths=W, repeatRows=0)
+        table.setStyle(TableStyle(styles))
+
+        note = Paragraph(
+            'Note: This is a computer generated Compensation Component Break-up Structure. '
+            'In case of any discrepancy, please contact P &amp; C Dept.',
+            ParagraphStyle('n', parent=ss['Normal'], fontSize=7.5 * s, leading=10 * s))
+        sign = Paragraph('APIS - Approved_P &amp; C',
+                         ParagraphStyle('sg', parent=ss['Normal'], fontSize=7.5 * s,
+                                        leading=10 * s, alignment=2))
+
+        return [table, Spacer(1, 10 * s), KeepTogether([note, Spacer(1, 6 * s), sign])]
+
+    # ── Auto-fit to a single page ───────────────────────────────────────────
+    # Same approach as the appraisal letter (offer_letter.py): build the story
+    # at progressively smaller scales and keep the first one that measures
+    # inside the printable height. A salary structure split across two pages
+    # is not just untidy - the totals land on their own page, away from the
+    # rows they total, which is how a reader loses the thread of the figures.
+    #
+    # The list of components is fixed, so a letter overflows because of long
+    # employee detail values, not an unbounded number of rows; the scales
+    # below cover that with room to spare and stay legible in print.
+    avail_w, avail_h = doc.width, doc.height
+
+    def _measure(flows):
+        total = 0.0
+        for fl in flows:
+            # KeepTogether reports 0 when wrapped on its own, so measure what
+            # it holds instead of trusting its own answer.
+            content = getattr(fl, '_content', None)
+            if content:
+                total += _measure(content)
+                continue
+            try:
+                _, h = fl.wrap(avail_w, avail_h)
+            except Exception:
+                h = 0
+            total += h
+        return total
+
+    scales = (1.0, 0.96, 0.92, 0.88, 0.84, 0.80, 0.76, 0.72, 0.68, 0.64)
+    story = build(scales[0])
+    for sc in scales:
+        candidate = build(sc)
+        # 0.97 rather than a flush 1.0: wrap() measures a table accurately but
+        # the frame still needs a hair of clearance, and a letter that spills
+        # by two points is exactly as broken as one that spills by an inch.
+        if _measure(candidate) <= avail_h * 0.97:
+            story = candidate
+            break
+        story = candidate
+
+    doc.build(story)
     buf.seek(0)
     return buf
 

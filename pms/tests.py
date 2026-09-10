@@ -67,6 +67,28 @@ class ArrearsStructure(TestCase):
         self.assertGreater(len(data), 2000)
         self.assertTrue(data.startswith(b'%PDF'))
 
+    def test_the_letter_always_fits_one_page(self):
+        """The salary structure ran onto a second page, which left the totals
+        stranded away from the rows they total. It auto-fits now - and this
+        has to keep holding as components or detail fields are added, since
+        each new row is what pushes it over."""
+        from pypdf import PdfReader
+        from pms.arrears_letter import (generate_arrears_pdf, ARREARS_COMPONENTS,
+                                        EMP_FIELDS)
+
+        class Worst:
+            """Every component filled with a wide figure and every detail
+            field carrying a long value - the tallest the letter can get."""
+            employee_name = 'Ramachandran Venkataraman Subramanian'
+            salary_breakup = {k: 9876543 for k, _s, _l in ARREARS_COMPONENTS}
+        for attr, _label in EMP_FIELDS:
+            setattr(Worst, attr, 'A Deliberately Long Sample Value 1234567')
+
+        for case in (Worst, type('Empty', (Worst,), {'salary_breakup': {}})):
+            with self.subTest(case=case.__name__):
+                pages = len(PdfReader(generate_arrears_pdf(case())).pages)
+                self.assertEqual(pages, 1, f'{case.__name__} spilled onto {pages} pages')
+
     def test_the_template_lists_every_component(self):
         """A component that prints on the PDF but has no column to fill it in
         would always be zero, silently."""
