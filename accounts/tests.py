@@ -689,6 +689,101 @@ class Celebrations(TestCase):
         self.assertTrue(self.get()['has_data'])
 
 
+class ShareTicker(TestCase):
+    """The BSE price on the dashboard banner.
+
+    Every test here mocks the network. The point is the caching and the
+    failure behaviour, not Yahoo.
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+        from accounts.services import stock
+        self.stock = stock
+        cache.clear()
+
+    def reply(self, price, prev):
+        r = mock.Mock(status_code=200)
+        r.json.return_value = {'chart': {'result': [
+            {'meta': {'regularMarketPrice': price, 'chartPreviousClose': prev}}]}}
+        return r
+
+    def test_a_rise_and_a_fall_both_read_as_movement(self):
+        with mock.patch('accounts.services.stock.requests.get',
+                        return_value=self.reply(52.24, 51.72)):
+            up = self.stock.ticker()
+        self.assertEqual(up['change_pct'], '+1.01%')
+        self.assertTrue(up['trend_up'])
+
+        from django.core.cache import cache
+        cache.clear()
+        with mock.patch('accounts.services.stock.requests.get',
+                        return_value=self.reply(52.24, 52.72)):
+            down = self.stock.ticker()
+        # Signed both ways - a bare "0.91%" reads as a fact about the price
+        # rather than a movement, and the banner colours off this.
+        self.assertEqual(down['change_pct'], '-0.91%')
+        self.assertFalse(down['trend_up'])
+
+    def test_the_price_is_fetched_once_not_once_per_visitor(self):
+        """~660 people load this dashboard. One upstream call per view would
+        be rude to Yahoo and slow for everyone."""
+        with mock.patch('accounts.services.stock.requests.get',
+                        return_value=self.reply(52.24, 52.0)) as get:
+            for _ in range(20):
+                self.stock.ticker()
+        self.assertEqual(get.call_count, 1)
+
+    def test_upstream_failure_serves_the_last_price_and_admits_it(self):
+        """A stale price beats a blank banner - but it must not be passed off
+        as today's."""
+        with mock.patch('accounts.services.stock.requests.get',
+                        return_value=self.reply(52.24, 52.0)):
+            self.stock.ticker()
+
+        from django.core.cache import cache
+        cache.delete(self.stock.FRESH_KEY)          # fresh window expires
+        with mock.patch('accounts.services.stock.requests.get',
+                        side_effect=Exception('yahoo down')):
+            out = self.stock.ticker()
+        self.assertIn('52.24', out['quote'])
+        self.assertTrue(out['stale'])
+
+    def test_a_stale_reading_is_not_cached_as_fresh(self):
+        """Otherwise one outage pins an old number up for the next 15 minutes
+        even after upstream recovers."""
+        with mock.patch('accounts.services.stock.requests.get',
+                        return_value=self.reply(52.24, 52.0)):
+            self.stock.ticker()
+        from django.core.cache import cache
+        cache.delete(self.stock.FRESH_KEY)
+        with mock.patch('accounts.services.stock.requests.get',
+                        side_effect=Exception('down')):
+            self.stock.ticker()
+        self.assertIsNone(cache.get(self.stock.FRESH_KEY))
+
+    def test_no_price_at_all_shows_no_price_rather_than_a_made_up_one(self):
+        with mock.patch('accounts.services.stock.requests.get',
+                        side_effect=Exception('down')):
+            out = self.stock.ticker()
+        self.assertTrue(out['unavailable'])
+        self.assertEqual(out['quote'], '')
+        self.assertTrue(out['tagline'])      # the banner still says something
+
+    def test_a_bad_response_never_takes_the_dashboard_down(self):
+        """This feeds a decorative banner. Nothing it does is worth a 500 on
+        the page everyone lands on."""
+        for bad in (mock.Mock(status_code=503),
+                    mock.Mock(status_code=200, **{'json.return_value': {'nope': 1}})):
+            from django.core.cache import cache
+            cache.clear()
+            with mock.patch('accounts.services.stock.requests.get', return_value=bad):
+                self.assertTrue(self.stock.ticker()['unavailable'])
+
+    def test_the_endpoint_needs_a_session(self):
+        self.assertEqual(self.client.get('/api/accounts/portal/ticker/').status_code, 401)
+
+
 class SyncHrmsCommand(TestCase):
     """The management command a cron job runs. No token exists to test the
     real Pocket HRMS call, so sync_employees itself is mocked here - what

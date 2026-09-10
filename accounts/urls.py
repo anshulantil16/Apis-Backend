@@ -1,7 +1,7 @@
 from django.urls import path
 
 from .views import (AdminBulkAccessView, AdminHrmsPreviewView, AdminSessionsView, AdminSyncView,
-                    CelebrationsView,
+                    CelebrationsView, TickerView,
                     AdminUserDetailView, AdminUsersView,
                     LogoutView, MeView, RequestOTPView, VerifyOTPView)
 
@@ -13,6 +13,9 @@ urlpatterns = [
 
     # Birthdays, anniversaries and new joiners - any signed-in employee.
     path('portal/celebrations/', CelebrationsView.as_view()),
+
+    # Live BSE share price for the dashboard banner.
+    path('portal/ticker/',       TickerView.as_view()),
     path('portal/logout/',      LogoutView.as_view()),
 
     # Console (superadmin only)

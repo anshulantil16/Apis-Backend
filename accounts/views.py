@@ -19,7 +19,7 @@ from rest_framework.views import APIView
 from config.tz import IST, local_str
 from .models import (AppKey, DEFAULT_APPS, SUPERADMIN_BOOTSTRAP_EMAIL,
                      HrmsSyncLog, PortalOTP, PortalSession, PortalUser)
-from .services import hrms
+from .services import hrms, stock
 
 
 # How many directory rows one admin request will return. High enough to hold
@@ -745,6 +745,19 @@ class CelebrationsView(PortalAPIView):
             'has_data': people.exclude(date_of_birth=None).exists()
                         or people.exclude(date_of_joining=None).exists(),
         })
+
+
+class TickerView(PortalAPIView):
+    """The APIS share price for the dashboard banner.
+
+    Cached upstream of here, so ~660 people loading the dashboard is still one
+    call to Yahoo every quarter hour rather than one per visitor.
+    """
+
+    def get(self, request):
+        if not current_session(request):
+            return Response({'error': 'Sign in to see this.'}, status=401)
+        return Response(stock.ticker())
 
 
 class AdminSessionsView(_AdminView):
