@@ -605,14 +605,14 @@ class Celebrations(TestCase):
         self.assertNotIn('Long Gone', names)
 
     def test_a_birthday_next_month_wraps_the_year(self):
-        """On 20 December a 5 January birthday is 16 days away, not 349 - so
+        """On 29 December a 3 January birthday is 5 days away, not 360 - so
         comparing whole dates rather than month-and-day empties the widget
-        every December."""
-        ahead = self.today + timedelta(days=20)
+        every year end."""
+        ahead = self.today + timedelta(days=5)
         self.person('Wraps Around', born=date(1985, ahead.month, ahead.day))
         rows = self.get()['birthdays']
         self.assertEqual([r['name'] for r in rows], ['Wraps Around'])
-        self.assertEqual(rows[0]['days_away'], 20)
+        self.assertEqual(rows[0]['days_away'], 5)
 
     def test_a_birthday_that_has_passed_is_not_shown(self):
         gone_by = self.today - timedelta(days=5)
@@ -642,7 +642,7 @@ class Celebrations(TestCase):
         self.assertEqual(self.get()['anniversaries'], [])
 
     def test_new_joiners_look_backwards_not_forwards(self):
-        self.person('Joined Recently', joined=self.today - timedelta(days=10))
+        self.person('Joined Recently', joined=self.today - timedelta(days=3))
         self.person('Joined Ages Ago', joined=self.today - timedelta(days=200))
         names = [j['name'] for j in self.get()['new_joiners']]
         self.assertEqual(names, ['Joined Recently'])
@@ -651,27 +651,24 @@ class Celebrations(TestCase):
         return self.client.get('/api/accounts/portal/celebrations/?scope=all',
                                **self.auth).data
 
-    def test_view_all_reaches_the_end_of_the_year(self):
-        """The cards stop at 30 days; "View all" runs to 31 December."""
-        self.person('New Year Eve', born=date(1990, 12, 31))
-        names = [b['name'] for b in self.every()['birthdays']]
-        self.assertIn('New Year Eve', names)
-
-    def test_view_all_stops_at_the_year_end(self):
-        """Not a rolling year - "who else has a birthday this year" is the
-        question, so January belongs to the next list, not this one."""
-        year_end = date(self.today.year, 12, 31)
+    def test_view_all_stops_at_the_month_end(self):
+        """Not a rolling window - "who else this month" is the question, so
+        next month belongs to the next list, not this one."""
+        import calendar
+        last = calendar.monthrange(self.today.year, self.today.month)[1]
+        month_end = date(self.today.year, self.today.month, last)
         for b in self.every()['birthdays']:
-            self.assertLessEqual(b['days_away'], (year_end - self.today).days)
+            self.assertLessEqual(b['days_away'], (month_end - self.today).days)
 
-    def test_new_joiners_are_this_year_only(self):
+    def test_new_joiners_are_this_month_only(self):
         """Everyone who ever joined is not a list of new joiners - it is the
         staff list in date order, which is not what the heading promises."""
-        self.person('Joined In January', joined=date(self.today.year, 1, 1))
-        self.person('Joined Last Year', joined=date(self.today.year - 1, 12, 31))
+        self.person('Joined This Month', joined=date(self.today.year, self.today.month, 1))
+        self.person('Joined Last Month', joined=date(self.today.year, self.today.month, 1)
+                    - timedelta(days=1))
         names = [j['name'] for j in self.every()['new_joiners']]
-        self.assertIn('Joined In January', names)
-        self.assertNotIn('Joined Last Year', names)
+        self.assertIn('Joined This Month', names)
+        self.assertNotIn('Joined Last Month', names)
 
     def test_view_all_still_hides_leavers(self):
         """Widening the window must not widen who is in it."""

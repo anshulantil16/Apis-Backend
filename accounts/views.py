@@ -8,6 +8,7 @@ Everything below is deliberately explicit about failure. A door that says
 "something went wrong" teaches people to file a ticket; a door that says
 "that code has expired, ask for a new one" teaches them to press the button.
 """
+import calendar
 from datetime import date, timedelta
 
 from django.conf import settings
@@ -644,16 +645,17 @@ class CelebrationsView(PortalAPIView):
     every employee is meant to see about their colleagues.
     """
 
-    # What the small dashboard cards show: the next few weeks, a handful of rows.
-    WINDOW_DAYS = 30          # how far ahead birthdays and anniversaries look
-    JOINED_DAYS = 45          # how far back "new joiner" reaches
+    # The small cards show the week ahead - "whose birthday do I need to know
+    # about", which is a this-week question. At ~660 employees a month's worth
+    # is fifty-odd names, which is a list nobody reads, not a card.
+    WINDOW_DAYS = 7           # how far ahead birthdays and anniversaries look
+    JOINED_DAYS = 7           # how far back "new joiner" reaches
     LIMIT = 12
 
-    # ?scope=all, behind "View all", is the REST OF THIS CALENDAR YEAR - not a
-    # rolling year and not all of history. "Who else has a birthday this year"
-    # and "who joined this year" are the questions people actually ask; a
-    # rolling window answers neither, and dragging joiners back to 2002 under a
-    # heading that says "New Joiners" answers something nobody asked.
+    # ?scope=all, behind "View all", is THIS CALENDAR MONTH: today to the end
+    # of the month for what is coming, the 1st to today for who has arrived.
+    # Not a rolling window and not the whole year - "who else this month" is
+    # the question the button is actually asking.
     ALL_LIMIT = 2000
 
     def get(self, request):
@@ -667,12 +669,13 @@ class CelebrationsView(PortalAPIView):
         today = timezone.localtime(timezone.now(), IST).date()
         people = PortalUser.objects.filter(is_active=True)
 
-        # "View all" runs to 31 December; the cards run a few weeks out. The
-        # card window still wraps into January, because in mid-December "the
-        # next 30 days" genuinely includes New Year - it is only the full list
-        # that is deliberately cut at the year end.
-        year_end = date(today.year, 12, 31)
-        window = (year_end - today).days if everyone else self.WINDOW_DAYS
+        # "View all" runs to the end of this month; the cards run a week out.
+        # The card window still crosses the month boundary, because on the 29th
+        # "the next 7 days" genuinely includes the 3rd - it is only the full
+        # list that is deliberately cut at the month end.
+        month_end = date(today.year, today.month,
+                         calendar.monthrange(today.year, today.month)[1])
+        window = (month_end - today).days if everyone else self.WINDOW_DAYS
 
         def upcoming(rows, field):
             """Sorted by how many days until the next occurrence.
@@ -723,10 +726,10 @@ class CelebrationsView(PortalAPIView):
             people.exclude(date_of_joining=None), 'date_of_joining')
             if nxt.year - orig.year >= 1]
 
-        # This year's arrivals, newest first. Everyone who ever joined is not a
+        # This month's arrivals, newest first. Everyone who ever joined is not a
         # list of new joiners - it is the staff list in date order, and under
         # that heading it reads as a bug.
-        since = (date(today.year, 1, 1) if everyone
+        since = (date(today.year, today.month, 1) if everyone
                  else today - timedelta(days=self.JOINED_DAYS))
         joiners = [{
             **shown(u),
