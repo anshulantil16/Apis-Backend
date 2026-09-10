@@ -7,6 +7,7 @@ Split out of a single 2,700-line module so it is obvious what controls what:
     simulator.py        employee master, scoring, increments, import/export
     offer_letters.py    appraisal / compensation-revision letters
     warning_letters.py  warning / disciplinary letters
+    arrears_letters.py  arrears compensation structures
 
 Everything is re-exported here, so `from .views import SomeView` and
 `from pms.views import helper` keep working exactly as before the split.
@@ -16,6 +17,7 @@ from .auth import *            # noqa: F401,F403
 from .simulator import *       # noqa: F401,F403
 from .offer_letters import *   # noqa: F401,F403
 from .warning_letters import * # noqa: F401,F403
+from .arrears_letters import * # noqa: F401,F403
 
 # `import *` skips underscore-prefixed names, but urls.py and the letter
 # modules rely on several of them — re-export explicitly.

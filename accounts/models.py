@@ -43,6 +43,7 @@ class AppKey(models.TextChoices):
     EOM            = 'eom',            'EOM Hub'
     PMS            = 'pms',            'PMS Simulator'
     OFFER_LETTERS  = 'offer-letters',  'Letters Generator'
+    ARREARS        = 'arrears',        'Arrears Structure'
     ROOMPULSE      = 'roompulse',      'AdminPulse'
     SALESIQ        = 'salesiq',        'SalesIQ'
     TADA           = 'tada',           'TA/DA Portal'

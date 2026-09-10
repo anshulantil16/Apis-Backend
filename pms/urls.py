@@ -7,6 +7,8 @@ from .views import (
     WarningLetterTemplateView, WarningLetterUploadView, WarningLetterCreateView,
     WarningLetterPDFView, WarningLetterBatchStatusView, WarningLetterHistoryView,
     WarningLetterDownloadAllView,
+    ArrearsTemplateView, ArrearsUploadView, ArrearsBatchStatusView,
+    ArrearsPDFView, ArrearsHistoryView, ArrearsDownloadAllView,
 )
 
 urlpatterns = [
@@ -23,6 +25,14 @@ urlpatterns = [
     path('offer-letter/<int:offer_letter_id>/pdf/', OfferLetterPDFView.as_view()),
     path('offer-letter/history/',   OfferLetterHistoryView.as_view()),
     path('offer-letter/download-all/', OfferLetterDownloadAllView.as_view()),
+
+    # Arrears Compensation Structure - same flow, its own document.
+    path('arrears/template/',                ArrearsTemplateView.as_view()),
+    path('arrears/upload/',                  ArrearsUploadView.as_view()),
+    path('arrears/batch/<str:batch_id>/',    ArrearsBatchStatusView.as_view()),
+    path('arrears/<int:letter_id>/pdf/',     ArrearsPDFView.as_view()),
+    path('arrears/history/',                 ArrearsHistoryView.as_view()),
+    path('arrears/download-all/',            ArrearsDownloadAllView.as_view()),
 
     # Warning / disciplinary letters (Letters Generator component #2)
     path('warning-letter/template/',  WarningLetterTemplateView.as_view()),

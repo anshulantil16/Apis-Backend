@@ -638,3 +638,77 @@ class OfferLetterBatch(models.Model):
 
     def __str__(self):
         return f"Batch {self.batch_id} — {self.processed}/{self.total} ({self.status})"
+
+
+class ArrearsLetter(models.Model):
+    """One person's Arrears Compensation Structure.
+
+    Sibling of OfferLetter and deliberately the same shape, because the flow
+    around it is the same one: upload a sheet, generate a PDF each, optionally
+    mail them, keep a record of what went where.
+
+    What it holds that OfferLetter does not is the arrears breakup itself -
+    stored as JSON keyed by the component keys in arrears_letter.py rather
+    than as twenty columns, so adding a component is a change in one list and
+    not a migration.
+    """
+
+    employee       = models.ForeignKey(PMSEmployee, on_delete=models.SET_NULL,
+                                       related_name='arrears_letters', null=True, blank=True)
+    employee_code  = models.CharField(max_length=50, blank=True, db_index=True)
+    employee_name  = models.CharField(max_length=200, blank=True)
+    email_address  = models.EmailField(blank=True)
+
+    department     = models.CharField(max_length=200, blank=True, db_index=True)
+    designation    = models.CharField(max_length=200, blank=True)
+    cadre          = models.CharField(max_length=100, blank=True)
+    grade          = models.CharField(max_length=100, blank=True)
+    paid_days      = models.CharField(max_length=50, blank=True)
+
+    # What the arrears are for - "Apr 2026 to Aug 2026". Free text because
+    # arrears periods are irregular and a date range would imply otherwise.
+    period         = models.CharField(max_length=120, blank=True)
+
+    # {component_key: amount}, keyed to ARREARS_COMPONENTS.
+    salary_breakup = models.JSONField(default=dict, blank=True)
+
+    # Every subtotal, frozen at generation time. The PDF that was sent must
+    # keep saying what it said, even if the component list changes later.
+    totals         = models.JSONField(default=dict, blank=True)
+
+    pdf_file       = models.FileField(upload_to='arrears_letters/', null=True, blank=True)
+    email_sent     = models.BooleanField(default=False)
+    email_sent_at  = models.DateTimeField(null=True, blank=True)
+    status         = models.CharField(max_length=20, default='pending')  # pending/generated/sent/failed
+    error_message  = models.TextField(blank=True)
+
+    batch_id       = models.CharField(max_length=50, blank=True, db_index=True)
+    created_at     = models.DateTimeField(auto_now_add=True)
+    updated_at     = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Arrears — {self.employee_name} ({self.employee_code})'
+
+
+class ArrearsLetterBatch(models.Model):
+    """Progress of one bulk arrears run, polled by the UI while it works."""
+    batch_id    = models.CharField(max_length=50, unique=True, db_index=True)
+    total       = models.IntegerField(default=0)
+    processed   = models.IntegerField(default=0)
+    generated   = models.IntegerField(default=0)
+    emailed     = models.IntegerField(default=0)
+    failed      = models.IntegerField(default=0)
+    send_emails = models.BooleanField(default=False)
+    status      = models.CharField(max_length=20, default='running')
+    errors      = models.JSONField(default=list, blank=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Arrears batch {self.batch_id} — {self.processed}/{self.total} ({self.status})'
