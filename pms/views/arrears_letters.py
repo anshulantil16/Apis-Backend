@@ -240,8 +240,17 @@ class ArrearsUploadView(APIView):
             rows.append(rec)
 
         if not rows:
-            return Response({'error': 'Nothing to generate from that sheet.',
-                             'problems': problems[:50]}, status=400)
+            # "Nothing to generate" is true but useless. The overwhelmingly
+            # likely cause is the template uploaded as downloaded, with only
+            # the example row in it - so say that, and say what to do.
+            if skipped and not problems:
+                msg = ('That is the template with only the example row in it. '
+                       'Add your employees on the rows below it, then upload again.')
+            elif problems:
+                msg = ('No row in that sheet could be used - see below.')
+            else:
+                msg = ('That sheet has no employee rows in it.')
+            return Response({'error': msg, 'problems': problems[:50]}, status=400)
 
         batch_id = f'ARR-{datetime.now():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}'
         ArrearsLetterBatch.objects.create(batch_id=batch_id, total=len(rows),

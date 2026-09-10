@@ -88,4 +88,7 @@ class ArrearsStructure(TestCase):
         wb.save(buf); buf.seek(0); buf.name = 'x.xlsx'
         r = c.post('/api/pms/arrears/upload/', {'file': buf, 'send_emails': 'false'})
         self.assertEqual(r.status_code, 400)          # nothing real left to do
-        self.assertEqual(r.data.get('error'), 'Nothing to generate from that sheet.')
+        # And it says WHY, because "nothing to generate" sends someone hunting
+        # for a fault in a sheet that is simply still empty.
+        self.assertIn('example row', r.data.get('error', ''))
+        self.assertIn('upload again', r.data.get('error', ''))
