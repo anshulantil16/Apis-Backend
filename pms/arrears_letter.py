@@ -232,14 +232,15 @@ def generate_arrears_pdf(letter):
     breakup = letter.salary_breakup or {}
     for key, section, text in ARREARS_COMPONENTS:
         if section == 'earn':
-            money_row(text, _f(breakup.get(key)),
-                      fill=YELLOW if key == 'special' else None)
+            money_row(text, _f(breakup.get(key)))
     total_row('GROSS EARNINGS (A)', t['gross_earnings'])
 
     for key, section, text in ARREARS_COMPONENTS:
         if section == 'reimb':
-            money_row(text, _f(breakup.get(key)),
-                      fill=PEACH if key != 'car_lease' else None)
+            # Every reimbursement row shares one fill, car lease included -
+            # a single unshaded row in the middle of a block reads as an
+            # error rather than a distinction.
+            money_row(text, _f(breakup.get(key)), fill=PEACH)
     total_row('Reimbursement Salary (B)', t['reimbursement'])
     total_row('Gross Salary( A+B)', t['gross'])
 
