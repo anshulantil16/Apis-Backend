@@ -337,6 +337,13 @@ class ArrearsHistoryView(APIView):
         total = qs.count()
         return Response({
             'total': total,
+            # Shape the Letters Generator hub reads for its live card counts -
+            # same keys the offer and warning endpoints return, so the three
+            # cards report activity the same way.
+            'summary': {
+                'total': ArrearsLetter.objects.count(),
+                'sent': ArrearsLetter.objects.filter(email_sent=True).count(),
+            },
             'letters': [{
                 'id': l.id, 'employee_code': l.employee_code,
                 'employee_name': l.employee_name, 'email_address': l.email_address,
