@@ -653,8 +653,18 @@ class ArrearsLetter(models.Model):
     not a migration.
     """
 
-    employee       = models.ForeignKey(PMSEmployee, on_delete=models.SET_NULL,
-                                       related_name='arrears_letters', null=True, blank=True)
+    # Explicit AutoField, matching every other pms table. Left implicit it
+    # resolves to BigAutoField, and any future ForeignKey between these and
+    # the int-keyed pms tables would fail on MySQL with an incompatible
+    # constraint - which is precisely how this migration first broke.
+    id = models.AutoField(primary_key=True)
+
+    # No ForeignKey to PMSEmployee on purpose. It was never read - the code
+    # and name below are what the document carries - and on MySQL the FK
+    # column came out bigint against pms_pmsemployee.id's int, which is
+    # exactly the incompatible-constraint failure that killed the deploy.
+    # A statement is a snapshot anyway: it must keep saying what it said even
+    # if the employee row is later edited or removed.
     employee_code  = models.CharField(max_length=50, blank=True, db_index=True)
     employee_name  = models.CharField(max_length=200, blank=True)
     email_address  = models.EmailField(blank=True)
@@ -695,6 +705,12 @@ class ArrearsLetter(models.Model):
 
 class ArrearsLetterBatch(models.Model):
     """Progress of one bulk arrears run, polled by the UI while it works."""
+
+    # Explicit AutoField, matching every other pms table. Left implicit it
+    # resolves to BigAutoField, and any future ForeignKey between these and
+    # the int-keyed pms tables would fail on MySQL with an incompatible
+    # constraint - which is precisely how this migration first broke.
+    id = models.AutoField(primary_key=True)
     batch_id    = models.CharField(max_length=50, unique=True, db_index=True)
     total       = models.IntegerField(default=0)
     processed   = models.IntegerField(default=0)
