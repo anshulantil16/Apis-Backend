@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'tada',
     'sales',
     'roompulse',
+    'referrals',
 ]
 
 MIDDLEWARE = [

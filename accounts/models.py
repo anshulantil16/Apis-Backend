@@ -48,12 +48,13 @@ class AppKey(models.TextChoices):
     TADA           = 'tada',           'TA/DA Portal'
     APIS_TREE      = 'apis-tree',      'APIS Tree'
     POLICIES       = 'policies',       'Policies'
+    APIS_WALL      = 'apis-wall',      'APIS Wall'
 
 
 # What a brand-new employee can open before anyone grants them more. The
 # dashboard and the read-only reference pages only — never a tool that moves
 # money or writes records.
-DEFAULT_APPS = [AppKey.HOME, AppKey.APIS_TREE, AppKey.POLICIES]
+DEFAULT_APPS = [AppKey.HOME, AppKey.APIS_TREE, AppKey.POLICIES, AppKey.APIS_WALL]
 
 
 class PortalUser(models.Model):
