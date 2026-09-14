@@ -96,6 +96,18 @@ PEACH = HexColor('#FCE4D6')
 LINE = HexColor('#000000')
 
 
+# The shrink ladder, and the scale each page shape last settled on.
+#
+# Every letter in a run shares a component list and a month count, so they all
+# land on the same scale; remembering it turns a three- or four-build search
+# into one build for every letter after the first. Bounded by construction -
+# a handful of page shapes, one small tuple key each - and only ever a hint,
+# since the result is still measured before it is used.
+SCALES = (1.0, 0.96, 0.92, 0.88, 0.84, 0.80, 0.76, 0.72, 0.68, 0.64,
+          0.60, 0.56, 0.52)
+_SCALE_MEMO = {}
+
+
 def _f(v):
     """A component amount as a number. Blank, None and junk all mean zero."""
     try:
@@ -405,29 +417,53 @@ def generate_arrears_pdf(letter):
             total += h
         return total
 
-    def _fit(builder, height):
-        """First scale whose story measures inside `height`, else the last."""
-        scales = (1.0, 0.96, 0.92, 0.88, 0.84, 0.80, 0.76, 0.72, 0.68, 0.64,
-                  0.60, 0.56, 0.52)
-        out = builder(scales[0])
-        for sc in scales:
+    def _fit(builder, height, memo_key):
+        """First scale whose story measures inside `height`, else the last.
+
+        Building a story is most of the cost of making one of these, and the
+        search used to build three or four per page - on a run of a thousand
+        people that was minutes of pure rework, because every letter in a
+        batch has the same component list and the same number of months and
+        so lands on the same scale.
+
+        So the answer is remembered and tried first. It is still measured, and
+        the scan still walks down from there if this particular letter needs
+        more room, so the memo can only ever save work - it can never let an
+        oversized letter through.
+        """
+        start = _SCALE_MEMO.get(memo_key)
+        if start is not None:
+            out = builder(start)
+            if _measure(out) <= height * 0.97:
+                return out
+
+        for sc in SCALES:
             out = builder(sc)
             # 0.97 rather than a flush 1.0: wrap() measures a table accurately
             # but the frame still needs a hair of clearance, and a letter that
             # spills by two points is exactly as broken as one that spills by
             # an inch.
             if _measure(out) <= height * 0.97:
-                break
+                _SCALE_MEMO[memo_key] = sc
+                return out
         return out
 
-    story = _fit(build, avail_h)
+    # Keyed on what actually drives the height: the longest detail value, since
+    # the row count is fixed. Bucketed, so near-identical letters share an entry
+    # instead of each minting its own.
+    longest = max([len(str(getattr(letter, a, '') or '')) for a, _l in EMP_FIELDS] or [0])
+    story = _fit(build, avail_h, ('summary', longest // 8))
 
     # ── Page 2: the month-wise distribution, when there is one ──────────────
     if months:
         avail_w, avail_h = l_w, l_h          # _measure closes over these
         story += [NextPageTemplate('wide'), PageBreak()]
+        widest_digits = max(
+            [len(_indian(c[f])) for m in months for c in m['components'].values()
+             for f in ('old', 'new', 'diff')] or [1])
         story += _fit(lambda sc: _distribution(ss, letter, months, master,
-                                               breakup, l_w, sc), l_h)
+                                               breakup, l_w, sc), l_h,
+                      ('dist', len(months), widest_digits))
 
     doc.build(story)
     buf.seek(0)

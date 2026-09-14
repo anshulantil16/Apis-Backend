@@ -11,16 +11,19 @@ that inside the request would time out well before it finished.
 import io
 import re
 import threading
+import time
 import uuid
 import zipfile
 from datetime import datetime, timedelta
+from queue import Queue
+from tempfile import SpooledTemporaryFile
 
 import openpyxl
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.mail import get_connection
 from django.db import connections
-from django.http import HttpResponse
+from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
@@ -80,6 +83,22 @@ def _old_new_headers():
     return m
 
 
+def _sheet_rows(ws):
+    """(normalised headers, iterator over the data rows below them).
+
+    Everything reads a sheet through here so nothing indexes `ws[1]` or
+    touches `ws.max_column`. Both are cheap on a normal workbook and both
+    are traps on a read-only one, where the sheet is a forward-only stream
+    and random access silently re-reads it.
+    """
+    it = ws.iter_rows(values_only=True)
+    try:
+        header = next(it)
+    except StopIteration:
+        return [], iter(())
+    return [_norm(v) for v in header], it
+
+
 def _read_old_new(ws, extra_columns):
     """Rows of {employee_code, <extra>, components:{key:{old,new}}} from a sheet.
 
@@ -91,9 +110,9 @@ def _read_old_new(ws, extra_columns):
         return []
     pairs = _old_new_headers()
     extra = {_norm(h): f for h, f in extra_columns.items()}
-    headers = [_norm(c.value) for c in ws[1]]
+    headers, body = _sheet_rows(ws)
     out = []
-    for raw in ws.iter_rows(min_row=2, values_only=True):
+    for raw in body:
         if not any(v not in (None, '') for v in raw):
             continue
         rec, comps = {}, {}
@@ -224,25 +243,179 @@ class ArrearsTemplateView(APIView):
         return resp
 
 
-def _process_batch(rows, batch_id, send_emails):
+def _mail_connection():
+    """One SMTP connection, configured the way this product's mail is."""
+    return get_connection(
+        host=settings.EMAIL_HOST, port=settings.EMAIL_PORT,
+        username=settings.OFFER_LETTER_EMAIL_HOST_USER,
+        password=settings.OFFER_LETTER_EMAIL_HOST_PASSWORD,
+        use_tls=settings.EMAIL_USE_TLS, fail_silently=False)
+
+
+# How many statements to send at once. Sending used to sit strictly behind PDF
+# generation: a thousand people meant a thousand SMTP round trips one after
+# another, each waiting on a server across the internet, and the run cost
+# generation time PLUS sending time. They overlap now, so it costs roughly the
+# longer of the two.
+#
+# Six, not sixty. The ceiling here belongs to the mail provider, not to us -
+# Google caps simultaneous connections per account and answers a burst with a
+# temporary block, which would fail the very batch this is meant to speed up.
+MAIL_WORKERS = 6
+
+# Enough to keep every sender busy through a slow patch without holding the
+# whole run in memory. A statement is around 10 KB, so this is a couple of
+# hundred kilobytes rather than the ~11 MB a thousand of them would be.
+MAIL_QUEUE = 24
+
+
+def _read_pair_sheets(blob):
+    """(master_by_code, monthly_by_code, warnings) from the uploaded workbook.
+
+    Runs in the background thread, not the request - see the note in the
+    upload view. Returns empty maps for a workbook with neither sheet, which
+    is the file this feature shipped with and must keep working.
+    """
+    master_by_code, monthly_by_code, warnings = {}, {}, []
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(blob), data_only=True, read_only=True)
+    except Exception as e:
+        return {}, {}, [f'Could not re-read the workbook for the monthly detail: {e}']
+    try:
+        for rec in _read_old_new(
+                wb[MASTER_SHEET] if MASTER_SHEET in wb.sheetnames else None, {}):
+            master_by_code[rec['employee_code']] = rec['components']
+        for rec in _read_old_new(
+                wb[MONTHLY_SHEET] if MONTHLY_SHEET in wb.sheetnames else None,
+                {'Month *': 'month', 'Present Days': 'present_days'}):
+            monthly_by_code.setdefault(rec['employee_code'], []).append({
+                'month': rec.get('month', ''),
+                'present_days': rec.get('present_days', ''),
+                'components': rec['components'],
+            })
+    finally:
+        wb.close()
+    return master_by_code, monthly_by_code, warnings
+
+
+def _process_batch(rows, batch_id, send_emails, blob=b''):
     """Generate a PDF per row, optionally mail it, and keep the batch updated.
 
-    Its own thread, its own DB connection, one SMTP connection for the lot.
+    Generation runs here, on one thread, because it is CPU work and racing it
+    against itself buys nothing. Sending runs on a small pool of threads, each
+    holding its own SMTP connection, fed through a bounded queue - so the mail
+    for statement 1 is in flight while statement 2 is still being drawn.
+
     Every failure is recorded against the row that caused it and the run
-    continues - one bad email address must not cost the other 300 people
+    continues - one bad email address must not cost the other 999 people
     their statement.
     """
     batch = ArrearsLetterBatch.objects.get(batch_id=batch_id)
-    conn = None
+    lock = threading.Lock()
+    outbox = Queue(maxsize=MAIL_QUEUE)
+    # Counters live here and are published periodically. Saving the batch row
+    # after every one of a thousand statements is a thousand writes to say
+    # almost nothing, and the progress bar cannot show that much detail anyway.
+    tally = {'processed': 0, 'generated': 0, 'emailed': 0, 'failed': 0, 'errors': []}
+    last_flush = [0.0]
+
+    def note(**deltas):
+        with lock:
+            for k, v in deltas.items():
+                if k == 'error':
+                    tally['errors'].append(v)
+                else:
+                    tally[k] += v
+
+    def flush(force=False):
+        """Publish progress. Rate-limited, but never so slow that the stall
+        detector in the status view mistakes a healthy run for a dead one."""
+        now = time.monotonic()
+        with lock:
+            if not force and now - last_flush[0] < 1.5:
+                return
+            last_flush[0] = now
+            batch.processed = tally['processed']
+            batch.generated = tally['generated']
+            batch.emailed = tally['emailed']
+            batch.failed = tally['failed']
+            batch.errors = tally['errors'][:200]
+        batch.save()
+
+    def sender():
+        """One SMTP connection, draining the queue until told to stop."""
+        conn = None
+        try:
+            conn = _mail_connection()
+            while True:
+                item = outbox.get()
+                try:
+                    if item is None:
+                        return
+                    letter, pdf, name = item
+                    try:
+                        send_arrears_email(letter.email_address, letter.employee_name,
+                                           pdf, period=letter.period,
+                                           connection=conn, filename=name)
+                        letter.email_sent = True
+                        letter.email_sent_at = timezone.now()
+                        letter.status = 'sent'
+                        letter.save(update_fields=['email_sent', 'email_sent_at', 'status'])
+                        note(emailed=1)
+                    except Exception as e:
+                        # The statement itself was generated and is kept. Only
+                        # delivery failed, and it says so against that person.
+                        letter.status = 'failed'
+                        letter.error_message = f'Generated, but the email failed: {e}'[:500]
+                        letter.save(update_fields=['status', 'error_message'])
+                        note(failed=1, error=f'{letter.employee_name}: email failed - {e}')
+                finally:
+                    outbox.task_done()
+        except Exception as e:
+            note(error=f'A mail sender stopped: {e}')
+            # Drain rather than leave the generator blocked on a full queue for
+            # ever, waiting for a worker that is no longer there.
+            while True:
+                item = outbox.get()
+                outbox.task_done()
+                if item is None:
+                    return
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            # A thread gets its own DB connection and must hand it back, or the
+            # pool leaks one per worker per run.
+            connections.close_all()
+
+    # The heavy sheets, read here rather than in the request.
+    master_by_code, monthly_by_code, warnings = _read_pair_sheets(blob)
+    # Month or master rows for somebody who never appears on the employee sheet
+    # produce nothing at all. Silently dropping them is how a distribution page
+    # goes missing and nobody knows why.
+    known = {r.get('employee_code') for r in rows}
+    for sheet, seen in ((MONTHLY_SHEET, monthly_by_code), (MASTER_SHEET, master_by_code)):
+        for code in seen:
+            if code not in known:
+                warnings.append(f'{sheet} sheet: {code} has rows there but is not on '
+                                f'the Arrears sheet, so nothing was generated for them.')
+    for w in warnings:
+        note(error=w)
+    flush(force=True)
+
+    workers = []
     if send_emails:
-        conn = get_connection(
-            host=settings.EMAIL_HOST, port=settings.EMAIL_PORT,
-            username=settings.OFFER_LETTER_EMAIL_HOST_USER,
-            password=settings.OFFER_LETTER_EMAIL_HOST_PASSWORD,
-            use_tls=settings.EMAIL_USE_TLS, fail_silently=False)
+        workers = [threading.Thread(target=sender, daemon=True)
+                   for _ in range(MAIL_WORKERS)]
+        for w in workers:
+            w.start()
 
     try:
         for row in rows:
+            row['_master'] = master_by_code.get(row.get('employee_code'), {})
+            row['_monthly'] = monthly_by_code.get(row.get('employee_code'), [])
             letter = None
             try:
                 breakup = row.pop('_breakup')
@@ -263,40 +436,38 @@ def _process_batch(rows, batch_id, send_emails):
                 name = _filename(letter)
                 letter.pdf_file.save(name, ContentFile(pdf.getvalue()), save=False)
                 letter.status = 'generated'
-                batch.generated += 1
+                letter.save()
+                note(generated=1)
 
                 if send_emails and letter.email_address:
-                    send_arrears_email(letter.email_address, letter.employee_name, pdf,
-                                       period=letter.period, connection=conn, filename=name)
-                    letter.email_sent = True
-                    letter.email_sent_at = timezone.now()
-                    letter.status = 'sent'
-                    batch.emailed += 1
-                letter.save()
+                    # Blocks once the queue is full, which is what stops a fast
+                    # generator running a thousand PDFs ahead of a slow mail
+                    # server and holding every one of them in memory.
+                    outbox.put((letter, pdf, name))
             except Exception as e:
-                batch.failed += 1
                 who = row.get('employee_name') or row.get('employee_code') or 'a row'
-                batch.errors = (batch.errors or []) + [f'{who}: {e}']
+                note(failed=1, error=f'{who}: {e}')
                 if letter and letter.pk:
                     letter.status = 'failed'
                     letter.error_message = str(e)[:500]
                     letter.save(update_fields=['status', 'error_message'])
             finally:
-                batch.processed += 1
-                batch.save()
+                note(processed=1)
+                flush()
+
+        # Everything is drawn; wait for the mail still in flight.
+        for _ in workers:
+            outbox.put(None)
+        for w in workers:
+            w.join()
         batch.status = 'completed'
     except Exception as e:
+        with lock:
+            tally['errors'].append(f'Batch stopped: {e}')
         batch.status = 'error'
-        batch.errors = (batch.errors or []) + [f'Batch stopped: {e}']
     finally:
+        flush(force=True)
         batch.save()
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        # A thread gets its own connection and must hand it back, or the pool
-        # leaks one per run.
         connections.close_all()
 
 
@@ -309,93 +480,87 @@ class ArrearsUploadView(APIView):
         f = request.FILES.get('file')
         if not f:
             return Response({'error': 'Choose a file to upload.'}, status=400)
+        # The whole file, once. A few megabytes at any realistic headcount, and
+        # it has to outlive this request: only the Arrears sheet is read here.
+        blob = f.read()
+
+        # read_only, and only the first sheet. The Monthly sheet is one row per
+        # employee per month, so a thousand people over eight months is eight
+        # thousand rows of forty-odd columns - about 340,000 cells, which
+        # openpyxl needs roughly twelve seconds to walk however it is asked.
+        # Against gunicorn's default thirty-second timeout that is comfortable
+        # at a thousand people and fatal somewhere past two thousand, and a
+        # request killed mid-parse looks to the user like the upload failed.
+        #
+        # So the request reads the employee rows - what every per-row complaint
+        # below is about, and what makes immediate feedback worth having - and
+        # the Master and Monthly sheets are parsed in the background thread,
+        # where nothing is waiting on a socket.
         try:
-            wb = openpyxl.load_workbook(f, data_only=True)
-            ws = wb.active
+            wb = openpyxl.load_workbook(io.BytesIO(blob), data_only=True, read_only=True)
         except Exception as e:
             return Response({'error': f'Could not read that file: {e}'}, status=400)
 
-        # Optional. A sheet with neither is the sheet this feature shipped
-        # with, and it must keep working exactly as it did.
-        master_by_code, monthly_by_code = {}, {}
-        for rec in _read_old_new(wb[MASTER_SHEET] if MASTER_SHEET in wb.sheetnames else None,
-                                 {}):
-            master_by_code[rec['employee_code']] = rec['components']
-        for rec in _read_old_new(wb[MONTHLY_SHEET] if MONTHLY_SHEET in wb.sheetnames else None,
-                                 {'Month *': 'month', 'Present Days': 'present_days'}):
-            monthly_by_code.setdefault(rec['employee_code'], []).append({
-                'month': rec.get('month', ''),
-                'present_days': rec.get('present_days', ''),
-                'components': rec['components'],
-            })
+        try:
+            header_map = _header_map()
+            raw_header, body = _sheet_rows(wb[wb.sheetnames[0]])
+            unknown = [h for h in raw_header if h and h not in header_map]
+            headers = raw_header
+            if not any(h in header_map for h in headers):
+                return Response({'error': 'That sheet has none of the expected columns. '
+                                          'Download the template and fill that in.'}, status=400)
 
-        header_map = _header_map()
-        headers = [_norm(c.value) for c in ws[1]]
-        unknown = [str(c.value) for c, h in zip(ws[1], headers)
-                   if h and h not in header_map]
-        if not any(h in header_map for h in headers):
-            return Response({'error': 'That sheet has none of the expected columns. '
-                                      'Download the template and fill that in.'}, status=400)
-
-        rows, problems, skipped = [], [], 0
-        for n, raw in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            if not any(v not in (None, '') for v in raw):
-                continue
-            rec, breakup = {}, {}
-            for h, value in zip(headers, raw):
-                field = header_map.get(h)
-                if not field or field == 'sr_no':
+            rows, problems, skipped = [], [], 0
+            for n, raw in enumerate(body, start=2):
+                if not any(v not in (None, '') for v in raw):
                     continue
-                if field.startswith('component:'):
-                    breakup[field.split(':', 1)[1]] = value
+                rec, breakup = {}, {}
+                for h, value in zip(headers, raw):
+                    field = header_map.get(h)
+                    if not field or field == 'sr_no':
+                        continue
+                    if field.startswith('component:'):
+                        breakup[field.split(':', 1)[1]] = value
+                    else:
+                        rec[field] = str(value).strip() if value is not None else ''
+
+                code = rec.get('employee_code', '')
+                if code.upper().startswith('SAMPLE-'):
+                    skipped += 1
+                    continue
+                if not code or not rec.get('employee_name'):
+                    problems.append(f'Row {n}: needs an Employee ID and a name.')
+                    continue
+                if send_emails and not rec.get('email_address'):
+                    problems.append(f'Row {n}: {rec["employee_name"]} has no email address, '
+                                    f'so nothing can be sent to them.')
+                    continue
+                rec['_breakup'] = breakup
+                rows.append(rec)
+
+            if not rows:
+                # "Nothing to generate" is true but useless. The overwhelmingly
+                # likely cause is the template uploaded as downloaded, with only
+                # the example row in it - so say that, and say what to do.
+                if skipped and not problems:
+                    msg = ('That is the template with only the example row in it. '
+                           'Add your employees on the rows below it, then upload again.')
+                elif problems:
+                    msg = ('No row in that sheet could be used - see below.')
                 else:
-                    rec[field] = str(value).strip() if value is not None else ''
+                    msg = ('That sheet has no employee rows in it.')
+                return Response({'error': msg, 'problems': problems[:50]}, status=400)
 
-            code = rec.get('employee_code', '')
-            if code.upper().startswith('SAMPLE-'):
-                skipped += 1
-                continue
-            if not code or not rec.get('employee_name'):
-                problems.append(f'Row {n}: needs an Employee ID and a name.')
-                continue
-            if send_emails and not rec.get('email_address'):
-                problems.append(f'Row {n}: {rec["employee_name"]} has no email address, '
-                                f'so nothing can be sent to them.')
-                continue
-            rec['_breakup'] = breakup
-            rec['_master'] = master_by_code.get(code, {})
-            rec['_monthly'] = monthly_by_code.get(code, [])
-            # A month row whose employee is not on the main sheet would
-            # silently generate nothing. Say so rather than lose it.
-            rows.append(rec)
-
-        # Month or master rows for somebody who never appears on the main
-        # sheet produce nothing at all. Silently dropping them is how a
-        # distribution page goes missing and nobody knows why.
-        known = {r['employee_code'] for r in rows}
-        for sheet, seen in ((MONTHLY_SHEET, monthly_by_code), (MASTER_SHEET, master_by_code)):
-            for code in seen:
-                if code not in known:
-                    problems.append(f'{sheet} sheet: {code} has rows there but is not on '
-                                    f'the Arrears sheet, so nothing was generated for them.')
-
-        if not rows:
-            # "Nothing to generate" is true but useless. The overwhelmingly
-            # likely cause is the template uploaded as downloaded, with only
-            # the example row in it - so say that, and say what to do.
-            if skipped and not problems:
-                msg = ('That is the template with only the example row in it. '
-                       'Add your employees on the rows below it, then upload again.')
-            elif problems:
-                msg = ('No row in that sheet could be used - see below.')
-            else:
-                msg = ('That sheet has no employee rows in it.')
-            return Response({'error': msg, 'problems': problems[:50]}, status=400)
+        finally:
+            # A read-only workbook keeps the uploaded zip open until it is
+            # told otherwise, and nothing below needs the sheet again.
+            wb.close()
 
         batch_id = f'ARR-{datetime.now():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}'
         ArrearsLetterBatch.objects.create(batch_id=batch_id, total=len(rows),
                                           send_emails=send_emails)
-        threading.Thread(target=_process_batch, args=(rows, batch_id, send_emails),
+        threading.Thread(target=_process_batch,
+                         args=(rows, batch_id, send_emails, blob),
                          daemon=True).start()
 
         return Response({'batch_id': batch_id, 'total': len(rows),
@@ -464,29 +629,48 @@ class ArrearsDownloadAllView(APIView):
 
     def get(self, request):
         batch_id = request.query_params.get('batch_id')
-        letters = ArrearsLetter.objects.filter(batch_id=batch_id) if batch_id \
-            else ArrearsLetter.objects.all()[:500]
-        letters = [l for l in letters if l.status != 'failed']
-        if not letters:
-            return Response({'error': 'Nothing to download.'}, status=404)
+        qs = ArrearsLetter.objects.exclude(status='failed')
+        qs = qs.filter(batch_id=batch_id) if batch_id else qs[:500]
 
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
-            for l in letters:
+        # Only the columns the zip actually uses. The full row carries the
+        # month-wise breakup - hundreds of numbers of JSON each - and pulling a
+        # thousand of those into memory to read a filename and a file path off
+        # them was most of the cost of this endpoint. A row that has to be
+        # regenerated fetches its own deferred fields, which is one extra query
+        # on the rare row that needs it rather than a tax on every row.
+        qs = qs.only('id', 'pdf_file', 'employee_code', 'employee_name', 'status')
+
+        # Spooled: a small batch is assembled in memory, a big one rolls over
+        # to disk on its own. Buffering a thousand statements in a BytesIO and
+        # then copying the whole thing again into the response held two copies
+        # of the zip at once, for no benefit.
+        tmp = SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+        count = 0
+        with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
+            for l in qs.iterator(chunk_size=100):
                 try:
                     if l.pdf_file:
                         l.pdf_file.open('rb')
-                        data = l.pdf_file.read()
-                        l.pdf_file.close()
+                        try:
+                            data = l.pdf_file.read()
+                        finally:
+                            l.pdf_file.close()
                     else:
                         data = generate_arrears_pdf(l).read()
                     z.writestr(_filename(l), data)
+                    count += 1
                 except Exception:
                     # One unreadable file must not cost the whole download.
                     continue
-        buf.seek(0)
-        resp = HttpResponse(buf.read(), content_type='application/zip')
-        resp['Content-Disposition'] = f'attachment; filename="APIS_Arrears_{len(letters)}.zip"'
+
+        if not count:
+            return Response({'error': 'Nothing to download.'}, status=404)
+
+        tmp.seek(0)
+        # FileResponse streams in chunks and closes the handle when the
+        # response is finished, so the zip is never resident in full twice.
+        resp = FileResponse(tmp, content_type='application/zip')
+        resp['Content-Disposition'] = f'attachment; filename="APIS_Arrears_{count}.zip"'
         return resp
 
 
