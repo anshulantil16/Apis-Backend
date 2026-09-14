@@ -23,11 +23,13 @@ from django.core.mail import EmailMessage
 from reportlab.lib import colors
 from reportlab.lib.colors import HexColor
 from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import (KeepTogether, Paragraph, SimpleDocTemplate,
-                                Spacer, Table, TableStyle)
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.platypus import (BaseDocTemplate, Frame, KeepTogether,
+                                NextPageTemplate, PageBreak, PageTemplate,
+                                Paragraph, Spacer, Table, TableStyle)
 
 # Component key, section, and the label printed on the row. Section drives
 # which subtotal a row rolls into, so nothing is summed by position.
@@ -159,6 +161,71 @@ def totals(breakup):
     }
 
 
+def month_rows(monthly):
+    """The month-wise distribution, normalised and in the order given.
+
+    `monthly` is what the upload parser built: a list of
+    {'month': 'Apr 2026', 'present_days': '30',
+     'components': {key: {'old': x, 'new': y}}}.
+
+    Each month comes back with every component present (missing ones are
+    zero) and the difference computed rather than read - a difference that
+    could disagree with the two figures beside it is a difference nobody
+    can trust.
+    """
+    out = []
+    for m in (monthly or []):
+        comps = (m or {}).get('components') or {}
+        row = {'month': str((m or {}).get('month', '') or '').strip(),
+               'present_days': str((m or {}).get('present_days', '') or '').strip(),
+               'components': {}}
+        for key, _section, _label in ARREARS_COMPONENTS:
+            c = comps.get(key) or {}
+            old = _f(c.get('old'))
+            new = _f(c.get('new'))
+            row['components'][key] = {'old': old, 'new': new,
+                                      'diff': round(new - old, 2)}
+        row.update(month_totals(row))
+        out.append(row)
+    return out
+
+
+def month_totals(row):
+    """One month's net arrears: what the differences add up to.
+
+    Deductions are the employee's own, so a rise in them takes money off the
+    arrears rather than adding to it - the same sign convention `totals()`
+    uses on the summary page, so the two pages cannot tell different stories.
+    """
+    by_section = {'earn': 0.0, 'reimb': 0.0, 'ded': 0.0, 'other': 0.0}
+    for key, section, _label in ARREARS_COMPONENTS:
+        by_section[section] += row['components'][key]['diff']
+    gross = by_section['earn'] + by_section['reimb']
+    return {
+        'diff_gross': round(gross, 2),
+        'diff_deductions': round(by_section['ded'], 2),
+        'diff_other': round(by_section['other'], 2),
+        'net': round(gross - by_section['ded'] + by_section['other'], 2),
+    }
+
+
+def totals_from_months(monthly):
+    """Arrears owed per component: each month's difference, added up.
+
+    This is what the summary page's single column means once a month-wise
+    breakdown exists, so it is computed from the months rather than typed in
+    a second time - two independent inputs for one figure is two chances to
+    disagree, on a document about money somebody is owed.
+    """
+    rows = month_rows(monthly)
+    if not rows:
+        return {}
+    out = {}
+    for key, _section, _label in ARREARS_COMPONENTS:
+        out[key] = round(sum(r['components'][key]['diff'] for r in rows), 2)
+    return out
+
+
 def generate_arrears_pdf(letter):
     """The Arrears Compensation Structure for one person, as a PDF buffer.
 
@@ -166,15 +233,35 @@ def generate_arrears_pdf(letter):
     this can be previewed without a saved row.
     """
     buf = BytesIO()
-    doc = SimpleDocTemplate(
+
+    # Two page templates rather than one. The summary is a tall, narrow table
+    # and belongs on portrait; the month-wise distribution is the opposite
+    # shape - three columns per month - and squeezing it into portrait width
+    # either wraps every figure or shrinks it past reading. So that page, and
+    # only that page, turns sideways.
+    LAND = landscape(A4)
+    doc = BaseDocTemplate(
         buf, pagesize=A4,
-        leftMargin=0.9 * inch, rightMargin=0.9 * inch,
-        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
         title=f'Arrears Compensation Structure - {letter.employee_name}',
     )
+    p_w, p_h = A4[0] - 1.8 * inch, A4[1] - 1.2 * inch
+    l_w, l_h = LAND[0] - 1.2 * inch, LAND[1] - 1.0 * inch
+    doc.addPageTemplates([
+        PageTemplate(id='portrait', pagesize=A4, frames=[
+            Frame(0.9 * inch, 0.6 * inch, p_w, p_h, id='pf')]),
+        PageTemplate(id='wide', pagesize=LAND, frames=[
+            Frame(0.6 * inch, 0.5 * inch, l_w, l_h, id='lf')]),
+    ])
+
     ss = getSampleStyleSheet()
-    t = totals(letter.salary_breakup or {})
-    breakup = letter.salary_breakup or {}
+    months = month_rows(getattr(letter, 'monthly_breakup', None))
+    master = getattr(letter, 'master_breakup', None) or {}
+
+    # With a month-wise breakdown in hand the summary column is the sum of the
+    # monthly differences, not a separately typed figure - one number, one
+    # source. Without one, the uploaded totals stand as before.
+    breakup = totals_from_months(months) or (letter.salary_breakup or {})
+    t = totals(breakup)
 
     def build(s):
         """The whole letter at shrink factor `s` (1.0 = full size).
@@ -300,7 +387,7 @@ def generate_arrears_pdf(letter):
     # The list of components is fixed, so a letter overflows because of long
     # employee detail values, not an unbounded number of rows; the scales
     # below cover that with room to spare and stay legible in print.
-    avail_w, avail_h = doc.width, doc.height
+    avail_w, avail_h = p_w, p_h
 
     def _measure(flows):
         total = 0.0
@@ -318,21 +405,188 @@ def generate_arrears_pdf(letter):
             total += h
         return total
 
-    scales = (1.0, 0.96, 0.92, 0.88, 0.84, 0.80, 0.76, 0.72, 0.68, 0.64)
-    story = build(scales[0])
-    for sc in scales:
-        candidate = build(sc)
-        # 0.97 rather than a flush 1.0: wrap() measures a table accurately but
-        # the frame still needs a hair of clearance, and a letter that spills
-        # by two points is exactly as broken as one that spills by an inch.
-        if _measure(candidate) <= avail_h * 0.97:
-            story = candidate
-            break
-        story = candidate
+    def _fit(builder, height):
+        """First scale whose story measures inside `height`, else the last."""
+        scales = (1.0, 0.96, 0.92, 0.88, 0.84, 0.80, 0.76, 0.72, 0.68, 0.64,
+                  0.60, 0.56, 0.52)
+        out = builder(scales[0])
+        for sc in scales:
+            out = builder(sc)
+            # 0.97 rather than a flush 1.0: wrap() measures a table accurately
+            # but the frame still needs a hair of clearance, and a letter that
+            # spills by two points is exactly as broken as one that spills by
+            # an inch.
+            if _measure(out) <= height * 0.97:
+                break
+        return out
+
+    story = _fit(build, avail_h)
+
+    # ── Page 2: the month-wise distribution, when there is one ──────────────
+    if months:
+        avail_w, avail_h = l_w, l_h          # _measure closes over these
+        story += [NextPageTemplate('wide'), PageBreak()]
+        story += _fit(lambda sc: _distribution(ss, letter, months, master,
+                                               breakup, l_w, sc), l_h)
 
     doc.build(story)
     buf.seek(0)
     return buf
+
+
+def _distribution(ss, letter, months, master, breakup, width, s):
+    """The month-wise grid: what each component earned old vs new, per month.
+
+    One column group per month, so a reader can see where the arrears came
+    from rather than only what they add up to. The last column is that
+    component's total across every month, which is exactly the figure the
+    summary page prints for it - the two pages are the same arithmetic seen
+    from two directions, and printing both is what makes either checkable.
+    """
+    n_money = 2 + 3 * len(months) + 1           # master pair, months, total
+    # The label column gives up width as months are added, but never below a
+    # point where component names become unreadable stacks of single words.
+    label_w = max(1.5 * inch, min(2.4 * inch, width - n_money * 0.44 * inch))
+    money_w = (width - label_w) / n_money
+    W = [label_w] + [money_w] * n_money
+
+    # A money column has to hold two things that cannot wrap on a space: the
+    # word "Difference", and a figure like 1,23,456. Left at a nominal size
+    # they broke mid-word ("Differenc e") and mid-number, which on a document
+    # about somebody's pay reads as a fault rather than a tight fit. So both
+    # are sized to the column that actually exists.
+    #
+    # 0.95 because a word measured at exactly the available width still wraps:
+    # reportlab breaks on >=, not >.
+    cell_w = (money_w - 6 * s) * 0.95
+
+    def _size_to_fit(text, font, nominal):
+        return min(nominal, cell_w / stringWidth(text, font, 1))
+
+    # Shortened rather than shrunk past reading. Beside "Earned Old" and
+    # "Earned New" the abbreviation is unambiguous, and a 4pt full word helps
+    # nobody.
+    diff_label = 'Difference'
+    head_size = _size_to_fit(diff_label, 'Helvetica-Bold', 7.5 * s)
+    if head_size < 5.5:
+        diff_label = 'Diff.'
+        head_size = _size_to_fit(diff_label, 'Helvetica-Bold', 7.5 * s)
+
+    # Measured against the widest figure this employee actually has, not
+    # against the widest one imaginable - a letter with small numbers should
+    # not be set in small type because a bigger number could have existed.
+    widest = max([stringWidth(_indian(v), 'Helvetica-Bold', 1) for v in
+                  [_f((master.get(k) or {}).get(side))
+                   for k, _s2, _l in ARREARS_COMPONENTS for side in ('old', 'new')]
+                  + [c[f] for m in months for c in m['components'].values()
+                     for f in ('old', 'new', 'diff')]
+                  + [_f(breakup.get(k)) for k, _s2, _l in ARREARS_COMPONENTS]
+                  + [m['net'] for m in months]
+                  + [sum(m['net'] for m in months)]] or [1.0])
+    num_size = min(7 * s, cell_w / widest) if widest else 7 * s
+
+    head = ParagraphStyle('dh', parent=ss['Normal'], fontSize=head_size,
+                          leading=head_size * 1.2, fontName='Helvetica-Bold',
+                          alignment=TA_CENTER, textColor=colors.white)
+    lbl = ParagraphStyle('dl', parent=ss['Normal'], fontSize=7 * s, leading=8.5 * s)
+    lbl_b = ParagraphStyle('dlb', parent=lbl, fontName='Helvetica-Bold')
+    num = ParagraphStyle('dn', parent=ss['Normal'], fontSize=num_size,
+                         leading=num_size * 1.22, alignment=2)
+    num_b = ParagraphStyle('dnb', parent=num, fontName='Helvetica-Bold')
+    band = ParagraphStyle('db', parent=ss['Normal'], fontSize=7.5 * s,
+                          leading=9 * s, fontName='Helvetica-Bold',
+                          textColor=colors.white)
+    title = ParagraphStyle('dt', parent=ss['Normal'], fontSize=12 * s,
+                           leading=15 * s, fontName='Helvetica-Bold',
+                           alignment=TA_CENTER)
+    sub = ParagraphStyle('ds', parent=ss['Normal'], fontSize=8 * s,
+                         leading=11 * s, alignment=TA_CENTER)
+
+    def n(v):
+        """A plain figure. No "Rs." here - it would repeat on every one of a
+        few hundred cells and cost the width the figures themselves need; the
+        caption above the table says the unit once."""
+        return '-' if round(v or 0, 2) == 0 else _indian(v)
+
+    rows, styles = [], []
+
+    # ── two header rows ────────────────────────────────────────────────────
+    h0 = [Paragraph('Salary Component', head), Paragraph('Master', head), '']
+    h1 = ['', Paragraph('Old', head), Paragraph('New', head)]
+    for m in months:
+        days = f" (Present - {m['present_days']} days)" if m['present_days'] else ''
+        h0 += [Paragraph(f"Month - {m['month']}{days}", head), '', '']
+        h1 += [Paragraph('Earned Old', head), Paragraph('Earned New', head),
+               Paragraph(diff_label, head)]
+    h0.append(Paragraph('Total Arrears', head))
+    h1.append('')
+    rows += [h0, h1]
+    styles += [
+        ('BACKGROUND', (0, 0), (-1, 1), BLUE),
+        ('SPAN', (0, 0), (0, 1)),                       # Salary Component
+        ('SPAN', (1, 0), (2, 0)),                       # Master
+        ('SPAN', (n_money, 0), (n_money, 1)),           # Total Arrears
+        ('VALIGN', (0, 0), (-1, 1), 'MIDDLE'),
+    ]
+    for i in range(len(months)):
+        c = 3 + 3 * i
+        styles.append(('SPAN', (c, 0), (c + 2, 0)))
+
+    def band_row(text):
+        rows.append([Paragraph(text, band)] + [''] * n_money)
+        i = len(rows) - 1
+        styles.extend([('SPAN', (0, i), (-1, i)),
+                       ('BACKGROUND', (0, i), (-1, i), GREY)])
+
+    SECTIONS = [('earn', 'Gross Earnings'),
+                ('reimb', 'Reimbursements'),
+                ('ded', 'Employee Deductions'),
+                ('other', 'Other Payments (Quarterly)')]
+    for section, heading in SECTIONS:
+        band_row(heading)
+        for key, sec, text in ARREARS_COMPONENTS:
+            if sec != section:
+                continue
+            m_old = _f((master.get(key) or {}).get('old'))
+            m_new = _f((master.get(key) or {}).get('new'))
+            line = [Paragraph(text, lbl), Paragraph(n(m_old), num),
+                    Paragraph(n(m_new), num)]
+            for m in months:
+                c = m['components'][key]
+                line += [Paragraph(n(c['old']), num), Paragraph(n(c['new']), num),
+                         Paragraph(n(c['diff']), num_b)]
+            line.append(Paragraph(n(_f(breakup.get(key))), num_b))
+            rows.append(line)
+            if section == 'reimb':
+                i = len(rows) - 1
+                styles.append(('BACKGROUND', (0, i), (-1, i), PEACH))
+
+    # ── the bottom line, per month and overall ─────────────────────────────
+    net = [Paragraph('NET ARREARS', lbl_b), '', '']
+    for m in months:
+        net += ['', '', Paragraph(n(m['net']), num_b)]
+    net.append(Paragraph(n(sum(m['net'] for m in months)), num_b))
+    rows.append(net)
+    i = len(rows) - 1
+    styles += [('BACKGROUND', (0, i), (-1, i), GREEN), ('SPAN', (0, i), (2, i))]
+
+    styles += [
+        ('GRID', (0, 0), (-1, -1), 0.6, LINE),
+        ('VALIGN', (0, 2), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 3 * s),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 3 * s),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5 * s),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5 * s),
+    ]
+    table = Table(rows, colWidths=W, repeatRows=2)
+    table.setStyle(TableStyle(styles))
+
+    return [
+        Paragraph('Arrears Distribution - Month Wise', title),
+        Paragraph(f'{letter.employee_name} &nbsp;|&nbsp; All figures in Rupees', sub),
+        Spacer(1, 6 * s),
+        table,
+    ]
 
 
 def send_arrears_email(employee_email, employee_name, pdf_buffer, *,

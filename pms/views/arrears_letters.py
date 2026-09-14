@@ -27,6 +27,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from ..arrears_letter import (ARREARS_COMPONENTS, COMPONENT_HEADERS, generate_arrears_pdf,
+                              totals_from_months,
                               send_arrears_email, totals)
 from ..models import ArrearsLetter, ArrearsLetterBatch
 
@@ -62,6 +63,58 @@ def _header_map():
     return m
 
 
+# The Old/New pair sheets. Both the master structure and each month are the
+# same shape of data - a before and an after for every component - so they
+# share one header vocabulary and one parser.
+MASTER_SHEET = 'Master'
+MONTHLY_SHEET = 'Monthly'
+
+
+def _old_new_headers():
+    """'Basic Salary Old' -> ('basic', 'old'), for the Master/Monthly sheets."""
+    m = {}
+    for key, _section, _label in ARREARS_COMPONENTS:
+        label = COMPONENT_HEADERS[key]
+        m[_norm(f'{label} Old')] = (key, 'old')
+        m[_norm(f'{label} New')] = (key, 'new')
+    return m
+
+
+def _read_old_new(ws, extra_columns):
+    """Rows of {employee_code, <extra>, components:{key:{old,new}}} from a sheet.
+
+    `extra_columns` maps a header to the plain field it fills (Month, Present
+    Days). Returns a list in sheet order - the order the arrears period runs
+    in is information, and sorting it would throw that away.
+    """
+    if ws is None:
+        return []
+    pairs = _old_new_headers()
+    extra = {_norm(h): f for h, f in extra_columns.items()}
+    headers = [_norm(c.value) for c in ws[1]]
+    out = []
+    for raw in ws.iter_rows(min_row=2, values_only=True):
+        if not any(v not in (None, '') for v in raw):
+            continue
+        rec, comps = {}, {}
+        for h, value in zip(headers, raw):
+            if h in pairs:
+                key, side = pairs[h]
+                comps.setdefault(key, {})[side] = value
+            elif h in extra:
+                rec[extra[h]] = str(value).strip() if value is not None else ''
+            elif h in ('employee id', 'employee code'):
+                rec['employee_code'] = str(value).strip() if value is not None else ''
+        code = rec.get('employee_code', '')
+        # Same rule as the main sheet: the shipped example is skipped, which
+        # is what makes leaving it in harmless rather than a trap.
+        if not code or code.upper().startswith('SAMPLE-'):
+            continue
+        rec['components'] = comps
+        out.append(rec)
+    return out
+
+
 def _filename(letter):
     """Employee code and name, safe for a filesystem and a mail attachment."""
     stem = f'APIS_Arrears_{letter.employee_code}_{letter.employee_name}'.strip('_')
@@ -73,6 +126,7 @@ class ArrearsTemplateView(APIView):
     out, so a new component cannot appear on the PDF and be missing here."""
 
     def get(self, request):
+        from openpyxl.comments import Comment
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
         wb = openpyxl.Workbook()
@@ -113,6 +167,53 @@ class ArrearsTemplateView(APIView):
             c.border = border
         ws.freeze_panes = 'A2'
 
+        # ── Master and Monthly: the before-and-after figures ────────────────
+        # Kept on their own sheets rather than bolted onto the first one. Two
+        # columns per component for the master and two more per month would
+        # put this sheet past sixty columns, at which point nobody can see
+        # which employee they are typing against.
+        pair_heads = []
+        for key, _s, _l in ARREARS_COMPONENTS:
+            pair_heads += [f'{COMPONENT_HEADERS[key]} Old', f'{COMPONENT_HEADERS[key]} New']
+
+        def pair_sheet(name, lead, note, samples):
+            sh = wb.create_sheet(name)
+            head = lead + pair_heads
+            for ci, h in enumerate(head, 1):
+                c = sh.cell(row=1, column=ci, value=h)
+                is_req = '*' in h
+                c.fill = required if is_req else (money if ci > len(lead) else optional)
+                c.font = Font(color='FFFFFF' if is_req else '000000', bold=True, size=10)
+                c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+                c.border = border
+                sh.column_dimensions[c.column_letter].width = max(13, min(len(h) + 3, 26))
+            sh.row_dimensions[1].height = 42
+            for ri, row in enumerate(samples, start=2):
+                for ci, h in enumerate(head, 1):
+                    sh.cell(row=ri, column=ci,
+                            value=row.get(h, 0 if ci > len(lead) else '')).border = border
+            sh.freeze_panes = 'B2'
+            # A note on the header cell, not a line of prose in the grid. Put
+            # in a cell below the samples it was read straight back as an
+            # employee row on upload, and reported as an employee who was
+            # missing from the Arrears sheet.
+            sh['A1'].comment = Comment(note, 'APIS Intranet', height=110, width=340)
+            return sh
+
+        pair_sheet(
+            MASTER_SHEET, ['Employee ID *'],
+            'One row per employee: the monthly salary structure before and after '
+            'the revision. Used as the reference column on the distribution page.',
+            [{'Employee ID *': 'SAMPLE-001'}])
+
+        pair_sheet(
+            MONTHLY_SHEET, ['Employee ID *', 'Month *', 'Present Days'],
+            'One row per employee per month, in the order the arrears period runs. '
+            'Enter what was actually earned old and new; the difference and every '
+            'total are worked out from these, so they are never typed twice.',
+            [{'Employee ID *': 'SAMPLE-001', 'Month *': 'Apr 2026', 'Present Days': 30},
+             {'Employee ID *': 'SAMPLE-001', 'Month *': 'May 2026', 'Present Days': 30}])
+
         buf = io.BytesIO()
         wb.save(buf)
         buf.seek(0)
@@ -145,9 +246,19 @@ def _process_batch(rows, batch_id, send_emails):
             letter = None
             try:
                 breakup = row.pop('_breakup')
+                master = row.pop('_master', {}) or {}
+                monthly = row.pop('_monthly', []) or []
+                # Where a month-wise breakdown exists it IS the arrears: each
+                # component's total is its monthly differences added up. The
+                # figures typed on the main sheet are the fallback for rows
+                # that have no monthly detail, not a second opinion on rows
+                # that do - one number must have one source.
+                effective = totals_from_months(monthly) or breakup
                 letter = ArrearsLetter.objects.create(batch_id=batch_id,
-                                                      salary_breakup=breakup,
-                                                      totals=totals(breakup), **row)
+                                                      salary_breakup=effective,
+                                                      master_breakup=master,
+                                                      monthly_breakup=monthly,
+                                                      totals=totals(effective), **row)
                 pdf = generate_arrears_pdf(letter)
                 name = _filename(letter)
                 letter.pdf_file.save(name, ContentFile(pdf.getvalue()), save=False)
@@ -199,9 +310,24 @@ class ArrearsUploadView(APIView):
         if not f:
             return Response({'error': 'Choose a file to upload.'}, status=400)
         try:
-            ws = openpyxl.load_workbook(f, data_only=True).active
+            wb = openpyxl.load_workbook(f, data_only=True)
+            ws = wb.active
         except Exception as e:
             return Response({'error': f'Could not read that file: {e}'}, status=400)
+
+        # Optional. A sheet with neither is the sheet this feature shipped
+        # with, and it must keep working exactly as it did.
+        master_by_code, monthly_by_code = {}, {}
+        for rec in _read_old_new(wb[MASTER_SHEET] if MASTER_SHEET in wb.sheetnames else None,
+                                 {}):
+            master_by_code[rec['employee_code']] = rec['components']
+        for rec in _read_old_new(wb[MONTHLY_SHEET] if MONTHLY_SHEET in wb.sheetnames else None,
+                                 {'Month *': 'month', 'Present Days': 'present_days'}):
+            monthly_by_code.setdefault(rec['employee_code'], []).append({
+                'month': rec.get('month', ''),
+                'present_days': rec.get('present_days', ''),
+                'components': rec['components'],
+            })
 
         header_map = _header_map()
         headers = [_norm(c.value) for c in ws[1]]
@@ -237,7 +363,21 @@ class ArrearsUploadView(APIView):
                                 f'so nothing can be sent to them.')
                 continue
             rec['_breakup'] = breakup
+            rec['_master'] = master_by_code.get(code, {})
+            rec['_monthly'] = monthly_by_code.get(code, [])
+            # A month row whose employee is not on the main sheet would
+            # silently generate nothing. Say so rather than lose it.
             rows.append(rec)
+
+        # Month or master rows for somebody who never appears on the main
+        # sheet produce nothing at all. Silently dropping them is how a
+        # distribution page goes missing and nobody knows why.
+        known = {r['employee_code'] for r in rows}
+        for sheet, seen in ((MONTHLY_SHEET, monthly_by_code), (MASTER_SHEET, master_by_code)):
+            for code in seen:
+                if code not in known:
+                    problems.append(f'{sheet} sheet: {code} has rows there but is not on '
+                                    f'the Arrears sheet, so nothing was generated for them.')
 
         if not rows:
             # "Nothing to generate" is true but useless. The overwhelmingly

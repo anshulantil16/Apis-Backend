@@ -89,6 +89,110 @@ class ArrearsStructure(TestCase):
                 pages = len(PdfReader(generate_arrears_pdf(case())).pages)
                 self.assertEqual(pages, 1, f'{case.__name__} spilled onto {pages} pages')
 
+    # ── month-wise distribution ─────────────────────────────────────────
+    MONTHS = [
+        {'month': 'Apr 2026', 'present_days': '30',
+         'components': {'basic': {'old': 27000, 'new': 28000}}},
+        {'month': 'May 2026', 'present_days': '30',
+         'components': {'basic': {'old': 27000, 'new': 28000}}},
+        {'month': 'Jun 2026', 'present_days': '30',
+         'components': {'basic': {'old': 27000, 'new': 28000}}},
+        {'month': 'Jul 2026', 'present_days': '25',
+         'components': {'basic': {'old': 25000, 'new': 25500}}},
+    ]
+
+    def test_the_difference_is_computed_not_read(self):
+        """A difference that could disagree with the two figures beside it is
+        a difference nobody can check."""
+        from pms.arrears_letter import month_rows
+        rows = month_rows(self.MONTHS)
+        self.assertEqual([r['components']['basic']['diff'] for r in rows],
+                         [1000, 1000, 1000, 500])
+
+    def test_the_months_keep_the_order_they_were_given(self):
+        """The order the arrears period runs in is information."""
+        from pms.arrears_letter import month_rows
+        self.assertEqual([r['month'] for r in month_rows(self.MONTHS)],
+                         ['Apr 2026', 'May 2026', 'Jun 2026', 'Jul 2026'])
+
+    def test_a_components_arrears_is_its_monthly_differences_added_up(self):
+        from pms.arrears_letter import totals_from_months
+        self.assertEqual(totals_from_months(self.MONTHS)['basic'], 3500)
+
+    def test_a_months_net_takes_deductions_off_rather_than_adding_them(self):
+        """Same sign convention as the summary page, or the two pages tell
+        different stories about the same month."""
+        from pms.arrears_letter import month_rows
+        rows = month_rows([{'month': 'Apr 2026', 'present_days': '30', 'components': {
+            'basic': {'old': 1000, 'new': 2000},      # +1000 earning
+            'emp_pf': {'old': 100, 'new': 400},       # +300 deduction
+            'variable': {'old': 0, 'new': 50},        # +50 quarterly
+        }}])
+        self.assertEqual(rows[0]['net'], 1000 - 300 + 50)
+
+    def test_no_monthly_detail_leaves_the_old_behaviour_untouched(self):
+        """Sheets uploaded before this existed have no Monthly rows, and must
+        keep generating exactly what they did."""
+        from pms.arrears_letter import totals_from_months
+        self.assertEqual(totals_from_months([]), {})
+        self.assertEqual(totals_from_months(None), {})
+
+    def test_the_distribution_page_is_landscape_and_only_appears_when_earned(self):
+        from pypdf import PdfReader
+        from pms.arrears_letter import generate_arrears_pdf
+
+        class L:
+            employee_name, department, designation = 'Test Person', 'Sales', 'Manager'
+            cadre, grade, paid_days = 'M', 'M5', '30'
+            salary_breakup = ArrearsStructure.FULL
+            master_breakup = {'basic': {'old': 27000, 'new': 28000}}
+            monthly_breakup = []
+
+        plain = PdfReader(generate_arrears_pdf(L()))
+        self.assertEqual(len(plain.pages), 1)
+
+        L.monthly_breakup = self.MONTHS
+        pages = PdfReader(generate_arrears_pdf(L())).pages
+        self.assertEqual(len(pages), 2)
+        self.assertGreater(pages[1].mediabox.width, pages[1].mediabox.height)
+        self.assertEqual(pages[0].mediabox.width, plain.pages[0].mediabox.width)
+
+    def test_every_column_heading_fits_its_column(self):
+        """"Difference" is one long word in a narrow column and broke as
+        "Differenc e"; a figure that breaks mid-number is worse still."""
+        import re
+        from pypdf import PdfReader
+        from pms.arrears_letter import generate_arrears_pdf, ARREARS_COMPONENTS
+
+        for count in (1, 4, 8, 12):
+            with self.subTest(months=count):
+                class L:
+                    employee_name, department, designation = 'Test Person', 'Sales', 'Mgr'
+                    cadre, grade, paid_days = 'M', 'M5', '30'
+                    salary_breakup = {}
+                    master_breakup = {k: {'old': 1234567, 'new': 2345678}
+                                      for k, _s, _l in ARREARS_COMPONENTS}
+                    monthly_breakup = [
+                        {'month': f'Mon{i} 2026', 'present_days': '30',
+                         'components': {k: {'old': 1234567, 'new': 2345678}
+                                        for k, _s, _l in ARREARS_COMPONENTS}}
+                        for i in range(count)]
+                text = re.sub(r'\s+', ' ', PdfReader(generate_arrears_pdf(L())).pages[1].extract_text())
+                self.assertNotIn('Differenc e', text)
+                # a lakh-grouped figure split across a wrap
+                self.assertIsNone(re.search(r'\d,\d{2},\d\s', text), text[:200])
+
+    def test_the_template_carries_a_sheet_for_the_master_and_the_months(self):
+        import io, openpyxl
+        from django.test import Client
+        wb = openpyxl.load_workbook(
+            io.BytesIO(Client().get('/api/pms/arrears/template/').content))
+        self.assertEqual(wb.sheetnames, ['Arrears', 'Master', 'Monthly'])
+        heads = [c.value for c in wb['Monthly'][1]]
+        self.assertEqual(heads[:3], ['Employee ID *', 'Month *', 'Present Days'])
+        self.assertIn('Basic Salary Old', heads)
+        self.assertIn('Basic Salary New', heads)
+
     def test_the_template_lists_every_component(self):
         """A component that prints on the PDF but has no column to fill it in
         would always be zero, silently."""

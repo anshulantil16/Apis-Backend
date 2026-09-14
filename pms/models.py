@@ -682,6 +682,21 @@ class ArrearsLetter(models.Model):
     # {component_key: amount}, keyed to ARREARS_COMPONENTS.
     salary_breakup = models.JSONField(default=dict, blank=True)
 
+    # {component_key: {'old': x, 'new': y}} - the master salary structure
+    # before and after the revision. Not itself an arrears figure: it is the
+    # reference the monthly earned amounts are read against.
+    master_breakup = models.JSONField(default=dict, blank=True)
+
+    # The month-wise distribution, in the order the sheet listed it:
+    # [{'month': 'Apr 2026', 'present_days': '30',
+    #   'components': {key: {'old': x, 'new': y}}}, ...]
+    #
+    # A list, not a dict keyed by month, because the order the arrears period
+    # runs in is information and a dict would not preserve it. Present days
+    # stays a string for the same reason paid_days does - sheets carry '30',
+    # '30.0' and 'NA', and a document must print what was entered.
+    monthly_breakup = models.JSONField(default=list, blank=True)
+
     # Every subtotal, frozen at generation time. The PDF that was sent must
     # keep saying what it said, even if the component list changes later.
     totals         = models.JSONField(default=dict, blank=True)
