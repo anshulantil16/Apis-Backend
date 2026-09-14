@@ -13,7 +13,7 @@ import re
 import threading
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import openpyxl
 from django.conf import settings
@@ -407,10 +407,30 @@ class ArrearsUploadView(APIView):
 class ArrearsBatchStatusView(APIView):
     """Polled by the progress bar while the thread works."""
 
+    # The worker saves the batch after every single row, so updated_at is a
+    # real heartbeat. Generous enough that a slow SMTP handshake on one row is
+    # not mistaken for death.
+    STALL_AFTER = timedelta(minutes=5)
+
     def get(self, request, batch_id):
         b = ArrearsLetterBatch.objects.filter(batch_id=batch_id).first()
         if not b:
             return Response({'error': 'No such batch.'}, status=404)
+
+        # A daemon thread dies with the process. Restart gunicorn mid-run and
+        # the batch stayed 'running' for ever, which the page reads as "still
+        # working" - so it polled every 1.2 seconds, indefinitely, for a run
+        # that had already stopped. The offer and warning letters have guarded
+        # against this since they were written; this one was copied from them
+        # without it.
+        if b.status == 'running' and b.updated_at < timezone.now() - self.STALL_AFTER:
+            b.status = 'error'
+            b.errors = (b.errors or []) + [
+                'Generation stopped unexpectedly - the server most likely '
+                'restarted mid-run. The statements already generated are kept; '
+                'upload the remaining rows again.']
+            b.save(update_fields=['status', 'errors'])
+
         return Response({
             'batch_id': b.batch_id, 'status': b.status, 'total': b.total,
             'processed': b.processed, 'generated': b.generated,
@@ -484,8 +504,27 @@ class ArrearsHistoryView(APIView):
             qs = qs.filter(batch_id=request.query_params['batch_id'])
 
         total = qs.count()
+        # Capped like the offer and warning histories next door, but the cap is
+        # now reported rather than silent. At a few hundred people a batch this
+        # fills up in two or three runs, and a list that quietly stops at 500
+        # reads as "that statement was never generated" - which is the one
+        # conclusion it must never invite on a salary document.
+        try:
+            limit = max(1, min(500, int(request.query_params.get('limit', 500))))
+        except (TypeError, ValueError):
+            limit = 500
+        try:
+            offset = max(0, int(request.query_params.get('offset', 0)))
+        except (TypeError, ValueError):
+            offset = 0
+        page = list(qs[offset:offset + limit])
+
         return Response({
             'total': total,
+            'returned': len(page),
+            'offset': offset,
+            'limit': limit,
+            'truncated': total > offset + len(page),
             # Shape the Letters Generator hub reads for its live card counts -
             # same keys the offer and warning endpoints return, so the three
             # cards report activity the same way.
@@ -503,7 +542,7 @@ class ArrearsHistoryView(APIView):
                 'error_message': l.error_message,
                 'batch_id': l.batch_id,
                 'created_at': timezone.localtime(l.created_at).strftime('%d-%m-%Y %H:%M'),
-            } for l in qs[:500]],
+            } for l in page],
         })
 
     def delete(self, request):

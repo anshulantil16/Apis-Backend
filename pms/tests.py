@@ -200,6 +200,56 @@ class ArrearsStructure(TestCase):
         for key, _section, _label in ARREARS_COMPONENTS:
             self.assertIn(key, COMPONENT_HEADERS)
 
+    def test_a_dead_batch_stops_being_reported_as_running(self):
+        """The worker is a daemon thread, so it dies with the process. While
+        the batch still said "running" the page polled it every 1.2 seconds
+        for ever - a run that had already stopped, hit forty times a minute
+        until the tab was closed."""
+        from datetime import timedelta
+        from django.test import Client
+        from django.utils import timezone
+        from pms.models import ArrearsLetterBatch
+
+        b = ArrearsLetterBatch.objects.create(batch_id='B-STALL', total=10,
+                                              processed=3, status='running')
+        c = Client()
+        self.assertEqual(c.get('/api/pms/arrears/batch/B-STALL/').data['status'], 'running')
+
+        # auto_now would overwrite a normal save, so move the heartbeat directly
+        ArrearsLetterBatch.objects.filter(pk=b.pk).update(
+            updated_at=timezone.now() - timedelta(minutes=6))
+        d = c.get('/api/pms/arrears/batch/B-STALL/').data
+        self.assertEqual(d['status'], 'error')
+        self.assertTrue(any('restarted' in e for e in d['errors']))
+
+    def test_history_says_when_it_is_showing_only_part_of_itself(self):
+        """A capped list that does not admit it is capped reads as "that
+        statement was never generated" - the one conclusion a salary document
+        must never invite. The delete confirmation has to be the real total
+        too, or Clear asks for a number the server will always reject."""
+        from django.test import Client
+        from pms.models import ArrearsLetter
+
+        ArrearsLetter.objects.bulk_create([
+            ArrearsLetter(employee_code=f'E{i:04d}', employee_name=f'Person {i}',
+                          status='generated') for i in range(540)])
+        c = Client()
+        d = c.get('/api/pms/arrears/history/').data
+        self.assertEqual(d['total'], 540)
+        self.assertEqual(d['returned'], 500)
+        self.assertTrue(d['truncated'])
+
+        # what the page shows as the number to type must be what the server wants
+        r = c.delete('/api/pms/arrears/history/',
+                     data={'confirm_count': str(d['returned'])},
+                     content_type='application/json')
+        self.assertEqual(r.status_code, 400)
+        r = c.delete('/api/pms/arrears/history/',
+                     data={'confirm_count': str(d['total'])},
+                     content_type='application/json')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(ArrearsLetter.objects.count(), 0)
+
     def test_the_sample_row_in_the_template_is_not_imported(self):
         """The template ships a filled example so the shape is obvious. An
         example you must remember to delete is a trap."""
