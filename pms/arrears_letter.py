@@ -16,6 +16,7 @@ this was modelled on adds them instead, so its "Total In Hand" came out above
 its own Gross - impossible for a figure that is defined as what is left after
 deductions. Computed correctly here. See the note in views/arrears_letters.py.
 """
+from datetime import date, datetime
 from io import BytesIO
 
 from django.conf import settings
@@ -173,6 +174,23 @@ def totals(breakup):
     }
 
 
+def month_label(value):
+    """How a month reads on the letter.
+
+    Excel turns "Jun-26" or "May 2029" into a real date the moment it can, so
+    what arrives here may be a datetime rather than the text somebody typed.
+    str() on one gives "2026-06-01 00:00:00", which printed verbatim as a
+    column heading. Anything already text is left exactly as typed - the
+    period is the user's to name, and quietly rewriting it is worse than
+    printing it oddly.
+    """
+    if value is None:
+        return ''
+    if isinstance(value, (datetime, date)):
+        return value.strftime('%b %Y')
+    return str(value).strip()
+
+
 def month_rows(monthly):
     """The month-wise distribution, normalised and in the order given.
 
@@ -188,7 +206,7 @@ def month_rows(monthly):
     out = []
     for m in (monthly or []):
         comps = (m or {}).get('components') or {}
-        row = {'month': str((m or {}).get('month', '') or '').strip(),
+        row = {'month': month_label((m or {}).get('month')),
                'present_days': str((m or {}).get('present_days', '') or '').strip(),
                'components': {}}
         for key, _section, _label in ARREARS_COMPONENTS:
@@ -502,11 +520,33 @@ def _distribution(ss, letter, months, master, breakup, width, s):
     # Shortened rather than shrunk past reading. Beside "Earned Old" and
     # "Earned New" the abbreviation is unambiguous, and a 4pt full word helps
     # nobody.
-    diff_label = 'Difference'
-    head_size = _size_to_fit(diff_label, 'Helvetica-Bold', 7.5 * s)
-    if head_size < 5.5:
-        diff_label = 'Diff.'
-        head_size = _size_to_fit(diff_label, 'Helvetica-Bold', 7.5 * s)
+    _full = _size_to_fit('Difference', 'Helvetica-Bold', 7.5 * s)
+    diff_label = 'Difference' if _full >= 5.5 else 'Diff.'
+
+    # Sized against the longest WORD in any single-column heading, not against
+    # the difference column alone. reportlab wraps on spaces, so a heading of
+    # two words is free - what cannot be allowed is one word wider than its
+    # column, which breaks mid-word ("Total A rears"). Falling back to "Diff."
+    # used to re-measure against that short word only, pushing the size back
+    # up until "Arrears" no longer fit.
+    # "Total Arrears" is the widest heading, and sizing everything down until
+    # its longest word fits drove the type to ~2.7pt over twelve months. The
+    # column sits under a band that already says "Total Arrears Amount", so
+    # the short form loses nothing.
+    total_label = 'Total Arrears'
+    if _size_to_fit('Arrears', 'Helvetica-Bold', 7.5 * s) < 5.0:
+        total_label = 'Total'
+
+    # Same again for "Earned Old" / "Earned New". Each month's three columns
+    # sit under a band naming that month, so inside it "Old" and "New" are
+    # unambiguous on their own - and over a twelve-month period dropping the
+    # repeated word is what keeps the headings readable rather than merely
+    # unbroken.
+    earned_prefix = 'Earned ' if _size_to_fit('Earned', 'Helvetica-Bold', 7.5 * s) >= 5.0 else ''
+
+    head_words = ([diff_label] + total_label.split()
+                  + (['Earned'] if earned_prefix else []) + ['Old', 'New'])
+    head_size = min(_size_to_fit(w, 'Helvetica-Bold', 7.5 * s) for w in head_words)
 
     # Measured against the widest figure this employee actually has, not
     # against the widest one imaginable - a letter with small numbers should
@@ -552,9 +592,10 @@ def _distribution(ss, letter, months, master, breakup, width, s):
     for m in months:
         days = f" (Present - {m['present_days']} days)" if m['present_days'] else ''
         h0 += [Paragraph(f"Month - {m['month']}{days}", head), '', '']
-        h1 += [Paragraph('Earned Old', head), Paragraph('Earned New', head),
+        h1 += [Paragraph(f'{earned_prefix}Old', head),
+               Paragraph(f'{earned_prefix}New', head),
                Paragraph(diff_label, head)]
-    h0.append(Paragraph('Total Arrears', head))
+    h0.append(Paragraph(total_label, head))
     h1.append('')
     rows += [h0, h1]
     styles += [

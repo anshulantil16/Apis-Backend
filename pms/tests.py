@@ -179,6 +179,12 @@ class ArrearsStructure(TestCase):
                         for i in range(count)]
                 text = re.sub(r'\s+', ' ', PdfReader(generate_arrears_pdf(L())).pages[1].extract_text())
                 self.assertNotIn('Differenc e', text)
+                # "Total Arrears" broke as "Total A rears" once the difference
+                # column got narrow enough to fall back to "Diff." - which
+                # re-measured the heading font against that short word alone
+                # and pushed the size back up past what "Arrears" could take.
+                self.assertNotIn('A rears', text)
+                self.assertIn('Arrears', text)
                 # a lakh-grouped figure split across a wrap
                 self.assertIsNone(re.search(r'\d,\d{2},\d\s', text), text[:200])
 
@@ -268,3 +274,62 @@ class ArrearsStructure(TestCase):
         # for a fault in a sheet that is simply still empty.
         self.assertIn('example row', r.data.get('error', ''))
         self.assertIn('upload again', r.data.get('error', ''))
+
+class MonthsExcelTurnedIntoDates(TestCase):
+    """What Excel does to the Month column, and what the PDF must show anyway.
+
+    Typing "Apr 2026" leaves text. Typing "Jun-26" or "May 2029" does not:
+    Excel converts those to real dates, openpyxl returns datetime objects,
+    and str() on one gives "2026-06-01 00:00:00" - which is what was printing
+    as the distribution table's column heading.
+    """
+
+    def test_a_date_cell_reads_as_the_month_it_means(self):
+        from datetime import date, datetime
+        from pms.views.arrears_letters import _cell_text
+
+        self.assertEqual(_cell_text(datetime(2026, 6, 1)), 'Jun 2026')
+        self.assertEqual(_cell_text(date(2029, 5, 1)), 'May 2029')
+        # A time of day is never shown - a month has none.
+        self.assertEqual(_cell_text(datetime(2026, 7, 28, 0, 0)), 'Jul 2026')
+
+    def test_text_a_person_typed_is_left_exactly_as_typed(self):
+        """Second-guessing a string the user chose is how a period gets
+        relabelled behind their back."""
+        from pms.views.arrears_letters import _cell_text
+
+        for typed in ('Apr 2026', 'Jun-26', 'Q1 FY27', 'April (part month)'):
+            self.assertEqual(_cell_text(typed), typed)
+        self.assertEqual(_cell_text('  May 2026  '), 'May 2026')
+        self.assertEqual(_cell_text(None), '')
+
+    def test_the_month_column_of_the_template_is_text_so_excel_leaves_it_alone(self):
+        import io
+
+        import openpyxl
+        from pms.views.arrears_letters import MONTHLY_SHEET
+
+        r = self.client.get('/api/pms/arrears/template/')
+        self.assertEqual(r.status_code, 200)
+        wb = openpyxl.load_workbook(io.BytesIO(r.content))
+        sh = wb[MONTHLY_SHEET]
+
+        head = [c.value for c in sh[1]]
+        col = head.index('Month *') + 1
+        letter = sh.cell(row=1, column=col).column_letter
+        # Well past the sample rows: the format has to be on the cell before
+        # anything is typed into it.
+        for row in (2, 50, 5000):
+            self.assertEqual(sh[f'{letter}{row}'].number_format, '@',
+                             f'{letter}{row} would let Excel convert a month to a date')
+
+    def test_a_date_month_reaches_the_pdf_as_a_month(self):
+        from datetime import datetime
+
+        from pms.arrears_letter import month_rows
+
+        rows = month_rows([{'month': datetime(2026, 6, 1), 'present_days': '30',
+                            'components': {}}])
+        # month_rows stringifies whatever it is given; the reader is what
+        # normalises, so this asserts the two together do not reintroduce it.
+        self.assertNotIn('00:00:00', rows[0]['month'])

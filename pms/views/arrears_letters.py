@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 import zipfile
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from queue import Queue
 from tempfile import SpooledTemporaryFile
 
@@ -30,7 +30,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from ..arrears_letter import (ARREARS_COMPONENTS, COMPONENT_HEADERS, generate_arrears_pdf,
-                              totals_from_months,
+                              month_label, totals_from_months,
                               send_arrears_email, totals)
 from ..models import ArrearsLetter, ArrearsLetterBatch
 
@@ -71,6 +71,20 @@ def _header_map():
 # share one header vocabulary and one parser.
 MASTER_SHEET = 'Master'
 MONTHLY_SHEET = 'Monthly'
+
+# How far down the Month column is pre-formatted as Text. Comfortably past
+# 1,000 employees x 12 months, and costs a few KB in the template.
+TEXT_FORMAT_ROWS = 15000
+
+
+def _cell_text(value):
+    """A cell as the person typing it meant it to read.
+
+    Months go through the same rule the letter uses, so the sheet and the PDF
+    can never disagree about what a period is called - see
+    arrears_letter.month_label for why a date arrives here at all.
+    """
+    return month_label(value)
 
 
 def _old_new_headers():
@@ -121,7 +135,7 @@ def _read_old_new(ws, extra_columns):
                 key, side = pairs[h]
                 comps.setdefault(key, {})[side] = value
             elif h in extra:
-                rec[extra[h]] = str(value).strip() if value is not None else ''
+                rec[extra[h]] = _cell_text(value)
             elif h in ('employee id', 'employee code'):
                 rec['employee_code'] = str(value).strip() if value is not None else ''
         code = rec.get('employee_code', '')
@@ -195,7 +209,7 @@ class ArrearsTemplateView(APIView):
         for key, _s, _l in ARREARS_COMPONENTS:
             pair_heads += [f'{COMPONENT_HEADERS[key]} Old', f'{COMPONENT_HEADERS[key]} New']
 
-        def pair_sheet(name, lead, note, samples):
+        def pair_sheet(name, lead, note, samples, text_columns=()):
             sh = wb.create_sheet(name)
             head = lead + pair_heads
             for ci, h in enumerate(head, 1):
@@ -212,6 +226,25 @@ class ArrearsTemplateView(APIView):
                     sh.cell(row=ri, column=ci,
                             value=row.get(h, 0 if ci > len(lead) else '')).border = border
             sh.freeze_panes = 'B2'
+
+            # Force the named columns to Text.
+            #
+            # Excel reads a month as a date the moment it can: type "Jun-26"
+            # or "May 2029" into a General cell and it silently becomes a
+            # datetime, right-aligned, and comes back from openpyxl as
+            # 2026-06-01 00:00:00 - which then printed verbatim as the PDF's
+            # column heading. Formatting the column as Text keeps whatever was
+            # typed, so "Jun-26" stays "Jun-26".
+            #
+            # Applied well past the sample rows because the format has to
+            # already be on a cell before anything is typed into it; a range
+            # that stops at the examples protects only the examples.
+            for header_name in text_columns:
+                if header_name not in head:
+                    continue
+                letter = sh.cell(row=1, column=head.index(header_name) + 1).column_letter
+                for r in range(2, TEXT_FORMAT_ROWS + 2):
+                    sh[f'{letter}{r}'].number_format = '@'
             # A note on the header cell, not a line of prose in the grid. Put
             # in a cell below the samples it was read straight back as an
             # employee row on upload, and reported as an employee who was
@@ -231,7 +264,8 @@ class ArrearsTemplateView(APIView):
             'Enter what was actually earned old and new; the difference and every '
             'total are worked out from these, so they are never typed twice.',
             [{'Employee ID *': 'SAMPLE-001', 'Month *': 'Apr 2026', 'Present Days': 30},
-             {'Employee ID *': 'SAMPLE-001', 'Month *': 'May 2026', 'Present Days': 30}])
+             {'Employee ID *': 'SAMPLE-001', 'Month *': 'May 2026', 'Present Days': 30}],
+            text_columns=('Month *',))
 
         buf = io.BytesIO()
         wb.save(buf)
