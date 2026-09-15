@@ -88,9 +88,21 @@ class ModeratedContent(models.Model):
     def moderation_detail(self):
         return {}
 
-    def moderation_payload(self):
+    def moderation_preview(self, request=None):
+        """An image URL for the reviewer to actually look at, or ''.
+
+        Text content describes itself in the queue — a vacancy with a wrong
+        department is visibly wrong from its fields alone. A photograph is
+        opaque: its title and file size say nothing about what is in it, and a
+        reviewer approving on metadata alone is not reviewing anything. Any
+        content type whose point is the image itself must return one.
+        """
+        return ''
+
+    def moderation_payload(self, request=None):
         """The common envelope every queue row carries."""
         return {
+            'preview': self.moderation_preview(request),
             'id': self.id,
             'type': self._meta.model_name,
             'type_label': self._meta.verbose_name.title(),

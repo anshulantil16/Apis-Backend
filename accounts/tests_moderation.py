@@ -259,6 +259,28 @@ class TheQueueAndTheLog(UploadsToATempFolder):
         self.assertEqual(d['pending_total'], 2)
         self.assertEqual({i['type'] for i in d['items']}, {'vacancy', 'wallphoto'})
 
+    def test_a_photo_in_the_queue_can_actually_be_seen(self):
+        """Approving a photograph on its title and file size is not reviewing
+        it. The queue has to carry the image itself."""
+        self.client.post('/api/wall/photos/', {'title': 'Plant visit', 'image': a_png()},
+                         **self.auth(self.staff_token))
+        d = self.client.get('/api/accounts/portal/admin/moderation/',
+                            **self.auth(self.admin_token)).json()
+        photo = next(i for i in d['items'] if i['type'] == 'wallphoto')
+        self.assertTrue(photo['preview'], 'the queue gave the reviewer nothing to look at')
+        self.assertIn('/media/wall/', photo['preview'])
+
+    def test_a_vacancy_needs_no_preview(self):
+        """Text content describes itself; only an image needs the extra field."""
+        self.client.post('/api/vacancies/',
+                         {'title': 'Chemist', 'function': 'QA', 'department': 'QA',
+                          'location': 'Roorkee', 'state': 'Uttarakhand'},
+                         content_type='application/json', **self.auth(self.staff_token))
+        d = self.client.get('/api/accounts/portal/admin/moderation/',
+                            **self.auth(self.admin_token)).json()
+        vacancy = next(i for i in d['items'] if i['type'] == 'vacancy')
+        self.assertEqual(vacancy['preview'], '')
+
     def test_every_item_in_the_queue_names_who_submitted_it(self):
         self.client.post('/api/wall/photos/', {'title': 'Holi', 'image': a_png()},
                          **self.auth(self.staff_token))
@@ -266,6 +288,47 @@ class TheQueueAndTheLog(UploadsToATempFolder):
                             **self.auth(self.admin_token)).json()
         self.assertEqual(d['items'][0]['submitted_by'], 'Staff One')
         self.assertEqual(d['items'][0]['submitted_by_email'], 'one@apisindia.com')
+
+    def test_something_already_live_can_be_taken_back_down(self):
+        """Approving is not one-way. Taking a live item down has to be
+        possible without deleting it, which would lose the record."""
+        self.client.post('/api/vacancies/',
+                         {'title': 'Chemist', 'function': 'QA', 'department': 'QA',
+                          'location': 'Roorkee', 'state': 'Uttarakhand'},
+                         content_type='application/json', **self.auth(self.admin_token))
+        v = Vacancy.objects.get()
+        self.assertEqual(len(self.client.get('/api/vacancies/').json()), 1)
+
+        r = self.client.post('/api/accounts/portal/admin/moderation/',
+                             {'type': 'vacancy', 'id': v.id, 'decision': 'rejected',
+                              'note': 'Position was filled internally.'},
+                             content_type='application/json', **self.auth(self.admin_token))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.client.get('/api/vacancies/').json(), [])
+        self.assertEqual(Vacancy.objects.count(), 1)      # still on record
+
+        # ...and back up again, if that was a mistake.
+        self.client.post('/api/accounts/portal/admin/moderation/',
+                         {'type': 'vacancy', 'id': v.id, 'decision': 'approved'},
+                         content_type='application/json', **self.auth(self.admin_token))
+        self.assertEqual(len(self.client.get('/api/vacancies/').json()), 1)
+
+    def test_many_items_can_be_decided_in_one_go(self):
+        """At 1,000 employees the queue is not reviewed one row at a time."""
+        for n in range(5):
+            self.client.post('/api/vacancies/',
+                             {'title': f'Role {n}', 'function': 'QA', 'department': 'QA',
+                              'location': 'Roorkee', 'state': 'Uttarakhand'},
+                             content_type='application/json', **self.auth(self.staff_token))
+        ids = list(Vacancy.objects.values_list('id', flat=True))
+
+        r = self.client.post('/api/accounts/portal/admin/moderation/',
+                             {'type': 'vacancy', 'ids': ids, 'decision': 'approved'},
+                             content_type='application/json', **self.auth(self.admin_token))
+        self.assertEqual(r.json()['updated'], 5)
+        self.assertEqual(len(self.client.get('/api/vacancies/').json()), 5)
+        # One log line per item, not one for the batch.
+        self.assertEqual(ActivityLog.objects.filter(action='approved').count(), 5)
 
     def test_the_log_records_who_created_and_who_approved(self):
         self.client.post('/api/vacancies/',

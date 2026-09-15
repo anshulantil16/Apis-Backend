@@ -68,6 +68,13 @@ class WallPhoto(ModeratedContent):
     def moderation_label(self):
         return self.title
 
+    def moderation_preview(self, request=None):
+        """The photo itself — the only thing worth reviewing here."""
+        if not self.image:
+            return ''
+        url = self.image.url
+        return request.build_absolute_uri(url) if request is not None else url
+
     def moderation_detail(self):
         return {
             'Category': self.category,

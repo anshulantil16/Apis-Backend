@@ -60,7 +60,7 @@ class AdminModerationView(PortalScopedAPIView):
             if wanted != 'all':
                 rows = rows.filter(moderation_status=wanted)
             for obj in rows.order_by('created_at')[:PAGE_SIZE]:
-                items.append(obj.moderation_payload())
+                items.append(obj.moderation_payload(request))
 
         # Oldest first across the merged list, so the ordering means the same
         # thing whether one type is filtered or all of them are shown.
