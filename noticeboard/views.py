@@ -1,0 +1,235 @@
+"""Reading the noticeboard, and administering it.
+
+Reads are open to any signed-in employee and return only what is live.
+Writes are superadmin-only and every one of them is logged — an announcement
+is a statement made to the whole company in its own name, and a holiday list
+is what people plan leave around.
+"""
+from django.utils import timezone
+from rest_framework.response import Response
+from rest_framework import status as http
+
+from accounts.auth import PortalScopedAPIView, optional_user, require_superadmin, require_user
+from accounts.moderation import ModerationStatus, log_activity
+
+from .models import Announcement, Holiday, HolidayZone
+
+
+def _announcement(a, viewer=None):
+    return {
+        'id': a.id, 'title': a.title, 'body': a.body, 'tone': a.tone,
+        'date': a.announced_on.isoformat(),
+        'expiresOn': a.expires_on.isoformat() if a.expires_on else None,
+        'pinned': a.pinned,
+        'moderationStatus': a.moderation_status,
+        'submittedBy': a.submitted_by_name or '',
+        'reviewNote': a.review_note or '',
+        'isMine': bool(viewer and a.submitted_by_id == viewer.id),
+    }
+
+
+class AnnouncementListView(PortalScopedAPIView):
+    """GET — what to show on the card. POST — propose a new notice."""
+
+    def get(self, request):
+        viewer = optional_user(request)
+        if viewer and viewer.is_superadmin:
+            # The console needs expired and pending ones too, to manage them.
+            rows = Announcement.objects.all()
+        elif viewer:
+            # Their own proposal too, so it does not look like it vanished.
+            rows = (Announcement.published() |
+                    Announcement.objects.filter(submitted_by=viewer)).distinct()
+        else:
+            rows = Announcement.published()
+        return Response([_announcement(a, viewer) for a in rows.select_related('submitted_by')])
+
+    def post(self, request):
+        user, err = require_user(request)
+        if err:
+            return err
+
+        title = (request.data.get('title') or '').strip()
+        body = (request.data.get('body') or '').strip()
+        if not title or not body:
+            return Response({'error': 'An announcement needs a title and something to say.'},
+                            status=http.HTTP_400_BAD_REQUEST)
+
+        a = Announcement(
+            title=title[:200], body=body[:2000],
+            tone=_tone(request.data.get('tone')),
+            announced_on=_date(request.data.get('date')) or timezone.localdate(),
+            expires_on=_date(request.data.get('expiresOn')),
+            pinned=bool(request.data.get('pinned')) and user.is_superadmin,
+        )
+        a.attribute_to(user)
+        if user.is_superadmin:
+            a.set_review(user, ModerationStatus.APPROVED, 'Posted by an administrator.')
+        a.save()
+
+        log_activity(user, 'created', a, summary=f'Announcement: {a.title}',
+                     detail={'auto_approved': user.is_superadmin}, request=request)
+        return Response({
+            **_announcement(a, user),
+            'message': ('Announcement posted.' if a.is_published else
+                        'Sent to the administrator for approval.'),
+        }, status=http.HTTP_201_CREATED)
+
+
+class AnnouncementDetailView(PortalScopedAPIView):
+    """Superadmin edit and delete."""
+
+    def patch(self, request, pk):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        a = Announcement.objects.filter(pk=pk).first()
+        if not a:
+            return Response({'error': 'Announcement not found.'}, status=http.HTTP_404_NOT_FOUND)
+
+        changed = {}
+        for field, cap in (('title', 200), ('body', 2000)):
+            if field in request.data:
+                new = str(request.data.get(field) or '').strip()[:cap]
+                if new and new != getattr(a, field):
+                    changed[field] = {'from': getattr(a, field)[:80], 'to': new[:80]}
+                    setattr(a, field, new)
+
+        if 'tone' in request.data:
+            tone = _tone(request.data.get('tone'))
+            if tone != a.tone:
+                changed['tone'] = {'from': a.tone, 'to': tone}
+                a.tone = tone
+
+        for key, field in (('date', 'announced_on'), ('expiresOn', 'expires_on')):
+            if key in request.data:
+                new = _date(request.data.get(key))
+                if new != getattr(a, field):
+                    changed[field] = {'from': str(getattr(a, field)), 'to': str(new)}
+                    setattr(a, field, new)
+
+        if 'pinned' in request.data:
+            new = bool(request.data.get('pinned'))
+            if new != a.pinned:
+                changed['pinned'] = {'from': a.pinned, 'to': new}
+                a.pinned = new
+
+        if changed:
+            a.save()
+            log_activity(user, 'edited', a, summary=f'Announcement: {a.title}',
+                         detail={'changed': changed}, request=request)
+        return Response(_announcement(a, user))
+
+    def delete(self, request, pk):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        a = Announcement.objects.filter(pk=pk).first()
+        if not a:
+            return Response({'error': 'Announcement not found.'}, status=http.HTTP_404_NOT_FOUND)
+        title, aid = a.title, a.id
+        a.delete()
+        log_activity(user, 'deleted', object_type='announcement', object_id=aid,
+                     summary=f'Announcement: {title}', request=request)
+        return Response({'message': 'Announcement removed.'})
+
+
+# ── holidays ────────────────────────────────────────────────────────────────
+class HolidayListView(PortalScopedAPIView):
+    """GET — every zone with its holidays, in the shape the dashboard's zone
+    picker already expects. POST — add one holiday to a zone (superadmin)."""
+
+    def get(self, request):
+        zones = HolidayZone.objects.prefetch_related('holidays')
+        return Response([{
+            'id': z.key, 'label': z.label,
+            'holidays': [{'id': h.id, 'date': h.date.isoformat(), 'name': h.name, 'type': h.type}
+                         for h in z.holidays.all()],
+        } for z in zones])
+
+    def post(self, request):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+
+        zone = HolidayZone.objects.filter(key=request.data.get('zone')).first()
+        date = _date(request.data.get('date'))
+        name = (request.data.get('name') or '').strip()
+        if not zone or not date or not name:
+            return Response({'error': 'Pick a zone, a date and a name.'},
+                            status=http.HTTP_400_BAD_REQUEST)
+
+        h, created = Holiday.objects.get_or_create(
+            zone=zone, date=date, name=name[:120],
+            defaults={'type': 'National' if request.data.get('type') == 'National' else 'State'})
+        if not created:
+            return Response({'error': 'That zone already lists that holiday.'},
+                            status=http.HTTP_400_BAD_REQUEST)
+
+        log_activity(user, 'created', h, summary=f'Holiday: {name} ({zone.label})',
+                     detail={'date': str(date), 'zone': zone.key}, request=request)
+        return Response({'id': h.id, 'date': h.date.isoformat(), 'name': h.name,
+                         'type': h.type, 'zone': zone.key}, status=http.HTTP_201_CREATED)
+
+
+class HolidayDetailView(PortalScopedAPIView):
+    """Superadmin edit and delete of one holiday."""
+
+    def patch(self, request, pk):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        h = Holiday.objects.select_related('zone').filter(pk=pk).first()
+        if not h:
+            return Response({'error': 'Holiday not found.'}, status=http.HTTP_404_NOT_FOUND)
+
+        changed = {}
+        name = (request.data.get('name') or '').strip()
+        if name and name != h.name:
+            changed['name'] = {'from': h.name, 'to': name}
+            h.name = name[:120]
+        date = _date(request.data.get('date'))
+        if date and date != h.date:
+            changed['date'] = {'from': str(h.date), 'to': str(date)}
+            h.date = date
+        if request.data.get('type') in ('National', 'State') and request.data['type'] != h.type:
+            changed['type'] = {'from': h.type, 'to': request.data['type']}
+            h.type = request.data['type']
+
+        if changed:
+            h.save()
+            log_activity(user, 'edited', h, summary=f'Holiday: {h.name} ({h.zone.label})',
+                         detail={'changed': changed}, request=request)
+        return Response({'id': h.id, 'date': h.date.isoformat(), 'name': h.name,
+                         'type': h.type, 'zone': h.zone.key})
+
+    def delete(self, request, pk):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        h = Holiday.objects.select_related('zone').filter(pk=pk).first()
+        if not h:
+            return Response({'error': 'Holiday not found.'}, status=http.HTTP_404_NOT_FOUND)
+        label, hid, zone = h.name, h.id, h.zone.label
+        h.delete()
+        log_activity(user, 'deleted', object_type='holiday', object_id=hid,
+                     summary=f'Holiday: {label} ({zone})', request=request)
+        return Response({'message': 'Holiday removed.'})
+
+
+# ── helpers ─────────────────────────────────────────────────────────────────
+def _tone(value):
+    allowed = {c[0] for c in Announcement.TONE_CHOICES}
+    return value if value in allowed else 'general'
+
+
+def _date(value):
+    """Parse an ISO date, or None. A blank string is 'not provided', which
+    Django's own parser rejects outright rather than treating as null."""
+    if not value:
+        return None
+    from django.utils.dateparse import parse_date
+    try:
+        return parse_date(str(value))
+    except (TypeError, ValueError):
+        return None

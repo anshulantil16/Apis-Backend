@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'referrals',
     'vacancies',
     'wall',
+    'noticeboard',
 ]
 
 MIDDLEWARE = [
