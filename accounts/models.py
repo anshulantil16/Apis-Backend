@@ -267,3 +267,53 @@ class HrmsSyncLog(models.Model):
 
     def __str__(self):
         return f"HRMS sync {self.started_at:%Y-%m-%d %H:%M} ({'ok' if self.ok else 'failed'})"
+
+
+class ActivityLog(models.Model):
+    """Append-only record of who did what on the intranet.
+
+    The dashboard shows company-wide content — vacancies, wall photos,
+    announcements — and until now none of it was attributable: rows appeared
+    with a timestamp and no author. This is the answer to "who put that
+    there", and it is written for every create, approve, reject, edit and
+    delete that passes through the moderation gate.
+
+    Nothing deletes from this table. A row here is evidence, and evidence that
+    can be tidied away by whoever is being audited is not evidence — the
+    console offers filtering and paging, never a delete.
+    """
+
+    class Action(models.TextChoices):
+        CREATED   = 'created',   'Created'
+        APPROVED  = 'approved',  'Approved'
+        REJECTED  = 'rejected',  'Rejected'
+        EDITED    = 'edited',    'Edited'
+        DELETED   = 'deleted',   'Deleted'
+        PUBLISHED = 'published', 'Published'
+        HIDDEN    = 'hidden',    'Hidden'
+
+    # Kept nullable so deactivating a leaver never erases what they did; the
+    # name/email snapshots below are what the console actually displays.
+    actor       = models.ForeignKey(PortalUser, null=True, blank=True,
+                                    on_delete=models.SET_NULL, related_name='activity')
+    actor_name  = models.CharField(max_length=200, blank=True)
+    actor_email = models.CharField(max_length=254, blank=True)
+
+    action      = models.CharField(max_length=20, choices=Action.choices, db_index=True)
+    # Model name ('vacancy', 'wallphoto'), not a ContentType FK — the log
+    # outlives the models it describes, and a deleted row should still read
+    # sensibly years later.
+    object_type = models.CharField(max_length=50, blank=True, db_index=True)
+    object_id   = models.PositiveIntegerField(null=True, blank=True)
+
+    summary     = models.CharField(max_length=300, blank=True)
+    detail      = models.JSONField(default=dict, blank=True)
+    ip_address  = models.CharField(max_length=64, blank=True)
+    created_at  = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['object_type', 'object_id'])]
+
+    def __str__(self):
+        return f'{self.actor_name or "System"} {self.action} {self.object_type} #{self.object_id}'

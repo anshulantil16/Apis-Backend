@@ -1,5 +1,6 @@
 from django.urls import path
 
+from .views_moderation import AdminActivityView, AdminModerationView
 from .views import (AdminBulkAccessView, AdminHrmsPreviewView, AdminSessionsView, AdminSyncView,
                     CelebrationsView, TickerView,
                     AdminUserDetailView, AdminUsersView,
@@ -26,4 +27,8 @@ urlpatterns = [
     path('portal/admin/hrms-preview/',           AdminHrmsPreviewView.as_view()),
     path('portal/admin/sessions/',               AdminSessionsView.as_view()),
     path('portal/admin/sessions/<int:session_id>/', AdminSessionsView.as_view()),
+
+    # Dashboard content: the approval queue and the audit trail.
+    path('portal/admin/moderation/', AdminModerationView.as_view()),
+    path('portal/admin/activity/',   AdminActivityView.as_view()),
 ]

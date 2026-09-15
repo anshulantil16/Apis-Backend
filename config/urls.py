@@ -34,6 +34,7 @@ urlpatterns = [
     path('api/roompulse/',   include('roompulse.urls')),
     path('api/referrals/',   include('referrals.urls')),
     path('api/vacancies/',   include('vacancies.urls')),
+    path('api/wall/',        include('wall.urls')),
     # Always serve media files (works in both DEBUG and production mode)
     re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
 ]

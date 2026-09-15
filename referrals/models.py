@@ -1,10 +1,19 @@
 from django.db import models
 
+from accounts.moderation import ModeratedContent, ModerationStatus
 
-class EmployeeReferral(models.Model):
+
+class EmployeeReferral(ModeratedContent):
     """One submission of the Employee Referral Form (Vacancies popup on the
     intranet home page). Mirrors that form's sections one for one, so a
     field added there has an obvious matching column here.
+
+    Inherits ModeratedContent for the submitter snapshot, not for the gate:
+    a referral goes to HR rather than onto the dashboard, so there is nothing
+    to publish and it is marked approved on arrival. What the inherited
+    columns buy is attribution — `referrer_name` is free text the submitter
+    types and could say anything, while `submitted_by` is the portal account
+    that actually sent it.
     """
 
     RECOMMENDATION_CHOICES = [
@@ -82,3 +91,14 @@ class EmployeeReferral(models.Model):
 
     def __str__(self):
         return f'{self.candidate_name} referred by {self.referrer_name} — {self.position_applied_for}'
+
+    def moderation_label(self):
+        return f'{self.candidate_name} for {self.position_applied_for}'
+
+    def moderation_detail(self):
+        return {
+            'Referred by': self.referrer_name,
+            'Department': self.candidate_department,
+            'Recommendation': self.get_recommendation_display() if self.recommendation else '',
+            'Pipeline status': self.status,
+        }

@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'roompulse',
     'referrals',
     'vacancies',
+    'wall',
 ]
 
 MIDDLEWARE = [

@@ -1,8 +1,10 @@
 from datetime import date
 
-from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+
+from accounts.auth import PortalScopedAPIView, optional_user
+from accounts.moderation import ModerationStatus, log_activity
 
 from .models import EmployeeReferral
 
@@ -34,12 +36,16 @@ def _parse_date(value):
     return value or None
 
 
-class SubmitReferralView(APIView):
+class SubmitReferralView(PortalScopedAPIView):
     """POST — create one referral submission from the Vacancies popup's
-    Employee Referral Form. No portal session is required to submit (same
-    "trust the client" posture as tada/sales/roompulse elsewhere in this
-    project — see roompulse/views/perms.py for the fuller rationale);
-    review happens afterwards from the Django admin.
+    Employee Referral Form.
+
+    Stays open to an unsigned caller: the form is reachable from the wall and
+    the popup, and refusing an otherwise-complete referral because a session
+    expired mid-form loses a real candidate. But when there IS a session the
+    submitter is recorded, so HR can tell a referral sent by the person named
+    on it from one where someone typed a colleague's name into the referrer
+    box.
     """
 
     def post(self, request):
@@ -55,5 +61,20 @@ class SubmitReferralView(APIView):
         fields['declaration_date'] = _parse_date(fields.get('declaration_date')) or date.today()
         fields['disciplinary_issues'] = str(fields.get('disciplinary_issues', '')).lower() in ('true', 'yes', '1')
 
-        referral = EmployeeReferral.objects.create(**fields)
-        return Response({'id': referral.id, 'message': 'Referral submitted.'}, status=status.HTTP_201_CREATED)
+        referral = EmployeeReferral(**fields)
+        # Nothing to publish — see the model docstring — so it arrives
+        # approved and never sits in the console's pending queue.
+        referral.moderation_status = ModerationStatus.APPROVED
+        submitter = optional_user(request)
+        if submitter:
+            referral.attribute_to(submitter)
+        referral.save()
+
+        log_activity(submitter, 'created', referral,
+                     summary=f'Referral: {referral.moderation_label()}',
+                     detail={'signed_in': bool(submitter),
+                             'referrer_typed': referral.referrer_name},
+                     request=request)
+
+        return Response({'id': referral.id, 'message': 'Referral submitted.'},
+                        status=status.HTTP_201_CREATED)

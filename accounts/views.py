@@ -69,21 +69,10 @@ def serialize_user(u):
     }
 
 
-def current_session(request):
-    """The live session behind this request, or None.
-
-    Read from the Authorization header rather than a cookie so the same
-    endpoints serve the SPA and any future non-browser caller identically.
-    """
-    raw = request.META.get('HTTP_AUTHORIZATION', '')
-    token = raw[7:].strip() if raw.lower().startswith('bearer ') else raw.strip()
-    if not token:
-        return None
-    s = (PortalSession.objects
-         .select_related('user')
-         .filter(token_hash=PortalSession.hash_token(token))
-         .first())
-    return s if (s and s.is_live and s.user.is_active) else None
+# Moved to accounts.auth so the other apps can ask "who is this?" without
+# importing a views module. Re-exported here because this name is used
+# throughout the file and by callers that already import it from views.
+from .auth import current_session  # noqa: E402,F401
 
 
 def _bootstrap_superadmin():
