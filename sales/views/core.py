@@ -13,7 +13,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from ..models import SalesUpload, SalesRecord
 from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       TEXT_FIELDS, NUM_FIELDS, TEXT_MAX, DATE_FIELDS,
-                      parse_bool, is_return_type)
+                      parse_bool, is_return_type, partition_unknown)
 
 from ..forecasting import forecast_series
 from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters,
@@ -213,10 +213,12 @@ class SalesUploadView(APIView):
         if bad_value:
             warnings.append(f'{bad_value} row(s) had no sales value (treated as 0). '
                             f'Check the amount column in your export.')
-        if unknown:
-            shown = ', '.join(unknown[:12]) + (' …' if len(unknown) > 12 else '')
-            warnings.append(f'{len(unknown)} column(s) were not recognised and are ignored: '
-                            f'{shown}. Rename them to match the template if you need them.')
+        skipped, unrecognised = partition_unknown(unknown)
+        if unrecognised:
+            shown = ', '.join(unrecognised[:12]) + (' …' if len(unrecognised) > 12 else '')
+            warnings.append(f'{len(unrecognised)} column(s) were not recognised and are '
+                            f'ignored: {shown}. Rename them to match the template, or ask '
+                            f'for them to be added.')
         missing = [d for d in ('state', 'category', 'channel', 'salesperson')
                    if d not in col_map]
         if missing:
@@ -239,7 +241,13 @@ class SalesUploadView(APIView):
             'period': {'from': lo.isoformat() if lo else None,
                        'to': hi.isoformat() if hi else None},
             'detected_columns': sorted(col_map.keys()),
-            'unrecognised_columns': unknown,
+            # Split so the screen can say "skipped on purpose" and "we don't
+            # know what this is" differently. Lumping them together made every
+            # upload of a normal ERP dump look like sixteen mapping failures.
+            'skipped_columns': skipped,
+            'unrecognised_columns': unrecognised,
+            'cancelled_rows': cancelled_rows,
+            'return_rows': return_rows,
             'warnings': warnings,
         })
 

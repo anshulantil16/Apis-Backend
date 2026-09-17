@@ -318,6 +318,21 @@ _SAMPLE = [
 ]
 
 
+# Headers the Pre-Sales Dump carries that we choose not to store. Held here
+# so the upload can tell the operator "known, skipped on purpose" instead of
+# "not recognised" — the second phrasing sends somebody hunting for a mapping
+# bug that does not exist, on every single upload.
+IGNORED_HEADERS = {_norm(h) for h, used in PRE_SALES_DUMP if not used}
+
+
+def partition_unknown(unknown):
+    """-> (deliberately skipped, genuinely unrecognised)."""
+    skipped, unrecognised = [], []
+    for h in unknown:
+        (skipped if _norm(h) in IGNORED_HEADERS else unrecognised).append(h)
+    return skipped, unrecognised
+
+
 def build_template():
     """The Pre-Sales Dump template, plus a sheet explaining what is read.
 

@@ -132,6 +132,35 @@ class WhatCountsAsASale(TestCase):
         self.assertIn('credit memo', blob.lower())
 
 
+class WhatTheOperatorIsToldAboutColumns(TestCase):
+
+    def test_the_columns_we_skip_on_purpose_are_not_called_unrecognised(self):
+        """Every upload of a normal dump carries all sixteen. Reporting them
+        as failures sends somebody hunting for a mapping bug that does not
+        exist — every single time."""
+        d = upload(a_workbook([a_row()])).json()
+        self.assertEqual(d['unrecognised_columns'], [])
+        self.assertIn('Value in Lakhs', d['skipped_columns'])
+        self.assertIn('IGST %', d['skipped_columns'])
+        blob = ' '.join(d['warnings']).lower()
+        self.assertNotIn('not recognised', blob)
+
+    def test_a_column_nobody_has_seen_before_IS_reported(self):
+        names = header_names() + ['Some New Field']
+        rows = [{**a_row(), 'Some New Field': 'x'}]
+        d = upload(a_workbook(rows, headers=names)).json()
+        self.assertEqual(d['unrecognised_columns'], ['Some New Field'])
+        self.assertIn('not recognised', ' '.join(d['warnings']).lower())
+
+    def test_the_counts_come_back_for_the_screen_to_show(self):
+        d = upload(a_workbook([a_row(),
+                               a_row(**{'Cancelled': 'Yes'}),
+                               a_row(**{'Type': 'Credit Memo'})])).json()
+        self.assertEqual(d['cancelled_rows'], 1)
+        self.assertEqual(d['return_rows'], 1)
+        self.assertEqual(d['rows'], 3)
+
+
 class WhatTheMoneyColumnsMean(TestCase):
 
     def setUp(self):
