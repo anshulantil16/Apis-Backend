@@ -4,7 +4,7 @@ import io
 from datetime import date, timedelta
 
 import openpyxl
-from django.db.models import Sum, Count, Min, Max
+from django.db.models import Count, Max, Min, Sum
 from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -31,7 +31,7 @@ class SalesTemplateView(APIView):
         return resp
 
 
-def _ingest_aop(request, f, ws, header_row, header_row_index=1):
+def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
     """Load the AOP-vs-ACH sheet, unpivoting each row into one per month."""
     dims, months, unknown = AOP.map_columns(header_row)
 
@@ -39,11 +39,10 @@ def _ingest_aop(request, f, ws, header_row, header_row_index=1):
         return Response({'error': 'No month columns found. This sheet should carry '
                                   'columns like "Apr-26 AOP" and "Apr-26".'}, status=400)
 
-    upload = SalesUpload.objects.create(
-        filename=(f.name or '')[:255],
-        uploaded_by=str(request.query_params.get('user') or '')[:200],
-        status='completed',
-    )
+    # One upload row per FILE, created by the caller. A sheet does not get
+    # its own: a two-tab workbook was appearing in the list twice under the
+    # same name, which reads as having uploaded it twice.
+    watermark = SalesRecord.objects.aggregate(m=Max('id'))['m'] or 0
 
     batch, total_rev, total_target = [], 0.0, 0.0
     lo = hi = None
@@ -85,23 +84,15 @@ def _ingest_aop(request, f, ws, header_row, header_row_index=1):
         if batch:
             SalesRecord.objects.bulk_create(batch, batch_size=1000)
     except Exception as e:
-        upload.status = 'failed'
-        upload.save(update_fields=['status'])
-        upload.records.all().delete()
+        # Only this sheet's rows. The upload belongs to the file, and another
+        # sheet may already have loaded cleanly into it.
+        upload.records.filter(id__gt=watermark).delete()
         return Response({'error': f'Failed while reading row {row_no}: {e}'}, status=400)
 
-    count = upload.records.count()
+    count = upload.records.filter(id__gt=watermark).count()
     if count == 0:
-        upload.delete()
         return Response({'error': 'No usable rows — every row was empty across all months.'},
                         status=400)
-
-    sync_actual_source()
-
-    upload.row_count = count
-    upload.skipped_rows = empty_rows
-    upload.total_revenue = round(total_rev, 2)
-    upload.period_start, upload.period_end = lo, hi
 
     warnings = []
     plan_months = sorted({m for _, m, t in months if t})
@@ -135,8 +126,6 @@ def _ingest_aop(request, f, ws, header_row, header_row_index=1):
             'it and this sheet supplies the targets. Its own achievement columns are '
             'stored for reconciliation rather than added on top.')
 
-    upload.warnings = warnings
-    upload.save()
 
     return Response({
         'message': f'Imported {count:,} month-rows.',
@@ -178,6 +167,15 @@ class SalesUploadView(APIView):
         except Exception as e:
             return Response({'error': f'Cannot read file: {e}'}, status=400)
 
+        # One row in the uploaded-files list per FILE. Each sheet used to
+        # create its own, so a two-tab workbook appeared twice under the same
+        # name — which reads as having uploaded it twice by mistake.
+        upload = SalesUpload.objects.create(
+            filename=(f.name or '')[:255],
+            uploaded_by=str(request.query_params.get('user') or '')[:200],
+            status='completed',
+        )
+
         outcomes = []
         for ws in wb.worksheets:
             header_row, header_at = find_header_row(
@@ -187,17 +185,23 @@ class SalesUploadView(APIView):
             if header_row is None:
                 continue        # an empty tab is not an error
             if AOP.looks_like_aop_sheet(header_row):
-                resp = _ingest_aop(request, f, ws, header_row, header_at)
+                resp = _ingest_aop(request, upload, ws, header_row, header_at)
             else:
-                resp = _ingest_dump(request, f, ws, header_row, header_at)
+                resp = _ingest_dump(request, upload, ws, header_row, header_at)
             outcomes.append((ws.title, resp))
 
         if not outcomes:
+            upload.delete()
             return Response({'error': 'The workbook has no sheets with any data in them.'},
                             status=400)
 
         good = [(t, r) for t, r in outcomes if r.status_code == 200]
         if not good:
+            # Nothing loaded, so nothing to show. An upload row left behind
+            # here is the "0 rows - Rs 0" ghost that used to sit in the list
+            # for good, because failing only ever set a status and deleted
+            # the records underneath it.
+            upload.delete()
             # Every sheet failed. One sheet is the common case, so answer with
             # its own error rather than a summary nobody can act on.
             title, resp = outcomes[0]
@@ -208,17 +212,42 @@ class SalesUploadView(APIView):
                 resp.data['sheets'] = {t: r.data.get('error') for t, r in outcomes}
             return resp
 
+        # Counted back off the rows that actually landed, rather than carried
+        # along as the sheets are read. A running total and the table it
+        # describes drift the moment anything is skipped, and the list header
+        # then disagrees with the row beneath it.
+        sync_actual_source()
+        agg = upload.records.aggregate(
+            n=Count('id'), lo=Min('order_date'), hi=Max('order_date'))
+        # Revenue is counted over what actually sold. A cancelled invoice is
+        # stored and reported in the row count — it is a real document — but
+        # it is not money, here any more than on the dashboard.
+        earned = upload.records.exclude(is_cancelled=True).aggregate(
+            rev=Sum('net_amount'))['rev']
+        upload.row_count = agg['n'] or 0
+        upload.skipped_rows = sum(r.data.get('skipped', 0) for _, r in good)
+        upload.total_revenue = round(float(earned or 0), 2)
+        upload.period_start, upload.period_end = agg['lo'], agg['hi']
+        upload.warnings = [f'{t}: {w}' for t, r in good for w in r.data.get('warnings', [])]
+        for title, resp in outcomes:
+            if resp.status_code != 200:
+                upload.warnings.insert(
+                    0, f'{title}: not imported - {resp.data.get("error", "unreadable")}')
+        upload.save()
+
         if len(good) == 1 and len(outcomes) == 1:
-            return good[0][1]
+            single = good[0][1]
+            single.data['rows'] = upload.row_count
+            single.data['total_revenue'] = _money(upload.total_revenue)
+            return single
 
         # More than one sheet loaded: merge into one answer, and say which
         # sheet each figure came from.
         merged = {
-            'message': f'Imported {sum(r.data.get("rows", 0) for _, r in good):,} rows '
-                       f'from {len(good)} sheet(s).',
-            'rows': sum(r.data.get('rows', 0) for _, r in good),
+            'message': f'Imported {upload.row_count:,} rows from {len(good)} sheet(s).',
+            'rows': upload.row_count,
             'skipped': sum(r.data.get('skipped', 0) for _, r in good),
-            'total_revenue': round(sum(r.data.get('total_revenue', 0) for _, r in good), 2),
+            'total_revenue': _money(upload.total_revenue),
             'cancelled_rows': sum(r.data.get('cancelled_rows', 0) for _, r in good),
             'return_rows': sum(r.data.get('return_rows', 0) for _, r in good),
             'sheets': {t: {'rows': r.data.get('rows', 0),
@@ -229,16 +258,12 @@ class SalesUploadView(APIView):
                                        for c in r.data.get('skipped_columns', [])}),
             'unrecognised_columns': sorted({c for _, r in good
                                             for c in r.data.get('unrecognised_columns', [])}),
-            'warnings': [f'{t}: {w}' for t, r in good for w in r.data.get('warnings', [])],
+            'warnings': upload.warnings,
         }
-        for title, resp in outcomes:
-            if resp.status_code != 200:
-                merged['warnings'].insert(
-                    0, f'{title}: not imported — {resp.data.get("error", "unreadable")}')
         return Response(merged)
 
 
-def _ingest_dump(request, f, ws, header_row, header_row_index=1):
+def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
     """Load one Pre-Sales Dump sheet."""
     col_map, unknown = map_headers(header_row)
     # The Pre-Sales Dump's sales value is Taxable Amount, which is its own
@@ -264,11 +289,10 @@ def _ingest_dump(request, f, ws, header_row, header_row_index=1):
             return None
         return row[ci]
 
-    upload = SalesUpload.objects.create(
-        filename=(f.name or '')[:255],
-        uploaded_by=str(request.query_params.get('user') or '')[:200],
-        status='completed',
-    )
+    # One upload row per FILE, created by the caller. A sheet does not get
+    # its own: a two-tab workbook was appearing in the list twice under the
+    # same name, which reads as having uploaded it twice.
+    watermark = SalesRecord.objects.aggregate(m=Max('id'))['m'] or 0
 
     batch, total_rev = [], 0.0
     no_date = bad_value = 0
@@ -380,16 +404,13 @@ def _ingest_dump(request, f, ws, header_row, header_row_index=1):
         if batch:
             SalesRecord.objects.bulk_create(batch, batch_size=1000)
     except Exception as e:
-        upload.status = 'failed'
-        upload.save(update_fields=['status'])
-        upload.records.all().delete()
+        # Only this sheet's rows. The upload belongs to the file, and another
+        # sheet may already have loaded cleanly into it.
+        upload.records.filter(id__gt=watermark).delete()
         return Response({'error': f'Failed while reading row {row_no}: {e}'}, status=400)
 
-    sync_actual_source()
-
-    count = upload.records.count()
+    count = upload.records.filter(id__gt=watermark).count()
     if count == 0:
-        upload.delete()
         return Response({
             'error': 'No usable rows found — every row was missing a valid date.',
             'detected_columns': sorted(col_map.keys()),
@@ -425,12 +446,6 @@ def _ingest_dump(request, f, ws, header_row, header_row_index=1):
         warnings.append('No ' + ', '.join(missing) + ' column — those breakdown views '
                         'will be empty. Add the column and re-upload to enable them.')
 
-    upload.row_count = count
-    upload.skipped_rows = no_date
-    upload.total_revenue = total_rev
-    upload.period_start, upload.period_end = lo, hi
-    upload.warnings = warnings
-    upload.save()
 
     return Response({
         'message': f'Imported {count:,} rows.',

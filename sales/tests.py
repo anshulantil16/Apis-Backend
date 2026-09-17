@@ -540,6 +540,78 @@ class OneWorkbookTwoSheets(TestCase):
                         d['warnings'])
 
 
+class TheUploadedFilesList(TestCase):
+    """What the list says must match what is in the table. Reported as a
+    two-tab workbook showing twice, one line reading "0 rows - Rs 0", and a
+    header total that agreed with neither."""
+
+    def _two_sheets(self):
+        wb = openpyxl.Workbook()
+        d = wb.active
+        d.title = 'PRI SALES DUMP'
+        names = header_names()
+        d.append(names)
+        r = a_row()
+        d.append([r.get(n, '') for n in names])
+        a = wb.create_sheet('YTD,AOP vs.ACH')
+        a.append(AOP_HEADERS)
+        ar = aop_row()
+        a.append([ar.get(h, '') for h in AOP_HEADERS])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'Primary sales data.xlsx'
+        return buf
+
+    def test_one_file_makes_one_entry_however_many_sheets_it_has(self):
+        upload(self._two_sheets())
+        self.assertEqual(SalesUpload.objects.count(), 1)
+        self.assertEqual(SalesUpload.objects.get().filename, 'Primary sales data.xlsx')
+
+    def test_the_row_count_matches_the_rows_actually_stored(self):
+        upload(self._two_sheets())
+        u = SalesUpload.objects.get()
+        self.assertEqual(u.row_count, SalesRecord.objects.count())
+        self.assertEqual(u.row_count, u.records.count())
+
+    def test_the_list_total_matches_the_sum_of_its_rows(self):
+        """The header said 6,308 while the lines under it added to 4,308."""
+        upload(self._two_sheets())
+        upload(a_workbook([a_row(**{'Invoice No.': 'INV-9'})]))
+        d = self.client.get('/api/sales/uploads/').json()
+        listed = sum(u['rows'] for u in d['results'])
+        self.assertEqual(listed, d['total_rows'])
+        self.assertEqual(listed, SalesRecord.objects.count())
+
+    def test_a_file_that_fails_leaves_no_entry_behind(self):
+        """Failing used to set a status and delete the records, leaving the
+        upload row in the list for good as an empty ghost."""
+        wb = openpyxl.Workbook()
+        wb.active.append(['Alpha', 'Beta'])
+        wb.active.append([1, 2])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'junk.xlsx'
+        r = upload(buf)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(SalesUpload.objects.count(), 0)
+
+    def test_a_cancelled_invoice_is_in_the_count_but_not_in_the_money(self):
+        upload(a_workbook([a_row(), a_row(**{'Cancelled': True,
+                                             'Taxable Amount': 99999})]))
+        u = SalesUpload.objects.get()
+        self.assertEqual(u.row_count, 2)
+        self.assertEqual(float(u.total_revenue), 20000)
+
+    def test_removing_the_file_removes_everything_it_brought(self):
+        upload(self._two_sheets())
+        u = SalesUpload.objects.get()
+        self.client.delete(f'/api/sales/uploads/?id={u.id}')
+        self.assertEqual(SalesUpload.objects.count(), 0)
+        self.assertEqual(SalesRecord.objects.count(), 0)
+
+
 class TheHeaderIsNotAlwaysOnRowOne(TestCase):
     """Report exports routinely carry a title or a blank line above the table."""
 
