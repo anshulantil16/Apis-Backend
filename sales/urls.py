@@ -6,7 +6,7 @@ from .views import (
     SalesParetoView, SalesMatrixView, SalesMoversView, SalesAnomaliesView,
     SalesSeasonalityView, SalesHeatmapView, SalesRFMView, SalesCohortsView,
     SalesNewRepeatView, SalesYoYView, SalesPacingView, SalesPriceView,
-    SalesLoginView,
+    SalesLoginView, SalesOrgView,
 )
 
 urlpatterns = [
@@ -35,4 +35,6 @@ urlpatterns = [
     path('yoy/',         SalesYoYView.as_view()),
     path('pacing/',      SalesPacingView.as_view()),
     path('price/',       SalesPriceView.as_view()),
+    # The selling organisation: who reports to whom, and what each sold.
+    path('org/',         SalesOrgView.as_view()),
 ]

@@ -737,3 +737,83 @@ class TheHeaderIsNotAlwaysOnRowOne(TestCase):
         res = upload(buf)
         self.assertEqual(res.status_code, 200, res.content[:200])
         self.assertEqual(SalesRecord.objects.count(), 1)
+
+
+class TheSellingOrganisation(TestCase):
+    """Who reports to whom, and what each of them sold. Every other view
+    flattens the line, so you could rank ASMs and never see whose team they
+    were on, or how many an RSM carries."""
+
+    def setUp(self):
+        rows = []
+        for rsm, asms in (('Anil Mehra', ['Vikas Gupta', 'Ramesh Singh']),
+                          ('Sunil Rao', ['Rohit Deshmukh'])):
+            for asm in asms:
+                rows.append(a_row(**{'RSM Name': rsm, 'ASM Name': asm,
+                                     'Customer Name': f'{asm} Distributors',
+                                     'Invoice No.': f'INV-{asm[:3]}'}))
+        upload(a_workbook(rows))
+
+    def org(self, **params):
+        q = '&'.join(f'{k}={v}' for k, v in params.items())
+        return self.client.get(f'/api/sales/org/{"?" + q if q else ""}').json()
+
+    def test_the_tree_is_built_from_the_reporting_line(self):
+        d = self.org()
+        names = {n['name']: n for n in d['tree']}
+        self.assertEqual(set(names), {'Anil Mehra', 'Sunil Rao'})
+        self.assertEqual(names['Anil Mehra']['reports'], 2)
+        self.assertEqual(names['Sunil Rao']['reports'], 1)
+
+    def test_a_missing_level_is_skipped_not_fatal(self):
+        """The Pre-Sales Dump has RSM and ASM but no head. Stopping at the
+        first unnamed level left every row unplaced — an empty tree over a
+        full table."""
+        d = self.org()
+        self.assertTrue(d['tree'], 'the tree came back empty')
+        self.assertEqual(d['tree'][0]['level'], 'rsm')
+        counts = {c['level']: c['count'] for c in d['level_counts']}
+        self.assertEqual(counts['sales_head'], 0)
+        self.assertEqual(counts['rsm'], 2)
+        self.assertEqual(counts['asm'], 3)
+
+    def test_the_figures_roll_up_the_tree(self):
+        d = self.org()
+        for node in d['tree']:
+            self.assertAlmostEqual(
+                node['revenue'], sum(c['revenue'] for c in node['children']), places=2,
+                msg=f"{node['name']} does not equal its team")
+        self.assertAlmostEqual(
+            d['totals']['revenue'], sum(n['revenue'] for n in d['tree']), places=2)
+
+    def test_the_total_matches_the_dashboard(self):
+        d = self.org()
+        ov = self.client.get('/api/sales/overview/').json()
+        self.assertAlmostEqual(d['totals']['revenue'], ov['revenue'], places=2)
+
+    def test_it_counts_what_each_person_covers(self):
+        d = self.org()
+        anil = next(n for n in d['tree'] if n['name'] == 'Anil Mehra')
+        self.assertEqual(anil['customers'], 2)      # one per ASM
+        self.assertGreaterEqual(anil['skus'], 1)
+
+    def test_the_levels_can_be_geography_instead(self):
+        d = self.org(levels='zone,state')
+        self.assertEqual(d['levels'], ['zone', 'state'])
+        self.assertTrue(d['tree'])
+        self.assertEqual(d['tree'][0]['level'], 'zone')
+
+    def test_an_unknown_level_is_ignored_rather_than_queried(self):
+        """The level name reaches .values(), so anything not on the list must
+        never get through."""
+        d = self.org(levels='rsm,password,secret')
+        self.assertEqual(d['levels'], ['rsm'])
+
+    def test_filters_apply_to_the_tree_too(self):
+        d = self.org(rsm='Anil Mehra')
+        self.assertEqual([n['name'] for n in d['tree']], ['Anil Mehra'])
+
+    def test_no_target_reads_as_unknown_not_as_missed(self):
+        """0% would say they missed the plan. There is no plan."""
+        d = self.org()
+        self.assertIsNone(d['tree'][0]['achievement_pct'])
