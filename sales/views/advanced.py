@@ -134,7 +134,10 @@ class SalesYoYView(APIView):
     prior years remain visible when the user narrows the range."""
     def get(self, request):
         base, applied = apply_dim_filters(SalesRecord.objects.all(), request)
-        data = AN.year_on_year(SalesRecord.objects.all(), base)
+        # Excluded here too: this argument is the full-history set and
+        # does not pass through apply_dim_filters, so it is the one read
+        # that would otherwise still count cancelled invoices.
+        data = AN.year_on_year(SalesRecord.objects.exclude(is_cancelled=True), base)
         data['filters'] = applied
         return Response(data)
 

@@ -44,7 +44,15 @@ def _multi(request, key):
 def apply_dim_filters(qs, request):
     """Apply only the dimension filters (no dates). Split out so the
     previous-period comparison can reuse the exact same slice of the business
-    while swapping the date window."""
+    while swapping the date window.
+
+    Cancelled documents are dropped here, which makes this and apply_filters
+    the two doors every dashboard read passes through on its way to a figure.
+    Doing it per view instead would mean twenty places to remember, and the
+    one that got forgotten would quietly report a cancelled invoice as
+    revenue.
+    """
+    qs = qs.exclude(is_cancelled=True)
     applied = {}
     for f in FILTERABLE:
         vals = _multi(request, f)

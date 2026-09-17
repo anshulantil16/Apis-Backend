@@ -12,7 +12,8 @@ from rest_framework.parsers import MultiPartParser, FormParser
 
 from ..models import SalesUpload, SalesRecord
 from ..ingest import (map_headers, parse_date, parse_num, build_template,
-                      TEXT_FIELDS, NUM_FIELDS, TEXT_MAX)
+                      TEXT_FIELDS, NUM_FIELDS, TEXT_MAX, DATE_FIELDS,
+                      parse_bool, is_return_type)
 
 from ..forecasting import forecast_series
 from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters,
@@ -47,13 +48,16 @@ class SalesUploadView(APIView):
             return Response({'error': 'The sheet is empty.'}, status=400)
 
         col_map, unknown = map_headers(header_row)
-        if 'order_date' not in col_map:
+        # The Pre-Sales Dump's sales value is Taxable Amount, which is its own
+        # column rather than a spelling of "Net Amount" — so it counts here.
+        VALUE_COLUMNS = ('net_amount', 'gross_amount', 'taxable_amount')
+        if not any(c in col_map for c in ('order_date', 'invoice_date', 'posting_date')):
             return Response({
                 'error': 'No date column found. One column must be the order/invoice date.',
                 'detected_columns': sorted(col_map.keys()),
                 'unrecognised_columns': unknown,
             }, status=400)
-        if 'net_amount' not in col_map and 'gross_amount' not in col_map:
+        if not any(c in col_map for c in VALUE_COLUMNS):
             return Response({
                 'error': 'No sales value column found. Add a "Net Amount" '
                          '(or "Amount" / "Sales Value") column.',
@@ -75,6 +79,7 @@ class SalesUploadView(APIView):
 
         batch, total_rev = [], 0.0
         no_date = bad_value = 0
+        cancelled_rows = return_rows = 0
         lo = hi = None
         row_no = 1
         try:
@@ -82,17 +87,59 @@ class SalesUploadView(APIView):
                 row_no += 1
                 if not any(v is not None and str(v).strip() != '' for v in row):
                     continue
-                od = parse_date(cell(row, 'order_date'))
+                # Invoice Date and Posting Date now map to their own columns,
+                # so they no longer double as aliases for Order Date. An export
+                # that carries only one of them must still land in a month, so
+                # they remain the fallback here, in that order.
+                od = (parse_date(cell(row, 'order_date'))
+                      or parse_date(cell(row, 'invoice_date'))
+                      or parse_date(cell(row, 'posting_date')))
                 if od is None:
                     no_date += 1
                     continue
 
+                # ── is this row a sale at all? ────────────────────────
+                # An ERP dump carries cancelled invoices and credit memos in
+                # the same sheet as live sales. Both are kept — they are real
+                # documents and the ledger has to reconcile — but a cancelled
+                # row must never reach a sales figure.
+                cancelled = parse_bool(cell(row, 'is_cancelled'))
+                doc_type = cell(row, 'document_type')
+                returned = is_return_type(doc_type)
+                if cancelled:
+                    cancelled_rows += 1
+                if returned:
+                    return_rows += 1
+
+                # ── money ─────────────────────────────────────────────────
+                # Taxable Amount is the sales value the business reports on:
+                # after scheme and discount, before GST. It wins over a
+                # generic "amount" column when the dump carries both.
+                taxable = parse_num(cell(row, 'taxable_amount'))
                 gross = parse_num(cell(row, 'gross_amount'))
                 net = parse_num(cell(row, 'net_amount'))
+
+                inv_disc = parse_num(cell(row, 'invoice_discount'))
+                retail = parse_num(cell(row, 'retail_scheme'))
+                wholesale = parse_num(cell(row, 'wholesale_scheme'))
+                igst = parse_num(cell(row, 'igst_amount'))
+                cgst = parse_num(cell(row, 'cgst_amount'))
+                sgst = parse_num(cell(row, 'sgst_amount'))
+
+                if taxable:
+                    net = taxable
+                # Discount and tax are summed from their parts when the dump
+                # splits them, rather than asking for a pre-totalled column
+                # that would then disagree with the parts beside it.
+                discount = parse_num(cell(row, 'discount')) or (inv_disc + retail + wholesale)
+                tax = parse_num(cell(row, 'tax')) or (igst + cgst + sgst)
+
+                if not gross and net:
+                    gross = net + discount
                 # Fall back to gross when the export has no explicit net column.
                 if not net and gross:
-                    net = gross - parse_num(cell(row, 'discount'))
-                if not net and not gross:
+                    net = gross - discount
+                if not net and not gross and not cancelled:
                     bad_value += 1
 
                 rec = SalesRecord(
@@ -102,17 +149,30 @@ class SalesUploadView(APIView):
                     quantity=parse_num(cell(row, 'quantity')),
                     unit_price=parse_num(cell(row, 'unit_price')),
                     gross_amount=gross,
-                    discount=parse_num(cell(row, 'discount')),
-                    tax=parse_num(cell(row, 'tax')),
+                    discount=discount,
+                    tax=tax,
                     net_amount=net,
                     target_amount=parse_num(cell(row, 'target_amount')),
+                    is_cancelled=cancelled,
+                    is_return=returned,
                 )
                 for tf in TEXT_FIELDS:
                     v = cell(row, tf)
                     s = '' if v is None else str(v).strip()
                     setattr(rec, tf, s[:TEXT_MAX.get(tf, 150)])
+                for nf in NUM_FIELDS:
+                    # The headline five are derived above; the rest are stored
+                    # verbatim so the sheet can be reconciled against the ERP.
+                    if nf in ('quantity', 'unit_price', 'gross_amount', 'discount',
+                              'tax', 'net_amount', 'target_amount'):
+                        continue
+                    setattr(rec, nf, parse_num(cell(row, nf)))
+                for df in DATE_FIELDS:
+                    setattr(rec, df, parse_date(cell(row, df)))
                 batch.append(rec)
-                total_rev += net
+                # A cancelled invoice is not revenue.
+                if not cancelled:
+                    total_rev += net
                 lo = od if lo is None or od < lo else lo
                 hi = od if hi is None or od > hi else hi
 
@@ -137,6 +197,16 @@ class SalesUploadView(APIView):
             }, status=400)
 
         warnings = []
+        if cancelled_rows:
+            warnings.append(
+                f'{cancelled_rows} cancelled row(s) were loaded but are excluded from '
+                f'every sales figure. They stay in the data so the file still '
+                f'reconciles against the ERP.')
+        if return_rows:
+            warnings.append(
+                f'{return_rows} credit memo / return row(s) found. Their amounts are '
+                f'stored exactly as the file gives them — if your export writes returns '
+                f'as positive numbers, tell us and we will flip the sign on load.')
         if no_date:
             warnings.append(f'{no_date} row(s) skipped — the date column was empty or '
                             f'unreadable. Those sales are NOT in the dashboard.')
@@ -359,7 +429,10 @@ class SalesFiltersView(APIView):
     """Distinct values for every filter, so the UI can populate its dropdowns."""
 
     def get(self, request):
-        qs = SalesRecord.objects.all()
+        # Cancelled rows are excluded from every figure, so offering their
+        # values here would put a customer in the dropdown that returns an
+        # empty dashboard when picked.
+        qs = SalesRecord.objects.exclude(is_cancelled=True)
         out = {}
         for f in FILTERABLE:
             vals = (qs.exclude(**{f: ''}).values_list(f, flat=True)

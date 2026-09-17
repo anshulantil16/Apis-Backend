@@ -83,6 +83,76 @@ class SalesRecord(models.Model):
     net_amount    = models.DecimalField(max_digits=18, decimal_places=2, default=0, db_index=True)
     target_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 
+
+    # ── Document identity (Pre-Sales Dump) ────────────────────────────────
+    # Whether a row counts as a sale at all is decided here, not in the money
+    # columns. An ERP dump carries cancelled invoices and credit memos in the
+    # same sheet as live sales; counting them is how a dashboard quietly
+    # overstates the year.
+    document_type  = models.CharField(max_length=60, blank=True, db_index=True)
+    is_cancelled   = models.BooleanField(default=False, db_index=True)
+    # True for a credit memo / return. Kept as its own flag rather than
+    # inferred at query time so every aggregate agrees on what a return is.
+    is_return      = models.BooleanField(default=False, db_index=True)
+
+    invoice_date    = models.DateField(null=True, blank=True)
+    posting_date    = models.DateField(null=True, blank=True)
+    external_doc_no = models.CharField(max_length=100, blank=True)
+    sales_order_no  = models.CharField(max_length=100, blank=True)
+    reason_code     = models.CharField(max_length=80, blank=True)
+    remarks         = models.CharField(max_length=500, blank=True)
+
+    # ── Customer detail ───────────────────────────────────────────────────
+    customer_district   = models.CharField(max_length=150, blank=True, db_index=True)
+    customer_state_code = models.CharField(max_length=20, blank=True)
+    customer_gst        = models.CharField(max_length=30, blank=True)
+    # Customer Posting Group / Customer Price Group in the dump. Named for
+    # what the business calls them rather than what the ERP calls them.
+    business_type   = models.CharField(max_length=100, blank=True, db_index=True)
+    warehouse_type  = models.CharField(max_length=100, blank=True, db_index=True)
+    subzone         = models.CharField(max_length=100, blank=True, db_index=True)
+
+    # ── Selling location (the branch/depot that billed it) ────────────────
+    location       = models.CharField(max_length=150, blank=True, db_index=True)
+    location_state = models.CharField(max_length=100, blank=True)
+
+    # ── Product detail ────────────────────────────────────────────────────
+    item_alt_code  = models.CharField(max_length=100, blank=True)   # I-CODE
+    packaging_type = models.CharField(max_length=100, blank=True)
+    item_sub_type  = models.CharField(max_length=100, blank=True)
+    variant        = models.CharField(max_length=150, blank=True)
+    prod_group     = models.CharField(max_length=150, blank=True)
+    hsn_code       = models.CharField(max_length=40, blank=True)
+    batch_no       = models.CharField(max_length=80, blank=True)
+    # Packed / expiry, so ageing stock and short-shelf-life dispatch are
+    # answerable from the same table.
+    packed_on      = models.DateField(null=True, blank=True)
+    use_by         = models.DateField(null=True, blank=True)
+    mrp            = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    # FMCG plans and reports in tonnes as much as in rupees.
+    gross_weight_kg = models.DecimalField(max_digits=16, decimal_places=3, default=0)
+    net_weight_kg   = models.DecimalField(max_digits=16, decimal_places=3, default=0)
+
+    # ── Money detail ──────────────────────────────────────────────────────
+    # The invoice's own taxable value. `net_amount` is set from this, because
+    # sales are reported net of scheme and before GST; this column keeps the
+    # source figure so the two can be reconciled against the ERP.
+    taxable_amount      = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    invoice_discount    = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    retail_scheme       = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    wholesale_scheme    = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    igst_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    cgst_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    sgst_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    tcs_amount  = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    total_with_tax = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    gst_jurisdiction = models.CharField(max_length=40, blank=True)
+
+    # Export billing. Blank on a domestic row.
+    currency_code  = models.CharField(max_length=10, blank=True)
+    exchange_rate  = models.DecimalField(max_digits=16, decimal_places=6, default=0)
+    line_amount_fc = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -94,6 +164,8 @@ class SalesRecord(models.Model):
             models.Index(fields=['period', 'category']),
             models.Index(fields=['period', 'salesperson']),
             models.Index(fields=['period', 'channel']),
+            # Every headline figure filters cancelled rows out first.
+            models.Index(fields=['is_cancelled', 'period']),
         ]
 
     def __str__(self):

@@ -17,11 +17,29 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 COLUMN_ALIASES = {
     'order_date':    ['order date', 'date', 'invoice date', 'bill date', 'txn date',
                       'transaction date', 'sale date', 'posting date', 'month'],
+    'invoice_date':  ['invoice date'],
+    'posting_date':  ['posting date'],
+    'document_type': ['type', 'document type', 'doc type', 'entry type'],
+    'is_cancelled':  ['cancelled', 'canceled', 'is cancelled', 'cancel'],
+    'external_doc_no': ['external doc no', 'external document no', 'ext doc no'],
+    'sales_order_no':  ['sales order no', 'so no', 'sales order number'],
+    'reason_code':     ['reason code'],
+    'remarks':         ['v remars', 'v remarks', 'remarks', 'remark', 'narration'],
     'invoice_no':    ['invoice no', 'invoice number', 'invoice', 'bill no', 'bill number',
                       'document no', 'order no', 'order number'],
     'zone':          ['zone', 'sales zone'],
     'state':         ['state', 'state name', 'billing state', 'customer state'],
-    'city':          ['city', 'town', 'city name', 'billing city'],
+    'city':          ['city', 'town', 'city name', 'billing city', 'customer city'],
+    'subzone':       ['subzone', 'sub zone'],
+    'customer_district':   ['customer district', 'cust district'],
+    'customer_state_code': ['cust state code', 'customer state code', 'state code'],
+    'customer_gst':        ['cust gst reg', 'customer gst reg', 'customer gstin', 'gstin'],
+    'business_type':  ['customer posting group business type', 'customer posting group',
+                       'business type', 'cust posting group'],
+    'warehouse_type': ['customer price group warehousetype', 'customer price group',
+                       'customer price group warehouse type', 'warehouse type'],
+    'location':       ['location', 'branch', 'depot', 'plant'],
+    'location_state': ['location state'],
     'area':          ['area', 'area name', 'district', 'beat', 'sales area'],
     'region':        ['region', 'region name'],
     'sku':           ['sku', 'sku code', 'item code', 'product code', 'material code',
@@ -29,23 +47,40 @@ COLUMN_ALIASES = {
     'product_name':  ['product', 'product name', 'item name', 'item description',
                       'material description', 'description'],
     'category':      ['category', 'product category', 'item category', 'segment'],
-    'sub_category':  ['sub category', 'subcategory', 'sub segment', 'product sub category'],
+    'sub_category':  ['sub category', 'subcategory', 'sub segment', 'product sub category',
+                      'item sub category sub brand', 'item sub category'],
     'brand':         ['brand', 'brand name'],
     'pack_size':     ['pack size', 'pack', 'size', 'grammage', 'weight'],
-    'uom':           ['uom', 'unit', 'unit of measure'],
-    'channel':       ['channel', 'sales channel', 'trade channel', 'route to market'],
-    'customer_code': ['customer code', 'party code', 'distributor code', 'dealer code',
-                      'buyer code', 'account code'],
+    'uom':           ['uom', 'unit', 'unit of measure', 'unit of measure code'],
+    'item_alt_code':  ['i code', 'icode', 'alt item code'],
+    'packaging_type': ['packeging type', 'packaging type', 'pack type'],
+    'item_sub_type':  ['item sub type'],
+    'variant':        ['variant'],
+    'prod_group':     ['prod group', 'product group'],
+    'hsn_code':       ['hsn code', 'hsn', 'hsn sac'],
+    'batch_no':       ['batch no', 'batch', 'batch number', 'lot no'],
+    'packed_on':      ['pkd', 'packed on', 'packing date', 'mfg date'],
+    'use_by':         ['use by', 'expiry', 'expiry date', 'best before'],
+    'mrp':            ['mrp'],
+    'gross_weight_kg': ['gross weight in kg', 'gross weight'],
+    'net_weight_kg':   ['net weight in kg', 'net weight'],
+    'channel':       ['channel', 'sales channel', 'trade channel', 'route to market',
+                      'gen bus posting group'],
+    'customer_code': ['customer code', 'customer no', 'party code', 'distributor code',
+                      'dealer code', 'buyer code', 'account code'],
     'customer_name': ['customer', 'customer name', 'party name', 'distributor',
                       'distributor name', 'dealer', 'dealer name', 'buyer', 'account name'],
     'customer_type': ['customer type', 'party type', 'account type'],
     'salesperson':   ['salesperson', 'sales person', 'sales executive', 'se', 'so',
                       'sales officer', 'executive', 'employee name', 'sales rep'],
-    'asm':           ['asm', 'area sales manager', 'area manager'],
-    'rsm':           ['rsm', 'regional sales manager', 'regional manager'],
+    'asm':           ['asm', 'asm name', 'area sales manager', 'area manager'],
+    'rsm':           ['rsm', 'rsm name', 'regional sales manager', 'regional manager'],
     'territory':     ['territory', 'territory name', 'beat name'],
     'quantity':      ['quantity', 'qty', 'sales qty', 'billed qty', 'volume', 'units'],
-    'unit_price':    ['unit price', 'rate', 'price', 'mrp', 'selling price'],
+    # 'mrp' deliberately absent: the dump carries Unit Price AND MRP as
+    # separate columns, and they are different numbers — the price actually
+    # charged versus the price printed on the pack.
+    'unit_price':    ['unit price', 'rate', 'price', 'selling price'],
     'gross_amount':  ['gross amount', 'gross', 'gross value', 'gross sales'],
     'discount':      ['discount', 'discount amount', 'scheme', 'scheme amount'],
     'tax':           ['tax', 'gst', 'tax amount', 'gst amount'],
@@ -53,14 +88,49 @@ COLUMN_ALIASES = {
                       'sales', 'revenue', 'total', 'net revenue', 'value', 'net'],
     'target_amount': ['target', 'target amount', 'budget', 'budget amount', 'plan',
                       'target value', 'goal'],
+
+    # Pre-Sales Dump money columns. The percentage columns beside each of
+    # these (Invoice Disc.%, Retail Scheme %, IGST %, TCS % and the rest)
+    # are deliberately not read: every one is derivable from its own amount
+    # and the taxable value, and a stored percentage that disagrees with the
+    # amount next to it is a number nobody can act on.
+    'taxable_amount':   ['taxable amount', 'taxable value'],
+    'invoice_discount': ['invoice disc amt', 'invoice discount amount',
+                         'invoice disc amount'],
+    'retail_scheme':    ['retail scheme amt', 'retail scheme amount'],
+    'wholesale_scheme': ['wholesale scheme amt', 'wholesale scheme amount'],
+    'igst_amount':      ['igst amount', 'igst amt'],
+    'cgst_amount':      ['cgst amount', 'cgst amt'],
+    'sgst_amount':      ['sgst amount', 'sgst amt'],
+    'tcs_amount':       ['tcs amount', 'tcs amt'],
+    'total_with_tax':   ['total line amount gst tcs', 'total line amount'],
+    'gst_jurisdiction': ['gst jurisdiction type', 'gst jurisdiction'],
+    'currency_code':    ['currency code', 'currency'],
+    'exchange_rate':    ['exchange rate'],
+    'line_amount_fc':   ['line amount fc', 'line amount foreign currency'],
 }
 
 TEXT_FIELDS = ['invoice_no', 'zone', 'state', 'city', 'area', 'region', 'sku',
                'product_name', 'category', 'sub_category', 'brand', 'pack_size', 'uom',
                'channel', 'customer_code', 'customer_name', 'customer_type',
-               'salesperson', 'asm', 'rsm', 'territory']
+               'salesperson', 'asm', 'rsm', 'territory',
+               # Pre-Sales Dump
+               'document_type', 'external_doc_no', 'sales_order_no', 'reason_code',
+               'remarks', 'customer_district', 'customer_state_code', 'customer_gst',
+               'business_type', 'warehouse_type', 'subzone', 'location', 'location_state',
+               'item_alt_code', 'packaging_type', 'item_sub_type', 'variant',
+               'prod_group', 'hsn_code', 'batch_no', 'gst_jurisdiction', 'currency_code']
 NUM_FIELDS = ['quantity', 'unit_price', 'gross_amount', 'discount', 'tax',
-              'net_amount', 'target_amount']
+              'net_amount', 'target_amount',
+              # Pre-Sales Dump
+              'taxable_amount', 'invoice_discount', 'retail_scheme', 'wholesale_scheme',
+              'igst_amount', 'cgst_amount', 'sgst_amount', 'tcs_amount',
+              'total_with_tax', 'mrp', 'gross_weight_kg', 'net_weight_kg',
+              'exchange_rate', 'line_amount_fc']
+
+# Parsed with parse_date rather than parse_num, and nullable — an absent
+# expiry is not the same as 1970.
+DATE_FIELDS = ['invoice_date', 'posting_date', 'packed_on', 'use_by']
 
 # Max chars per text field, mirroring the model's max_length values so a long
 # free-text cell truncates instead of raising a DB "Data too long" error.
@@ -69,13 +139,49 @@ TEXT_MAX = {
     'sku': 100, 'product_name': 255, 'category': 150, 'sub_category': 150, 'brand': 150,
     'pack_size': 80, 'uom': 40, 'channel': 100, 'customer_code': 100, 'customer_name': 255,
     'customer_type': 100, 'salesperson': 200, 'asm': 200, 'rsm': 200, 'territory': 150,
+    'document_type': 60, 'external_doc_no': 100, 'sales_order_no': 100, 'reason_code': 80,
+    'remarks': 500, 'customer_district': 150, 'customer_state_code': 20, 'customer_gst': 30,
+    'business_type': 100, 'warehouse_type': 100, 'subzone': 100, 'location': 150,
+    'location_state': 100, 'item_alt_code': 100, 'packaging_type': 100, 'item_sub_type': 100,
+    'variant': 150, 'prod_group': 150, 'hsn_code': 40, 'batch_no': 80,
+    'gst_jurisdiction': 40, 'currency_code': 10,
 }
+
+# Spellings of "yes" seen in ERP exports. Anything else — including a blank,
+# a 0, or the word "No" — means not cancelled. Deliberately a whitelist: a
+# cancelled invoice wrongly treated as live overstates sales, so an
+# unrecognised value must not accidentally read as true.
+TRUTHY = {'yes', 'y', 'true', '1', 'cancelled', 'canceled', 'x'}
+
+# A credit memo is a return: money going back out. The dump carries them in
+# the same sheet as live invoices.
+RETURN_TYPES = {'credit memo', 'credit note', 'return', 'sales credit memo',
+                'crmemo', 'cr memo'}
+
+
+def parse_bool(v):
+    """Is this cell saying yes?"""
+    if v is None:
+        return False
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    return str(v).strip().lower() in TRUTHY
+
+
+def is_return_type(v):
+    """Does this document type mean stock came back?"""
+    s = _norm(v)
+    return bool(s) and (s in RETURN_TYPES or 'credit memo' in s or s.startswith('return'))
 
 
 def _norm(h):
     """Normalise a header cell for alias matching."""
     s = str(h or '').strip().lower().replace('*', '')
-    for ch in ('_', '-', '.', '/', '(', ')', ':'):
+    # '&' belongs here too: 'Total Line Amount GST & TCS' otherwise keeps
+    # its ampersand and matches no alias anyone would think to write.
+    for ch in ('_', '-', '.', '/', '(', ')', ':', '&'):
         s = s.replace(ch, ' ')
     return ' '.join(s.split())
 
@@ -154,103 +260,156 @@ def parse_num(v, default=0.0):
     return -val if neg else val
 
 
+# The Pre-Sales Dump, column for column, in the order the ERP writes it.
+# (header, is_read) — a False here means the column is allowed to be present
+# and is deliberately not stored. Keeping the ignored ones IN the template is
+# the point: the export is pasted in whole, and a column listed as ignored is
+# a decision somebody can argue with, where a column silently dropped is not.
+PRE_SALES_DUMP = [
+    ('Customer Type', True), ('Type', True), ('Order Date *', True),
+    ('Customer No.', True), ('Customer Name', True), ('Cust.State Code', True),
+    ('Customer City', True), ('Customer District', True), ('Key', False),
+    ('Zone', True), ('Subzone', True), ('RSM Name', True), ('ASM Name', True),
+    ('Invoice Date', True), ('Invoice No.', True), ('Posting Date', True),
+    ('External Doc. No.', True), ('Cust. GST Reg.', True), ('Location', True),
+    ('Location State', True), ('Location Gst Reg.', False), ('Global Dim1', False),
+    ('Packeging Type', True), ('Item Sub Type', True), ('Currency Code', True),
+    ('Gen. Bus. Posting Group', True), ('Item Code', True), ('Item Name', True),
+    ('Pack Size', True), ('Batch No.', True), ('PKD', True), ('Use By', True),
+    ('Quantity', True), ('Unit Of Measure Code', True), ('HSN Code', True),
+    ('Unit Price', True),
+    ('Invoice Disc.%', False), ('Invoice Disc.Amt', True),
+    ('Retail Scheme %', False), ('Retail Scheme Amt', True),
+    ('Wholesale Scheme %', False), ('Wholesale Scheme Qty Slab', False),
+    ('Wholesale Scheme Amt', True),
+    ('Taxable Amount *', True), ('Value in Lakhs', False),
+    ('Total Line Amount GST & TCS', True),
+    ('TCS Section Code', False), ('TCS Aseessee Code', False), ('TCS %', False),
+    ('TCS Amount', True), ('GST Jurisdiction Type', True),
+    ('Line Amount(FC)', True), ('Exchange Rate', True),
+    ('IGST %', False), ('IGST Amount', True),
+    ('CGST %', False), ('CGST Amount', True),
+    ('SGST %', False), ('SGST Amount', True),
+    ('I-CODE', True), ('Item Category', True),
+    ('Item Sub Category (Sub Brand)', True), ('Variant', True), ('Prod. Group', True),
+    ('GL Account No.', False), ('GL Account Name', False),
+    ('Gross Weight In(Kg)', True), ('Net Weight In(Kg)', True),
+    ('Sales Order No.', True), ('MRP', True), ('Cancelled *', True),
+    ('Customer Posting Group(Business type)', True),
+    ('Customer Price Group(warehousetype)', True),
+    ('Reason Code', True), ('V-REMARS', True),
+]
+
+# One filled line, so the shape of a row is obvious. Values follow the header
+# order above exactly.
+_SAMPLE = [
+    'Distributor', 'Invoice', '2026-04-05', 'CUST-001', 'Sharma Traders', '07',
+    'New Delhi', 'Central Delhi', '', 'North', 'Delhi NCR', 'Anil Mehra',
+    'Vikas Gupta', '2026-04-05', 'INV-1001', '2026-04-05', 'PO-9981',
+    '07AABCA1234A1Z5', 'Delhi Depot', 'Delhi', '', '', 'Jar', 'Honey', 'INR',
+    'DOMESTIC', 'APS-HNY-500', 'APIS Himalaya Honey 500g', '500g', 'B-2604',
+    '2026-03-01', '2028-02-29', 120, 'PCS', '04090000', 250,
+    5, 1500, 2, 600, 1, '', 300, 27600, 0.28, 30084,
+    '', '', 0, 0, 'Intra-State', 0, 0,
+    0, 0, 9, 1242, 9, 1242,
+    'IC-4412', 'Honey', 'Natural Honey', 'Squeeze', 'Honey Group',
+    '', '', 62.5, 60.0, 'SO-3321', 280, 'No',
+    'Domestic Customer', 'Depot', '', '',
+]
+
+
 def build_template():
-    """Excel template: one sheet of columns + a reference sheet explaining them."""
+    """The Pre-Sales Dump template, plus a sheet explaining what is read.
+
+    The upload reads headers by alias rather than by position, so a raw ERP
+    export can be dropped in as-is and this template is really documentation
+    of what SalesIQ does with each column.
+    """
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = 'Sales Data'
+    ws.title = 'Pre Sales Dump'
 
-    groups = [
-        ('When',     ['Order Date *', 'Invoice No'],                                  '1F4E79'),
-        ('Where',    ['Zone', 'State', 'City', 'Area', 'Region'],                     '2E75B6'),
-        ('Product',  ['SKU', 'Product Name', 'Category', 'Sub Category', 'Brand',
-                      'Pack Size', 'UOM'],                                            '548235'),
-        ('Customer', ['Channel', 'Customer Code', 'Customer Name', 'Customer Type'],  'BF8F00'),
-        ('Sales Team', ['Salesperson', 'ASM', 'RSM', 'Territory'],                    '7030A0'),
-        ('Money',    ['Quantity', 'Unit Price', 'Gross Amount', 'Discount', 'Tax',
-                      'Net Amount *', 'Target Amount'],                               'C00000'),
-    ]
-    headers, colours = [], []
-    for _, cols, colour in groups:
-        headers += cols
-        colours += [colour] * len(cols)
+    READ = '1F4E79'        # stored
+    KEY = 'C00000'         # stored and load-bearing (marked *)
+    IGNORED = '808080'     # allowed through, deliberately not stored
 
     border = Border(*(Side(style='thin'),) * 4)
-    for ci, (h, colour) in enumerate(zip(headers, colours), 1):
+    for ci, (h, used) in enumerate(PRE_SALES_DUMP, 1):
+        colour = (KEY if '*' in h else READ) if used else IGNORED
         c = ws.cell(row=1, column=ci, value=h)
         c.fill = PatternFill(start_color=colour, end_color=colour, fill_type='solid')
-        c.font = Font(color='FFFFFF', bold=True, size=10)
+        c.font = Font(color='FFFFFF', bold=True, size=9)
         c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         c.border = border
+        ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = \
+            max(12, min(len(h) + 2, 26))
 
-    # Sample rows using APIS India's actual product range.
-    samples = [
-        ['2026-04-05', 'INV-1001', 'North', 'Delhi', 'New Delhi', 'Karol Bagh', 'North 1',
-         'APS-HNY-500', 'APIS Himalaya Honey 500g', 'Honey', 'Natural Honey', 'APIS',
-         '500g', 'PCS', 'Distributor', 'CUST-001', 'Sharma Traders', 'Distributor',
-         'Rahul Sharma', 'Vikas Gupta', 'Anil Mehra', 'Delhi North',
-         120, 250, 30000, 1500, 1425, 29925, 35000],
-        ['2026-04-08', 'INV-1002', 'North', 'Punjab', 'Ludhiana', 'Model Town', 'North 2',
-         'APS-DTS-500', 'APIS Premium Dates 500g', 'Dates', 'Seedless Dates', 'APIS',
-         '500g', 'PCS', 'Modern Trade', 'CUST-014', 'BigBasket', 'Modern Trade',
-         'Priya Singh', 'Vikas Gupta', 'Anil Mehra', 'Punjab Central',
-         80, 320, 25600, 2000, 1180, 24780, 22000],
-        ['2026-04-12', 'INV-1003', 'West', 'Maharashtra', 'Mumbai', 'Andheri', 'West 1',
-         'APS-JAM-450', 'APIS Mixed Fruit Jam 450g', 'Jams & Spreads', 'Fruit Jam', 'APIS',
-         '450g', 'PCS', 'E-Commerce', 'CUST-021', 'Amazon Retail', 'E-Commerce',
-         'Amit Kumar', 'Rohit Deshmukh', 'Sunil Rao', 'Mumbai West',
-         200, 180, 36000, 3600, 1620, 34020, 40000],
-        ['2026-04-15', 'INV-1004', 'South', 'Karnataka', 'Bengaluru', 'Koramangala', 'South 1',
-         'APS-GHE-1L', 'APIS Pure Cow Ghee 1L', 'Ghee', 'Cow Ghee', 'APIS',
-         '1L', 'PCS', 'Retail', 'CUST-033', 'Sri Lakshmi Stores', 'Retailer',
-         'Neha Gupta', 'Karthik Iyer', 'Sunil Rao', 'Bengaluru South',
-         45, 720, 32400, 800, 1580, 33180, 30000],
-        ['2026-05-03', 'INV-1005', 'East', 'West Bengal', 'Kolkata', 'Salt Lake', 'East 1',
-         'APS-HNY-1KG', 'APIS Himalaya Honey 1kg', 'Honey', 'Natural Honey', 'APIS',
-         '1kg', 'PCS', 'Distributor', 'CUST-045', 'Bose Enterprises', 'Distributor',
-         'Sourav Das', 'Debasish Roy', 'Anil Mehra', 'Kolkata East',
-         150, 460, 69000, 3450, 3277, 68827, 65000],
-    ]
-    for ri, row in enumerate(samples, 2):
-        for ci, v in enumerate(row, 1):
-            c = ws.cell(row=ri, column=ci, value=v)
-            c.border = border
+    for ci, v in enumerate(_SAMPLE, 1):
+        ws.cell(row=2, column=ci, value=v).border = border
 
-    widths = {1: 14, 2: 14, 9: 28, 18: 22, 19: 16, 20: 16, 21: 16}
-    for i in range(1, len(headers) + 1):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = widths.get(i, 16)
-    ws.freeze_panes = 'A2'
+    ws.row_dimensions[1].height = 46
+    ws.freeze_panes = 'D2'
+
+    # Text on the two columns Excel likes to reinterpret. A batch number such
+    # as 042026 loses its leading zero as a number, and a date typed as
+    # "Apr-26" stops being text at all.
+    for header in ('Batch No.', 'Cancelled *'):
+        names = [h for h, _ in PRE_SALES_DUMP]
+        if header in names:
+            letter = openpyxl.utils.get_column_letter(names.index(header) + 1)
+            for r in range(2, 5002):
+                ws[f'{letter}{r}'].number_format = '@'
 
     # ── Reference sheet ──
     ref = wb.create_sheet('How To Use')
-    ref.column_dimensions['A'].width = 26
+    ref.column_dimensions['A'].width = 30
     ref.column_dimensions['B'].width = 96
     rows = [
-        ('SalesIQ — Upload Guide', ''),
+        ('SalesIQ — Primary Sales Upload', ''),
         ('', ''),
-        ('Required', 'Only TWO columns are mandatory: Order Date and Net Amount. '
-                     'Everything else is optional — fill what you have.'),
-        ('More columns = more insight',
-         'Each optional column unlocks its own analysis. No State column means no '
-         'state-wise view; no Salesperson means no team leaderboard.'),
-        ('Column names are flexible',
-         'Headers are auto-detected. "State", "STATE NAME" and "Billing State" all map '
-         'to the same field. Unrecognised columns are reported after upload, not dropped '
-         'silently.'),
-        ('Net Amount', 'The headline sales figure every KPI is built on. If you only have '
-                       'a single "Amount" or "Sales Value" column, name it that — it maps here.'),
-        ('Target Amount', 'Optional. Fill it and the dashboard adds achievement %, '
-                          'gap-to-target and who is behind plan. Leave blank to skip.'),
-        ('Quantity', 'Optional but recommended — enables volume analysis alongside value, '
-                     'which is how you spot price-led vs volume-led growth.'),
-        ('Dates', 'Any common format works: 2026-04-05, 05-04-2026, 05/04/2026, 5 Apr 2026. '
-                  'Day-first is assumed for ambiguous dates (05-04-2026 = 5 April).'),
-        ('Row granularity', 'Invoice-line level is ideal. Pre-aggregated monthly rows also '
-                            'work — just put the first of the month as Order Date.'),
-        ('Forecasting', '6+ months of history enables trend forecasting; 24+ months enables '
-                        'seasonal forecasting. Upload as much history as you have.'),
-        ('Multiple uploads', 'Uploads add to the dataset. Each upload can be removed '
-                             'individually from the dashboard if you load the wrong file.'),
+        ('Drop the export in as-is',
+         'Headers are matched by name, not by position. Export the Pre-Sales Dump from '
+         'the ERP and upload it — columns may be reordered, renamed slightly, or absent.'),
+        ('Blue columns', 'Read and stored.'),
+        ('Red columns (*)',
+         'Load-bearing. Order Date decides which month a sale lands in, Taxable Amount is '
+         'the sales value every figure is built on, and Cancelled decides whether the row '
+         'counts at all.'),
+        ('Grey columns',
+         'Allowed to be present and deliberately not stored. Every percentage column '
+         '(Invoice Disc.%, Retail Scheme %, IGST %, TCS %) is derivable from the amount '
+         'beside it, and a stored percentage that disagrees with its own amount is a '
+         'number nobody can act on. Value in Lakhs is Taxable Amount restated. Key, '
+         'Global Dim1, GL Account and the TCS code columns are ledger plumbing, not sales.'),
+        ('Cancelled',
+         'Loaded, then excluded from every sales figure — so the file still reconciles '
+         'against the ERP while no cancelled invoice is ever reported as revenue. '
+         'Anything other than Yes / Y / True / 1 is read as NOT cancelled, on purpose: '
+         'an unrecognised value must not accidentally hide a real sale.'),
+        ('Type / credit memos',
+         'A Credit Memo is flagged as a return. Amounts are stored exactly as the file '
+         'gives them. If your export writes returns as POSITIVE numbers, say so — they '
+         'would otherwise add to sales instead of reducing them.'),
+        ('Taxable Amount vs Total Line Amount',
+         'Taxable Amount (after scheme and discount, before GST) is what the dashboards '
+         'report. Total Line Amount GST & TCS is stored alongside it for reconciliation.'),
+        ('Discount and tax',
+         'Summed from their parts — Invoice Disc.Amt + Retail Scheme Amt + Wholesale '
+         'Scheme Amt, and IGST + CGST + SGST — rather than asking for a pre-totalled '
+         'column that would then disagree with the parts beside it.'),
+        ('Dates',
+         'Any common format works: 2026-04-05, 05-04-2026, 5 Apr 2026. Day-first is '
+         'assumed for ambiguous dates, so 05-04-2026 is 5 April. PKD and Use By are '
+         'read the same way, so shelf-life reporting works off the same upload.'),
+        ('Weights',
+         'Gross and Net Weight In(Kg) are stored, so volume can be reported in tonnes '
+         'as well as in rupees.'),
+        ('Unrecognised columns',
+         'Reported back after upload rather than dropped silently. If something you '
+         'need shows up in that list, tell us and it gets mapped.'),
+        ('Multiple uploads',
+         'Uploads add to the dataset, and any single upload can be removed again from '
+         'the dashboard if the wrong file goes in.'),
     ]
     for ri, (a, b) in enumerate(rows, 1):
         ref.cell(row=ri, column=1, value=a).font = Font(bold=True, size=12 if ri == 1 else 10)
