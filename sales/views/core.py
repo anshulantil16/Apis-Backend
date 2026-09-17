@@ -14,7 +14,7 @@ from ..models import SalesUpload, SalesRecord, sync_actual_source
 from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       TEXT_FIELDS, NUM_FIELDS, TEXT_MAX, DATE_FIELDS,
                       parse_bool, is_return_type, partition_unknown,
-                      state_from_code, find_header_row)
+                      state_from_code, state_from_subregion, find_header_row)
 from .. import aop as AOP
 
 from ..forecasting import forecast_series
@@ -72,6 +72,11 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
                 for field in ('channel', 'sales_head', 'rsm', 'asm', 'zone', 'state',
                               'item_alt_code', 'product_name', 'brand'):
                     setattr(rec, field, str(e.get(field) or '')[:TEXT_MAX.get(field, 200)])
+                # Sub-Region is a selling territory (AP-1), not a state. It
+                # keeps its own column, and the state is read off its code
+                # so this sheet and the invoice dump name states the same way.
+                rec.subzone = rec.state[:100]
+                rec.state = state_from_subregion(rec.subzone)
                 batch.append(rec)
                 total_rev += e['net_amount']
                 total_target += e['target_amount']
@@ -94,13 +99,13 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
         return Response({'error': 'No usable rows — every row was empty across all months.'},
                         status=400)
 
-    warnings = []
+    warnings, notes = [], []
     plan_months = sorted({m for _, m, t in months if t})
-    warnings.append(
+    notes.append(
         f'{count:,} month-rows built from this sheet — each row was spread across the '
         f'{len(set(m for _, m, _ in months))} month columns it carries.')
     if plan_months:
-        warnings.append(
+        notes.append(
             f'Plan (AOP) loaded for {len(plan_months)} months, '
             f'{plan_months[0]:%b %Y} to {plan_months[-1]:%b %Y}. '
             f'Targets and achievement now sit side by side on the dashboard.')
@@ -108,7 +113,7 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
     for h in unknown:
         (skipped if h in AOP.IGNORED else unrecognised).append(h)
     if skipped:
-        warnings.append(
+        notes.append(
             f'{len(skipped)} total column(s) skipped on purpose: {", ".join(skipped)}. '
             f'Each is its own monthly columns added up, and storing a total beside the '
             f'parts it is made of double-counts the year.')
@@ -117,11 +122,11 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
             f'{len(unrecognised)} column(s) were not recognised and are ignored: '
             f'{", ".join(unrecognised[:12])}.')
     if empty_rows:
-        warnings.append(f'{empty_rows} row(s) had no figure in any month and were skipped.')
+        notes.append(f'{empty_rows} row(s) had no figure in any month and were skipped.')
 
     # The reason both files can live in one table without inflating anything.
     if SalesRecord.objects.filter(source=SalesRecord.SOURCE_INVOICE).exists():
-        warnings.append(
+        notes.append(
             'Invoice-level data is already loaded, so sales figures keep coming from '
             'it and this sheet supplies the targets. Its own achievement columns are '
             'stored for reconciliation rather than added on top.')
@@ -143,6 +148,7 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
         'cancelled_rows': 0,
         'return_rows': 0,
         'warnings': warnings,
+        'notes': notes,
     })
 
 
@@ -229,6 +235,7 @@ class SalesUploadView(APIView):
         upload.total_revenue = round(float(earned or 0), 2)
         upload.period_start, upload.period_end = agg['lo'], agg['hi']
         upload.warnings = [f'{t}: {w}' for t, r in good for w in r.data.get('warnings', [])]
+        upload.notes = [f'{t}: {n}' for t, r in good for n in r.data.get('notes', [])]
         for title, resp in outcomes:
             if resp.status_code != 200:
                 upload.warnings.insert(
@@ -259,6 +266,7 @@ class SalesUploadView(APIView):
             'unrecognised_columns': sorted({c for _, r in good
                                             for c in r.data.get('unrecognised_columns', [])}),
             'warnings': upload.warnings,
+            'notes': upload.notes,
         }
         return Response(merged)
 
@@ -417,9 +425,9 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
             'unrecognised_columns': unknown,
         }, status=400)
 
-    warnings = []
+    warnings, notes = [], []
     if cancelled_rows:
-        warnings.append(
+        notes.append(
             f'{cancelled_rows} cancelled row(s) were loaded but are excluded from '
             f'every sales figure. They stay in the data so the file still '
             f'reconciles against the ERP.')
@@ -443,7 +451,7 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
     missing = [d for d in ('state', 'category', 'channel', 'salesperson')
                if d not in col_map]
     if missing:
-        warnings.append('No ' + ', '.join(missing) + ' column — those breakdown views '
+        notes.append('No ' + ', '.join(missing) + ' column — those breakdown views '
                         'will be empty. Add the column and re-upload to enable them.')
 
 
@@ -464,6 +472,7 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
         'cancelled_rows': cancelled_rows,
         'return_rows': return_rows,
         'warnings': warnings,
+        'notes': notes,
     })
 
 
@@ -806,6 +815,7 @@ class SalesUploadsView(APIView):
         ups = SalesUpload.objects.all()[:100]
         return Response({'results': [{
             'id': u.id, 'filename': u.filename, 'rows': u.row_count,
+            'notes': u.notes,
             'skipped': u.skipped_rows, 'revenue': _money(u.total_revenue),
             'period_start': u.period_start.isoformat() if u.period_start else None,
             'period_end': u.period_end.isoformat() if u.period_end else None,

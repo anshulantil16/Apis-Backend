@@ -22,7 +22,14 @@ class SalesUpload(models.Model):
     total_revenue = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     period_start = models.DateField(null=True, blank=True)
     period_end   = models.DateField(null=True, blank=True)
+    # Two different things, kept apart because they read differently to the
+    # person who just uploaded a file. A warning means something was lost or
+    # needs a decision. A note means the import did exactly what it should
+    # and is saying so — "1,400 cancelled rows excluded" is reassurance, not
+    # a problem, and dressing it as one made a clean import of a normal ERP
+    # export look like seven faults.
     warnings     = models.JSONField(default=list, blank=True)
+    notes        = models.JSONField(default=list, blank=True)
     status       = models.CharField(max_length=20, default='completed')  # completed / failed
     created_at   = models.DateTimeField(auto_now_add=True)
 

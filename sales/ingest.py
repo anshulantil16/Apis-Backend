@@ -184,9 +184,36 @@ GST_STATE_CODES = {
 }
 
 
+# The other spelling of a state code. ERP exports use these at least as often
+# as the numeric GST ones, and a dump carrying "AP" rather than "37" was
+# leaving every row with no state at all — which emptied the state-wise view
+# and let the AOP sheet's sub-regions be the only thing in it.
+ALPHA_STATE_CODES = {
+    'AP': 'Andhra Pradesh', 'AR': 'Arunachal Pradesh', 'AS': 'Assam',
+    'BR': 'Bihar', 'CG': 'Chhattisgarh', 'CT': 'Chhattisgarh', 'GA': 'Goa',
+    'GJ': 'Gujarat', 'HR': 'Haryana', 'HP': 'Himachal Pradesh',
+    'JH': 'Jharkhand', 'JK': 'Jammu & Kashmir', 'KA': 'Karnataka',
+    'KL': 'Kerala', 'LA': 'Ladakh', 'LD': 'Lakshadweep', 'MP': 'Madhya Pradesh',
+    'MH': 'Maharashtra', 'MN': 'Manipur', 'ML': 'Meghalaya', 'MZ': 'Mizoram',
+    'NL': 'Nagaland', 'OD': 'Odisha', 'OR': 'Odisha', 'PB': 'Punjab',
+    'PY': 'Puducherry', 'RJ': 'Rajasthan', 'SK': 'Sikkim', 'TN': 'Tamil Nadu',
+    'TS': 'Telangana', 'TG': 'Telangana', 'TR': 'Tripura', 'UK': 'Uttarakhand',
+    'UA': 'Uttarakhand', 'UP': 'Uttar Pradesh', 'WB': 'West Bengal',
+    'AN': 'Andaman & Nicobar Islands', 'CH': 'Chandigarh', 'DL': 'Delhi',
+    'DN': 'Dadra & Nagar Haveli and Daman & Diu', 'DD': 'Daman & Diu',
+}
+
+
 def state_from_code(value):
-    """'07' -> 'Delhi'. Also copes with the code arriving as a number (7) or
-    as a full GSTIN, whose first two characters are the state code."""
+    """A state code in any of the spellings these exports use -> a state name.
+
+    Numeric GST codes ('07', 7, or a full GSTIN whose first two characters
+    are the code) and the two-letter forms ('DL', 'AP') both resolve.
+
+    An unrecognised code is returned as-is rather than dropped. A state-wise
+    view listing "AP" is imperfect; one that silently omits every row from
+    that state is wrong, and the row had told us where it went.
+    """
     if value is None:
         return ''
     s = str(value).strip()
@@ -195,7 +222,50 @@ def state_from_code(value):
     # Excel turns a text code into a number and drops the leading zero.
     if s.replace('.0', '').isdigit():
         s = f'{int(float(s)):02d}'
-    return GST_STATE_CODES.get(s[:2], '')
+        return GST_STATE_CODES.get(s[:2], s)
+    upper = s.upper()
+    if upper in ALPHA_STATE_CODES:
+        return ALPHA_STATE_CODES[upper]
+    # A GSTIN starts with its numeric state code.
+    if len(upper) >= 2 and upper[:2].isdigit():
+        return GST_STATE_CODES.get(upper[:2], upper[:2])
+    if upper[:2] in ALPHA_STATE_CODES:
+        return ALPHA_STATE_CODES[upper[:2]]
+    return s
+
+
+def state_from_subregion(value):
+    """'AP-1' -> 'Andhra Pradesh'. Anything that is not a state code -> ''.
+
+    The AOP sheet's Sub-Region is a selling territory, not a state: AP-1 and
+    AP-2 are two patches of Andhra Pradesh, and some rows carry a customer
+    name there instead ("Amazon"). Storing those verbatim as states put
+    "AP-1" and "Amazon" in the state-wise view alongside Delhi and
+    Maharashtra, which is two vocabularies in one column.
+
+    Strict on purpose: only a recognised two-letter or numeric state code
+    before the separator resolves. A sub-region that names something else
+    keeps its own column and leaves state empty rather than inventing one.
+    """
+    if value is None:
+        return ''
+    raw = str(value).strip()
+    if not raw:
+        return ''
+    head = raw.replace('_', '-').split('-')[0].strip()
+    if not head:
+        return ''
+    # Some sheets write the state out in full rather than as a code.
+    by_name = {n.lower(): n for n in
+               list(ALPHA_STATE_CODES.values()) + list(GST_STATE_CODES.values())}
+    if head.lower() in by_name:
+        return by_name[head.lower()]
+    upper = head.upper()
+    if upper in ALPHA_STATE_CODES:
+        return ALPHA_STATE_CODES[upper]
+    if upper.isdigit():
+        return GST_STATE_CODES.get(f'{int(upper):02d}', '')
+    return ''
 
 
 def parse_bool(v):

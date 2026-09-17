@@ -147,12 +147,23 @@ class WhatCountsAsASale(TestCase):
         self.assertFalse(is_return_type('Invoice'))
 
     def test_the_operator_is_told_what_was_found(self):
-        """Silently dropping cancelled rows is right; not saying so is not."""
-        r = upload(a_workbook([a_row(**{'Cancelled': 'Yes'}),
-                               a_row(**{'Type': 'Credit Memo'})]))
-        blob = ' '.join(r.json().get('warnings', []))
-        self.assertIn('cancelled', blob.lower())
-        self.assertIn('credit memo', blob.lower())
+        """Silently dropping cancelled rows is right; not saying so is not.
+
+        The two land differently on purpose. Excluding cancelled rows is the
+        import doing its job, so it is a note. A credit memo needs a decision
+        about its sign, so it is a warning.
+        """
+        d = upload(a_workbook([a_row(**{'Cancelled': 'Yes'}),
+                               a_row(**{'Type': 'Credit Memo'})])).json()
+        self.assertIn('cancelled', ' '.join(d['notes']).lower())
+        self.assertIn('credit memo', ' '.join(d['warnings']).lower())
+
+    def test_a_clean_import_raises_no_warnings_at_all(self):
+        """A normal ERP export used to come back with seven amber warnings,
+        every one of them saying the import had worked."""
+        d = upload(a_workbook([a_row()])).json()
+        self.assertEqual(d['warnings'], [], d['warnings'])
+        self.assertTrue(d['notes'])
 
 
 class TheDumpNamesNoState(TestCase):
@@ -170,8 +181,11 @@ class TheDumpNamesNoState(TestCase):
         self.assertEqual(state_from_code('7'), 'Delhi')
         # A full GSTIN starts with its state code.
         self.assertEqual(state_from_code('07AABCA1234A1Z5'), 'Delhi')
-        for junk in ('', None, 'XX', '00'):
-            self.assertEqual(state_from_code(junk), '', junk)
+        for blank in ('', None):
+            self.assertEqual(state_from_code(blank), '', blank)
+        # An unrecognised code is kept, not dropped — see
+        # StateCodesComeInSeveralSpellings for why.
+        self.assertEqual(state_from_code('ZZ'), 'ZZ')
 
     def test_a_dump_row_lands_in_a_state(self):
         upload(a_workbook([a_row(**{'Cust.State Code': '07'})]))
@@ -183,6 +197,54 @@ class TheDumpNamesNoState(TestCase):
                          headers=['Date', 'State', 'Amount'])
         upload(buf)
         self.assertEqual(SalesRecord.objects.get().state, 'NCR Delhi')
+
+
+class StateCodesComeInSeveralSpellings(TestCase):
+    """A dump carrying "AP" rather than "37" was leaving every row with no
+    state, which emptied the state-wise view and left the AOP sheet's
+    sub-regions as the only thing in it."""
+
+    def test_the_two_letter_codes_resolve(self):
+        from sales.ingest import state_from_code
+        for code, name in (('AP', 'Andhra Pradesh'), ('MH', 'Maharashtra'),
+                           ('DL', 'Delhi'), ('BR', 'Bihar'), ('TS', 'Telangana'),
+                           ('ap', 'Andhra Pradesh')):
+            self.assertEqual(state_from_code(code), name, code)
+
+    def test_an_unknown_code_is_kept_rather_than_dropped(self):
+        """Listing "ZZ" is imperfect. Silently omitting every row from that
+        state is wrong, and the row had told us where it went."""
+        from sales.ingest import state_from_code
+        self.assertEqual(state_from_code('ZZ'), 'ZZ')
+
+    def test_a_dump_with_letter_codes_lands_in_real_states(self):
+        upload(a_workbook([a_row(**{'Cust.State Code': 'AP'}),
+                           a_row(**{'Cust.State Code': 'MH', 'Invoice No.': 'INV-2'})]))
+        self.assertEqual(
+            sorted(SalesRecord.objects.values_list('state', flat=True)),
+            ['Andhra Pradesh', 'Maharashtra'])
+
+    def test_a_sub_region_is_a_territory_and_its_state_is_read_off_it(self):
+        """AP-1 and AP-2 are two patches of Andhra Pradesh, and some rows
+        carry a customer name there instead. Storing those as states put
+        "AP-1" and "Amazon" in the state view beside Delhi."""
+        from sales.ingest import state_from_subregion
+        self.assertEqual(state_from_subregion('AP-1'), 'Andhra Pradesh')
+        self.assertEqual(state_from_subregion('BR-2'), 'Bihar')
+        self.assertEqual(state_from_subregion('Amazon'), '')
+        self.assertEqual(state_from_subregion('Big Basket'), '')
+
+    def test_the_aop_sheet_keeps_the_territory_and_names_the_state(self):
+        upload(aop_workbook([aop_row(**{'Sub-Region': 'AP-1'})]))
+        r = SalesRecord.objects.filter(source='plan').first()
+        self.assertEqual(r.subzone, 'AP-1')
+        self.assertEqual(r.state, 'Andhra Pradesh')
+
+    def test_a_sub_region_naming_a_customer_leaves_the_state_empty(self):
+        upload(aop_workbook([aop_row(**{'Sub-Region': 'Amazon'})]))
+        r = SalesRecord.objects.filter(source='plan').first()
+        self.assertEqual(r.subzone, 'Amazon')
+        self.assertEqual(r.state, '')
 
 
 class WhatTheOperatorIsToldAboutColumns(TestCase):
@@ -416,7 +478,7 @@ class ReadingTheWideSheet(TestCase):
     def test_the_operator_is_told_the_totals_were_skipped(self):
         d = upload(aop_workbook([aop_row()])).json()
         self.assertEqual(d['file_kind'], 'aop')
-        blob = ' '.join(d['warnings']).lower()
+        blob = ' '.join(d['notes']).lower()
         self.assertIn('skipped on purpose', blob)
         self.assertIn('ytd ach', blob)
 
@@ -533,11 +595,15 @@ class OneWorkbookTwoSheets(TestCase):
         self.assertEqual(float(cy.target_amount), 100000)
         self.assertEqual(float(cy.plan_achievement), 90000)
 
-    def test_the_warnings_say_which_sheet_each_came_from(self):
+    def test_every_message_says_which_sheet_it_came_from(self):
+        """With two sheets in one file, an unattributed message leaves you
+        guessing which half of the workbook it is about."""
         d = upload(self._two_sheets()).json()
-        self.assertTrue(any(w.startswith('PRI SALES DUMP:') or
-                            w.startswith('YTD,AOP vs.ACH:') for w in d['warnings']),
-                        d['warnings'])
+        every = d['notes'] + d['warnings']
+        self.assertTrue(every)
+        for m in every:
+            self.assertTrue(m.startswith('PRI SALES DUMP:')
+                            or m.startswith('YTD,AOP vs.ACH:'), m)
 
 
 class TheUploadedFilesList(TestCase):
