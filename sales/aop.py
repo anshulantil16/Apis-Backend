@@ -65,7 +65,22 @@ def parse_month_header(header):
 
     A two-digit year is read as 20xx: this is a financial-year plan sheet and
     a column headed Apr-26 means April 2026, never 1926.
+
+    A header may also arrive as a real date rather than as text. Typing
+    "Apr-26" into a General cell makes Excel store a date and only display it
+    as Apr-26, so openpyxl hands back a datetime — and the actuals blocks,
+    which are the plain month columns, are exactly the ones this happens to.
+    Reading only the text form silently dropped every achievement figure
+    while the " AOP" columns beside them (text, because of the suffix) came
+    through fine.
     """
+    from datetime import datetime as _dt
+
+    if isinstance(header, (_dt, date)):
+        # A date header is never a plan column: the " AOP" suffix that marks
+        # one keeps the cell text.
+        return date(header.year, header.month, 1), False
+
     m = _MONTH_RE.match(_norm(header))
     if not m:
         return None

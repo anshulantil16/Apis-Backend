@@ -14,7 +14,7 @@ from ..models import SalesUpload, SalesRecord, sync_actual_source
 from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       TEXT_FIELDS, NUM_FIELDS, TEXT_MAX, DATE_FIELDS,
                       parse_bool, is_return_type, partition_unknown,
-                      state_from_code)
+                      state_from_code, find_header_row)
 from .. import aop as AOP
 
 from ..forecasting import forecast_series
@@ -31,7 +31,7 @@ class SalesTemplateView(APIView):
         return resp
 
 
-def _ingest_aop(request, f, ws, header_row):
+def _ingest_aop(request, f, ws, header_row, header_row_index=1):
     """Load the AOP-vs-ACH sheet, unpivoting each row into one per month."""
     dims, months, unknown = AOP.map_columns(header_row)
 
@@ -48,9 +48,9 @@ def _ingest_aop(request, f, ws, header_row):
     batch, total_rev, total_target = [], 0.0, 0.0
     lo = hi = None
     empty_rows = 0
-    row_no = 1
+    row_no = header_row_index
     try:
-        for row in ws.iter_rows(min_row=2, values_only=True):
+        for row in ws.iter_rows(min_row=header_row_index + 1, values_only=True):
             row_no += 1
             if not any(v is not None and str(v).strip() != '' for v in row):
                 continue
@@ -161,236 +161,295 @@ class SalesUploadView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
+        """Load every sheet in the workbook, routing each by its own headers.
+
+        The two primary-sales files are normally kept as two tabs of one
+        workbook. Reading only wb.active meant whichever tab happened to be
+        selected when the file was last saved decided what got imported — the
+        other one was dropped without a word, and if the selected tab was the
+        AOP sheet the dump parser rejected it with a complaint about a missing
+        date column that was really a complaint about the wrong sheet.
+        """
         f = request.FILES.get('file')
         if not f:
             return Response({'error': 'No file provided.'}, status=400)
         try:
             wb = openpyxl.load_workbook(f, data_only=True, read_only=True)
-            ws = wb.active
         except Exception as e:
             return Response({'error': f'Cannot read file: {e}'}, status=400)
 
-        try:
-            header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
-        except StopIteration:
-            return Response({'error': 'The sheet is empty.'}, status=400)
+        outcomes = []
+        for ws in wb.worksheets:
+            header_row, header_at = find_header_row(
+                ws, recognises=lambda r: max(len(map_headers(r)[0]),
+                                             len(AOP.map_columns(r)[0])
+                                             + len(AOP.map_columns(r)[1])))
+            if header_row is None:
+                continue        # an empty tab is not an error
+            if AOP.looks_like_aop_sheet(header_row):
+                resp = _ingest_aop(request, f, ws, header_row, header_at)
+            else:
+                resp = _ingest_dump(request, f, ws, header_row, header_at)
+            outcomes.append((ws.title, resp))
 
-        # Two primary-sales files, told apart by their own headers rather than
-        # by asking the person uploading to pick — the AOP sheet is the only
-        # one carrying " AOP" month columns.
-        if AOP.looks_like_aop_sheet(header_row):
-            return _ingest_aop(request, f, ws, header_row)
+        if not outcomes:
+            return Response({'error': 'The workbook has no sheets with any data in them.'},
+                            status=400)
 
-        col_map, unknown = map_headers(header_row)
-        # The Pre-Sales Dump's sales value is Taxable Amount, which is its own
-        # column rather than a spelling of "Net Amount" — so it counts here.
-        VALUE_COLUMNS = ('net_amount', 'gross_amount', 'taxable_amount')
-        if not any(c in col_map for c in ('order_date', 'invoice_date', 'posting_date')):
-            return Response({
-                'error': 'No date column found. One column must be the order/invoice date.',
-                'detected_columns': sorted(col_map.keys()),
-                'unrecognised_columns': unknown,
-            }, status=400)
-        if not any(c in col_map for c in VALUE_COLUMNS):
-            return Response({
-                'error': 'No sales value column found. Add a "Net Amount" '
-                         '(or "Amount" / "Sales Value") column.',
-                'detected_columns': sorted(col_map.keys()),
-                'unrecognised_columns': unknown,
-            }, status=400)
+        good = [(t, r) for t, r in outcomes if r.status_code == 200]
+        if not good:
+            # Every sheet failed. One sheet is the common case, so answer with
+            # its own error rather than a summary nobody can act on.
+            title, resp = outcomes[0]
+            if len(outcomes) > 1:
+                resp.data['error'] = (
+                    f'Nothing could be imported. "{title}": '
+                    f'{resp.data.get("error", "unreadable")}')
+                resp.data['sheets'] = {t: r.data.get('error') for t, r in outcomes}
+            return resp
 
-        def cell(row, field):
-            ci = col_map.get(field)
-            if ci is None or ci >= len(row):
-                return None
-            return row[ci]
+        if len(good) == 1 and len(outcomes) == 1:
+            return good[0][1]
 
-        upload = SalesUpload.objects.create(
-            filename=(f.name or '')[:255],
-            uploaded_by=str(request.query_params.get('user') or '')[:200],
-            status='completed',
-        )
+        # More than one sheet loaded: merge into one answer, and say which
+        # sheet each figure came from.
+        merged = {
+            'message': f'Imported {sum(r.data.get("rows", 0) for _, r in good):,} rows '
+                       f'from {len(good)} sheet(s).',
+            'rows': sum(r.data.get('rows', 0) for _, r in good),
+            'skipped': sum(r.data.get('skipped', 0) for _, r in good),
+            'total_revenue': round(sum(r.data.get('total_revenue', 0) for _, r in good), 2),
+            'cancelled_rows': sum(r.data.get('cancelled_rows', 0) for _, r in good),
+            'return_rows': sum(r.data.get('return_rows', 0) for _, r in good),
+            'sheets': {t: {'rows': r.data.get('rows', 0),
+                           'kind': r.data.get('file_kind', 'dump')} for t, r in good},
+            'detected_columns': sorted({c for _, r in good
+                                        for c in r.data.get('detected_columns', [])}),
+            'skipped_columns': sorted({c for _, r in good
+                                       for c in r.data.get('skipped_columns', [])}),
+            'unrecognised_columns': sorted({c for _, r in good
+                                            for c in r.data.get('unrecognised_columns', [])}),
+            'warnings': [f'{t}: {w}' for t, r in good for w in r.data.get('warnings', [])],
+        }
+        for title, resp in outcomes:
+            if resp.status_code != 200:
+                merged['warnings'].insert(
+                    0, f'{title}: not imported — {resp.data.get("error", "unreadable")}')
+        return Response(merged)
 
-        batch, total_rev = [], 0.0
-        no_date = bad_value = 0
-        cancelled_rows = return_rows = 0
-        lo = hi = None
-        row_no = 1
-        try:
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                row_no += 1
-                if not any(v is not None and str(v).strip() != '' for v in row):
-                    continue
-                # Invoice Date and Posting Date now map to their own columns,
-                # so they no longer double as aliases for Order Date. An export
-                # that carries only one of them must still land in a month, so
-                # they remain the fallback here, in that order.
-                od = (parse_date(cell(row, 'order_date'))
-                      or parse_date(cell(row, 'invoice_date'))
-                      or parse_date(cell(row, 'posting_date')))
-                if od is None:
-                    no_date += 1
-                    continue
 
-                # ── is this row a sale at all? ────────────────────────
-                # An ERP dump carries cancelled invoices and credit memos in
-                # the same sheet as live sales. Both are kept — they are real
-                # documents and the ledger has to reconcile — but a cancelled
-                # row must never reach a sales figure.
-                cancelled = parse_bool(cell(row, 'is_cancelled'))
-                doc_type = cell(row, 'document_type')
-                returned = is_return_type(doc_type)
-                if cancelled:
-                    cancelled_rows += 1
-                if returned:
-                    return_rows += 1
-
-                # ── money ─────────────────────────────────────────────────
-                # Taxable Amount is the sales value the business reports on:
-                # after scheme and discount, before GST. It wins over a
-                # generic "amount" column when the dump carries both.
-                taxable = parse_num(cell(row, 'taxable_amount'))
-                gross = parse_num(cell(row, 'gross_amount'))
-                net = parse_num(cell(row, 'net_amount'))
-
-                inv_disc = parse_num(cell(row, 'invoice_discount'))
-                retail = parse_num(cell(row, 'retail_scheme'))
-                wholesale = parse_num(cell(row, 'wholesale_scheme'))
-                igst = parse_num(cell(row, 'igst_amount'))
-                cgst = parse_num(cell(row, 'cgst_amount'))
-                sgst = parse_num(cell(row, 'sgst_amount'))
-
-                if taxable:
-                    net = taxable
-                # Discount and tax are summed from their parts when the dump
-                # splits them, rather than asking for a pre-totalled column
-                # that would then disagree with the parts beside it.
-                discount = parse_num(cell(row, 'discount')) or (inv_disc + retail + wholesale)
-                tax = parse_num(cell(row, 'tax')) or (igst + cgst + sgst)
-
-                if not gross and net:
-                    gross = net + discount
-                # Fall back to gross when the export has no explicit net column.
-                if not net and gross:
-                    net = gross - discount
-                if not net and not gross and not cancelled:
-                    bad_value += 1
-
-                rec = SalesRecord(
-                    upload=upload,
-                    order_date=od,
-                    period=od.replace(day=1),
-                    quantity=parse_num(cell(row, 'quantity')),
-                    unit_price=parse_num(cell(row, 'unit_price')),
-                    gross_amount=gross,
-                    discount=discount,
-                    tax=tax,
-                    net_amount=net,
-                    target_amount=parse_num(cell(row, 'target_amount')),
-                    is_cancelled=cancelled,
-                    is_return=returned,
-                )
-                for tf in TEXT_FIELDS:
-                    v = cell(row, tf)
-                    s = '' if v is None else str(v).strip()
-                    setattr(rec, tf, s[:TEXT_MAX.get(tf, 150)])
-                # The dump names no state, only a GST code. Filled in only
-                # when the sheet gave no state of its own, so a file that does
-                # carry one keeps its own spelling.
-                if not rec.state:
-                    rec.state = state_from_code(rec.customer_state_code)
-                for nf in NUM_FIELDS:
-                    # The headline five are derived above; the rest are stored
-                    # verbatim so the sheet can be reconciled against the ERP.
-                    if nf in ('quantity', 'unit_price', 'gross_amount', 'discount',
-                              'tax', 'net_amount', 'target_amount'):
-                        continue
-                    setattr(rec, nf, parse_num(cell(row, nf)))
-                for df in DATE_FIELDS:
-                    setattr(rec, df, parse_date(cell(row, df)))
-                batch.append(rec)
-                # A cancelled invoice is not revenue.
-                if not cancelled:
-                    total_rev += net
-                lo = od if lo is None or od < lo else lo
-                hi = od if hi is None or od > hi else hi
-
-                if len(batch) >= 2000:
-                    SalesRecord.objects.bulk_create(batch, batch_size=1000)
-                    batch = []
-            if batch:
-                SalesRecord.objects.bulk_create(batch, batch_size=1000)
-        except Exception as e:
-            upload.status = 'failed'
-            upload.save(update_fields=['status'])
-            upload.records.all().delete()
-            return Response({'error': f'Failed while reading row {row_no}: {e}'}, status=400)
-
-        sync_actual_source()
-
-        count = upload.records.count()
-        if count == 0:
-            upload.delete()
-            return Response({
-                'error': 'No usable rows found — every row was missing a valid date.',
-                'detected_columns': sorted(col_map.keys()),
-                'unrecognised_columns': unknown,
-            }, status=400)
-
-        warnings = []
-        if cancelled_rows:
-            warnings.append(
-                f'{cancelled_rows} cancelled row(s) were loaded but are excluded from '
-                f'every sales figure. They stay in the data so the file still '
-                f'reconciles against the ERP.')
-        if return_rows:
-            warnings.append(
-                f'{return_rows} credit memo / return row(s) found. Their amounts are '
-                f'stored exactly as the file gives them — if your export writes returns '
-                f'as positive numbers, tell us and we will flip the sign on load.')
-        if no_date:
-            warnings.append(f'{no_date} row(s) skipped — the date column was empty or '
-                            f'unreadable. Those sales are NOT in the dashboard.')
-        if bad_value:
-            warnings.append(f'{bad_value} row(s) had no sales value (treated as 0). '
-                            f'Check the amount column in your export.')
-        skipped, unrecognised = partition_unknown(unknown)
-        if unrecognised:
-            shown = ', '.join(unrecognised[:12]) + (' …' if len(unrecognised) > 12 else '')
-            warnings.append(f'{len(unrecognised)} column(s) were not recognised and are '
-                            f'ignored: {shown}. Rename them to match the template, or ask '
-                            f'for them to be added.')
-        missing = [d for d in ('state', 'category', 'channel', 'salesperson')
-                   if d not in col_map]
-        if missing:
-            warnings.append('No ' + ', '.join(missing) + ' column — those breakdown views '
-                            'will be empty. Add the column and re-upload to enable them.')
-
-        upload.row_count = count
-        upload.skipped_rows = no_date
-        upload.total_revenue = total_rev
-        upload.period_start, upload.period_end = lo, hi
-        upload.warnings = warnings
-        upload.save()
-
+def _ingest_dump(request, f, ws, header_row, header_row_index=1):
+    """Load one Pre-Sales Dump sheet."""
+    col_map, unknown = map_headers(header_row)
+    # The Pre-Sales Dump's sales value is Taxable Amount, which is its own
+    # column rather than a spelling of "Net Amount" — so it counts here.
+    VALUE_COLUMNS = ('net_amount', 'gross_amount', 'taxable_amount')
+    if not any(c in col_map for c in ('order_date', 'invoice_date', 'posting_date')):
         return Response({
-            'message': f'Imported {count:,} rows.',
-            'upload_id': upload.id,
-            'rows': count,
-            'skipped': no_date,
-            'total_revenue': _money(total_rev),
-            'period': {'from': lo.isoformat() if lo else None,
-                       'to': hi.isoformat() if hi else None},
+            'error': 'No date column found. One column must be the order/invoice date.',
             'detected_columns': sorted(col_map.keys()),
-            # Split so the screen can say "skipped on purpose" and "we don't
-            # know what this is" differently. Lumping them together made every
-            # upload of a normal ERP dump look like sixteen mapping failures.
-            'skipped_columns': skipped,
-            'unrecognised_columns': unrecognised,
-            'cancelled_rows': cancelled_rows,
-            'return_rows': return_rows,
-            'warnings': warnings,
-        })
+            'unrecognised_columns': unknown,
+        }, status=400)
+    if not any(c in col_map for c in VALUE_COLUMNS):
+        return Response({
+            'error': 'No sales value column found. Add a "Net Amount" '
+                     '(or "Amount" / "Sales Value") column.',
+            'detected_columns': sorted(col_map.keys()),
+            'unrecognised_columns': unknown,
+        }, status=400)
+
+    def cell(row, field):
+        ci = col_map.get(field)
+        if ci is None or ci >= len(row):
+            return None
+        return row[ci]
+
+    upload = SalesUpload.objects.create(
+        filename=(f.name or '')[:255],
+        uploaded_by=str(request.query_params.get('user') or '')[:200],
+        status='completed',
+    )
+
+    batch, total_rev = [], 0.0
+    no_date = bad_value = 0
+    cancelled_rows = return_rows = 0
+    lo = hi = None
+    row_no = header_row_index
+    try:
+        for row in ws.iter_rows(min_row=header_row_index + 1, values_only=True):
+            row_no += 1
+            if not any(v is not None and str(v).strip() != '' for v in row):
+                continue
+            # Invoice Date and Posting Date now map to their own columns,
+            # so they no longer double as aliases for Order Date. An export
+            # that carries only one of them must still land in a month, so
+            # they remain the fallback here, in that order.
+            od = (parse_date(cell(row, 'order_date'))
+                  or parse_date(cell(row, 'invoice_date'))
+                  or parse_date(cell(row, 'posting_date')))
+            if od is None:
+                no_date += 1
+                continue
+
+            # ── is this row a sale at all? ────────────────────────
+            # An ERP dump carries cancelled invoices and credit memos in
+            # the same sheet as live sales. Both are kept — they are real
+            # documents and the ledger has to reconcile — but a cancelled
+            # row must never reach a sales figure.
+            cancelled = parse_bool(cell(row, 'is_cancelled'))
+            doc_type = cell(row, 'document_type')
+            returned = is_return_type(doc_type)
+            if cancelled:
+                cancelled_rows += 1
+            if returned:
+                return_rows += 1
+
+            # ── money ─────────────────────────────────────────────────
+            # Taxable Amount is the sales value the business reports on:
+            # after scheme and discount, before GST. It wins over a
+            # generic "amount" column when the dump carries both.
+            taxable = parse_num(cell(row, 'taxable_amount'))
+            gross = parse_num(cell(row, 'gross_amount'))
+            net = parse_num(cell(row, 'net_amount'))
+
+            inv_disc = parse_num(cell(row, 'invoice_discount'))
+            retail = parse_num(cell(row, 'retail_scheme'))
+            wholesale = parse_num(cell(row, 'wholesale_scheme'))
+            igst = parse_num(cell(row, 'igst_amount'))
+            cgst = parse_num(cell(row, 'cgst_amount'))
+            sgst = parse_num(cell(row, 'sgst_amount'))
+
+            if taxable:
+                net = taxable
+            # Discount and tax are summed from their parts when the dump
+            # splits them, rather than asking for a pre-totalled column
+            # that would then disagree with the parts beside it.
+            discount = parse_num(cell(row, 'discount')) or (inv_disc + retail + wholesale)
+            tax = parse_num(cell(row, 'tax')) or (igst + cgst + sgst)
+
+            if not gross and net:
+                gross = net + discount
+            # Fall back to gross when the export has no explicit net column.
+            if not net and gross:
+                net = gross - discount
+            if not net and not gross and not cancelled:
+                bad_value += 1
+
+            rec = SalesRecord(
+                upload=upload,
+                order_date=od,
+                period=od.replace(day=1),
+                quantity=parse_num(cell(row, 'quantity')),
+                unit_price=parse_num(cell(row, 'unit_price')),
+                gross_amount=gross,
+                discount=discount,
+                tax=tax,
+                net_amount=net,
+                target_amount=parse_num(cell(row, 'target_amount')),
+                is_cancelled=cancelled,
+                is_return=returned,
+            )
+            for tf in TEXT_FIELDS:
+                v = cell(row, tf)
+                s = '' if v is None else str(v).strip()
+                setattr(rec, tf, s[:TEXT_MAX.get(tf, 150)])
+            # The dump names no state, only a GST code. Filled in only
+            # when the sheet gave no state of its own, so a file that does
+            # carry one keeps its own spelling.
+            if not rec.state:
+                rec.state = state_from_code(rec.customer_state_code)
+            for nf in NUM_FIELDS:
+                # The headline five are derived above; the rest are stored
+                # verbatim so the sheet can be reconciled against the ERP.
+                if nf in ('quantity', 'unit_price', 'gross_amount', 'discount',
+                          'tax', 'net_amount', 'target_amount'):
+                    continue
+                setattr(rec, nf, parse_num(cell(row, nf)))
+            for df in DATE_FIELDS:
+                setattr(rec, df, parse_date(cell(row, df)))
+            batch.append(rec)
+            # A cancelled invoice is not revenue.
+            if not cancelled:
+                total_rev += net
+            lo = od if lo is None or od < lo else lo
+            hi = od if hi is None or od > hi else hi
+
+            if len(batch) >= 2000:
+                SalesRecord.objects.bulk_create(batch, batch_size=1000)
+                batch = []
+        if batch:
+            SalesRecord.objects.bulk_create(batch, batch_size=1000)
+    except Exception as e:
+        upload.status = 'failed'
+        upload.save(update_fields=['status'])
+        upload.records.all().delete()
+        return Response({'error': f'Failed while reading row {row_no}: {e}'}, status=400)
+
+    sync_actual_source()
+
+    count = upload.records.count()
+    if count == 0:
+        upload.delete()
+        return Response({
+            'error': 'No usable rows found — every row was missing a valid date.',
+            'detected_columns': sorted(col_map.keys()),
+            'unrecognised_columns': unknown,
+        }, status=400)
+
+    warnings = []
+    if cancelled_rows:
+        warnings.append(
+            f'{cancelled_rows} cancelled row(s) were loaded but are excluded from '
+            f'every sales figure. They stay in the data so the file still '
+            f'reconciles against the ERP.')
+    if return_rows:
+        warnings.append(
+            f'{return_rows} credit memo / return row(s) found. Their amounts are '
+            f'stored exactly as the file gives them — if your export writes returns '
+            f'as positive numbers, tell us and we will flip the sign on load.')
+    if no_date:
+        warnings.append(f'{no_date} row(s) skipped — the date column was empty or '
+                        f'unreadable. Those sales are NOT in the dashboard.')
+    if bad_value:
+        warnings.append(f'{bad_value} row(s) had no sales value (treated as 0). '
+                        f'Check the amount column in your export.')
+    skipped, unrecognised = partition_unknown(unknown)
+    if unrecognised:
+        shown = ', '.join(unrecognised[:12]) + (' …' if len(unrecognised) > 12 else '')
+        warnings.append(f'{len(unrecognised)} column(s) were not recognised and are '
+                        f'ignored: {shown}. Rename them to match the template, or ask '
+                        f'for them to be added.')
+    missing = [d for d in ('state', 'category', 'channel', 'salesperson')
+               if d not in col_map]
+    if missing:
+        warnings.append('No ' + ', '.join(missing) + ' column — those breakdown views '
+                        'will be empty. Add the column and re-upload to enable them.')
+
+    upload.row_count = count
+    upload.skipped_rows = no_date
+    upload.total_revenue = total_rev
+    upload.period_start, upload.period_end = lo, hi
+    upload.warnings = warnings
+    upload.save()
+
+    return Response({
+        'message': f'Imported {count:,} rows.',
+        'upload_id': upload.id,
+        'rows': count,
+        'skipped': no_date,
+        'total_revenue': _money(total_rev),
+        'period': {'from': lo.isoformat() if lo else None,
+                   'to': hi.isoformat() if hi else None},
+        'detected_columns': sorted(col_map.keys()),
+        # Split so the screen can say "skipped on purpose" and "we don't
+        # know what this is" differently. Lumping them together made every
+        # upload of a normal ERP dump look like sixteen mapping failures.
+        'skipped_columns': skipped,
+        'unrecognised_columns': unrecognised,
+        'cancelled_rows': cancelled_rows,
+        'return_rows': return_rows,
+        'warnings': warnings,
+    })
 
 
 class SalesOverviewView(APIView):

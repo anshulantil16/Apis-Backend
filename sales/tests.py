@@ -8,7 +8,7 @@ hold the decisions that turn it into numbers a person can act on.
 import io
 
 import openpyxl
-from datetime import date
+from datetime import date, datetime
 
 from django.test import Client, TestCase
 
@@ -460,3 +460,142 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
         d = Client().get('/api/sales/overview/').json()
         rev = float(d.get('total_revenue') or d.get('revenue') or 0)
         self.assertEqual(rev, 20000, f'counted twice: {rev}')
+
+
+class OneWorkbookTwoSheets(TestCase):
+    """How the files actually arrive: both tabs in one .xlsx.
+
+    Reading only wb.active meant whichever tab was selected when the file was
+    last saved decided what got imported. The other was dropped silently, and
+    if the selected tab was the AOP sheet the dump parser rejected the whole
+    upload with "No date column found" — an accurate complaint about a sheet
+    nobody meant it to read.
+    """
+
+    def _two_sheets(self, active=0, month_headers_as_dates=False):
+        wb = openpyxl.Workbook()
+        d = wb.active
+        d.title = 'PRI SALES DUMP'
+        names = header_names()
+        d.append(names)
+        r = a_row()
+        d.append([r.get(n, '') for n in names])
+
+        a = wb.create_sheet('YTD,AOP vs.ACH')
+        hdr = []
+        for h in AOP_HEADERS:
+            if month_headers_as_dates and h in FY26 + FY27:
+                mon, yr = h.split('-')
+                hdr.append(datetime(2000 + int(yr), [
+                    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul',
+                    'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].index(mon) + 1, 1))
+            else:
+                hdr.append(h)
+        a.append(hdr)
+        ar = aop_row()
+        a.append([ar.get(h, '') for h in AOP_HEADERS])
+
+        wb.active = active
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'APIS Sales.xlsx'
+        return buf
+
+    def test_both_sheets_load_from_one_workbook(self):
+        d = upload(self._two_sheets()).json()
+        self.assertEqual(SalesRecord.objects.filter(source='invoice').count(), 1)
+        self.assertEqual(SalesRecord.objects.filter(source='plan').count(), 2)
+        self.assertEqual(set(d['sheets']), {'PRI SALES DUMP', 'YTD,AOP vs.ACH'})
+        self.assertEqual(d['sheets']['YTD,AOP vs.ACH']['kind'], 'aop')
+
+    def test_it_does_not_matter_which_tab_was_open_when_the_file_was_saved(self):
+        """The bug as reported: saving with the YTD tab selected made the
+        whole upload fail."""
+        for active in (0, 1):
+            SalesRecord.objects.all().delete()
+            SalesUpload.objects.all().delete()
+            r = upload(self._two_sheets(active=active))
+            self.assertEqual(r.status_code, 200,
+                             f'active tab {active}: {r.content[:200]}')
+            self.assertEqual(SalesRecord.objects.count(), 3)
+
+    def test_month_headers_excel_turned_into_dates_still_carry_their_actuals(self):
+        """Typing "Apr-26" into a General cell makes Excel store a date and
+        only display it as Apr-26. The plain month columns — which are the
+        actuals — are exactly the ones this happens to, while the " AOP"
+        columns stay text because of the suffix. Reading only the text form
+        kept the plan and silently lost every achievement figure."""
+        upload(self._two_sheets(month_headers_as_dates=True))
+        plan = SalesRecord.objects.filter(source='plan')
+        self.assertEqual(plan.count(), 2, 'the actuals columns were dropped')
+        cy = plan.get(period=date(2026, 4, 1))
+        self.assertEqual(float(cy.target_amount), 100000)
+        self.assertEqual(float(cy.plan_achievement), 90000)
+
+    def test_the_warnings_say_which_sheet_each_came_from(self):
+        d = upload(self._two_sheets()).json()
+        self.assertTrue(any(w.startswith('PRI SALES DUMP:') or
+                            w.startswith('YTD,AOP vs.ACH:') for w in d['warnings']),
+                        d['warnings'])
+
+
+class TheHeaderIsNotAlwaysOnRowOne(TestCase):
+    """Report exports routinely carry a title or a blank line above the table."""
+
+    def _with_preamble(self, preamble_rows):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        for row in preamble_rows:
+            ws.append(row)
+        names = header_names()
+        ws.append(names)
+        r = a_row()
+        ws.append([r.get(n, '') for n in names])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'dump.xlsx'
+        return buf
+
+    def test_a_title_row_above_the_headers_is_stepped_over(self):
+        r = upload(self._with_preamble([['APIS INDIA — PRIMARY SALES'], []]))
+        self.assertEqual(r.status_code, 200, r.content[:200])
+        self.assertEqual(SalesRecord.objects.count(), 1)
+        self.assertEqual(float(SalesRecord.objects.get().net_amount), 20000)
+
+    def test_a_blank_first_row_is_stepped_over(self):
+        r = upload(self._with_preamble([[]]))
+        self.assertEqual(r.status_code, 200, r.content[:200])
+        self.assertEqual(SalesRecord.objects.count(), 1)
+
+    def test_a_sheet_with_nothing_recognisable_still_reports_clearly(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(['Alpha', 'Beta', 'Gamma'])
+        ws.append([1, 2, 3])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'junk.xlsx'
+        r = upload(buf)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('date', r.json()['error'].lower())
+
+    def test_an_empty_extra_tab_is_not_an_error(self):
+        """A blank sheet left in the workbook should be ignored, not fatal."""
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'PRI SALES DUMP'
+        names = header_names()
+        ws.append(names)
+        r = a_row()
+        ws.append([r.get(n, '') for n in names])
+        wb.create_sheet('Sheet3')
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'x.xlsx'
+        res = upload(buf)
+        self.assertEqual(res.status_code, 200, res.content[:200])
+        self.assertEqual(SalesRecord.objects.count(), 1)

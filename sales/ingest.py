@@ -231,6 +231,43 @@ for field, aliases in COLUMN_ALIASES.items():
         _LOOKUP[_norm(a)] = field
 
 
+# How far down to look for the header row. Report sheets routinely carry a
+# title, a blank line, or a "generated on" stamp above the real headers.
+HEADER_SCAN_ROWS = 15
+
+
+def find_header_row(ws, recognises=None):
+    """-> (header tuple, 1-based row index), or (None, 0) for an empty sheet.
+
+    Picks the row in the first few that most looks like headers, rather than
+    trusting row 1. A title row above the table used to be read AS the table,
+    which then failed with "no date column" — an accurate complaint about the
+    wrong row, and an impossible one to act on.
+    """
+    recognises = recognises or (lambda row: len(map_headers(row)[0]))
+    best, best_row, best_score = None, 0, 0
+    for idx, row in enumerate(ws.iter_rows(min_row=1, max_row=HEADER_SCAN_ROWS,
+                                           values_only=True), start=1):
+        if not row or not any(v is not None and str(v).strip() != '' for v in row):
+            continue
+        score = recognises(row)
+        if score > best_score:
+            best, best_row, best_score = row, idx, score
+        # Two or more recognised columns is already a header row; stop rather
+        # than letting a data row further down score higher by coincidence.
+        if best_score >= 2 and idx - best_row >= 2:
+            break
+    if best is None:
+        # Nothing matched. Fall back to the first non-empty row so the caller
+        # can report what it actually found there.
+        for idx, row in enumerate(ws.iter_rows(min_row=1, max_row=HEADER_SCAN_ROWS,
+                                               values_only=True), start=1):
+            if row and any(v is not None and str(v).strip() != '' for v in row):
+                return row, idx
+        return None, 0
+    return best, best_row
+
+
 def map_headers(header_row):
     """-> (field -> column index, list of unrecognised header names)."""
     col_map, unknown = {}, []
