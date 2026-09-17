@@ -117,8 +117,27 @@ class WhatCountsAsASale(TestCase):
         sale is the worse of the two mistakes."""
         for yes in ('Yes', 'yes', 'Y', 'TRUE', '1', True):
             self.assertTrue(parse_bool(yes), yes)
-        for no in ('No', 'N', '', None, 0, 'FALSE', 'maybe', '-'):
+        for no in ('No', 'N', '', None, 0, False, 'FALSE', 'false', 'maybe', '-'):
             self.assertFalse(parse_bool(no), no)
+
+    def test_a_real_excel_boolean_is_understood(self):
+        """The export writes Cancelled as a genuine Excel boolean, which
+        openpyxl hands back as Python True/False rather than as text. Excel
+        shows those as TRUE/FALSE and files them under Number Filters, so
+        they never arrive as the strings they look like."""
+        upload(a_workbook([a_row(**{'Cancelled': False}),
+                           a_row(**{'Cancelled': True, 'Taxable Amount': 99999})]))
+        self.assertEqual(SalesRecord.objects.filter(is_cancelled=True).count(), 1)
+        self.assertEqual(SalesRecord.objects.filter(is_cancelled=False).count(), 1)
+        # The cancelled 99,999 must not be in the money.
+        self.assertEqual(float(SalesUpload.objects.get().total_revenue), 20000)
+
+    def test_the_words_true_and_false_work_too(self):
+        """Some exports write the words rather than the boolean."""
+        upload(a_workbook([a_row(**{'Cancelled': 'FALSE'}),
+                           a_row(**{'Cancelled': 'TRUE', 'Taxable Amount': 99999})]))
+        self.assertEqual(SalesRecord.objects.filter(is_cancelled=True).count(), 1)
+        self.assertEqual(float(SalesUpload.objects.get().total_revenue), 20000)
 
     def test_a_credit_memo_is_flagged_as_a_return(self):
         upload(a_workbook([a_row(), a_row(**{'Type': 'Credit Memo'})]))
