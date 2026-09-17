@@ -159,6 +159,45 @@ RETURN_TYPES = {'credit memo', 'credit note', 'return', 'sales credit memo',
                 'crmemo', 'cr memo'}
 
 
+# GST state codes -> state name.
+#
+# The Pre-Sales Dump has no plain "State" column: it carries Cust.State Code
+# (the GST code, "07") and Location State (the depot's state, which is a
+# different thing entirely). Without this table every dump row would land with
+# an empty state, and the state-wise view — the dashboard's default — would
+# come up blank on a file that plainly knows where every sale went.
+#
+# These codes are statutory and fixed, so a lookup is safe in a way that
+# guessing at a spelling never is.
+GST_STATE_CODES = {
+    '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab',
+    '04': 'Chandigarh', '05': 'Uttarakhand', '06': 'Haryana', '07': 'Delhi',
+    '08': 'Rajasthan', '09': 'Uttar Pradesh', '10': 'Bihar', '11': 'Sikkim',
+    '12': 'Arunachal Pradesh', '13': 'Nagaland', '14': 'Manipur', '15': 'Mizoram',
+    '16': 'Tripura', '17': 'Meghalaya', '18': 'Assam', '19': 'West Bengal',
+    '20': 'Jharkhand', '21': 'Odisha', '22': 'Chhattisgarh', '23': 'Madhya Pradesh',
+    '24': 'Gujarat', '25': 'Daman & Diu', '26': 'Dadra & Nagar Haveli and Daman & Diu',
+    '27': 'Maharashtra', '29': 'Karnataka', '30': 'Goa', '31': 'Lakshadweep',
+    '32': 'Kerala', '33': 'Tamil Nadu', '34': 'Puducherry',
+    '35': 'Andaman & Nicobar Islands', '36': 'Telangana', '37': 'Andhra Pradesh',
+    '38': 'Ladakh', '97': 'Other Territory', '99': 'Centre Jurisdiction',
+}
+
+
+def state_from_code(value):
+    """'07' -> 'Delhi'. Also copes with the code arriving as a number (7) or
+    as a full GSTIN, whose first two characters are the state code."""
+    if value is None:
+        return ''
+    s = str(value).strip()
+    if not s:
+        return ''
+    # Excel turns a text code into a number and drops the leading zero.
+    if s.replace('.0', '').isdigit():
+        s = f'{int(float(s)):02d}'
+    return GST_STATE_CODES.get(s[:2], '')
+
+
 def parse_bool(v):
     """Is this cell saying yes?"""
     if v is None:

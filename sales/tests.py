@@ -8,7 +8,11 @@ hold the decisions that turn it into numbers a person can act on.
 import io
 
 import openpyxl
+from datetime import date
+
 from django.test import Client, TestCase
+
+from sales import aop as AOP
 
 from sales.ingest import (PRE_SALES_DUMP, build_template, is_return_type,
                           map_headers, parse_bool)
@@ -130,6 +134,36 @@ class WhatCountsAsASale(TestCase):
         blob = ' '.join(r.json().get('warnings', []))
         self.assertIn('cancelled', blob.lower())
         self.assertIn('credit memo', blob.lower())
+
+
+class TheDumpNamesNoState(TestCase):
+    """Only Cust.State Code, which is a GST code. Without translating it the
+    state-wise view — the dashboard's default — is blank on a file that
+    plainly knows where every sale went."""
+
+    def test_the_gst_code_becomes_a_state_name(self):
+        from sales.ingest import state_from_code
+        self.assertEqual(state_from_code('07'), 'Delhi')
+        self.assertEqual(state_from_code('27'), 'Maharashtra')
+        self.assertEqual(state_from_code('33'), 'Tamil Nadu')
+        # Excel drops the leading zero off a text code.
+        self.assertEqual(state_from_code(7), 'Delhi')
+        self.assertEqual(state_from_code('7'), 'Delhi')
+        # A full GSTIN starts with its state code.
+        self.assertEqual(state_from_code('07AABCA1234A1Z5'), 'Delhi')
+        for junk in ('', None, 'XX', '00'):
+            self.assertEqual(state_from_code(junk), '', junk)
+
+    def test_a_dump_row_lands_in_a_state(self):
+        upload(a_workbook([a_row(**{'Cust.State Code': '07'})]))
+        self.assertEqual(SalesRecord.objects.get().state, 'Delhi')
+
+    def test_a_sheet_that_names_its_own_state_keeps_that_spelling(self):
+        """Filling in a blank is help; overwriting what someone typed is not."""
+        buf = a_workbook([{'Date': '2026-04-05', 'State': 'NCR Delhi', 'Amount': 500}],
+                         headers=['Date', 'State', 'Amount'])
+        upload(buf)
+        self.assertEqual(SalesRecord.objects.get().state, 'NCR Delhi')
 
 
 class WhatTheOperatorIsToldAboutColumns(TestCase):
@@ -258,3 +292,152 @@ class TheColumnsThatAreEasyToMisread(TestCase):
         self.assertEqual(float(rec.net_amount), 5000)
         self.assertEqual(rec.state, 'Delhi')
         self.assertFalse(rec.is_cancelled)
+
+
+# ── file 2: AOP vs ACH ──────────────────────────────────────────────────────
+AOP_DIMS = ['CHANEL TYPE', 'HEAD', 'GTR HEAD', 'REPORT.INCHARGE', 'REGION',
+            'Sub-Region', 'Key', 'I-CODE', 'ITEM NAME', 'BRAND']
+FY27 = ['Apr-26', 'May-26', 'Jun-26', 'Jul-26', 'Aug-26', 'Sep-26',
+        'Oct-26', 'Nov-26', 'Dec-26', 'Jan-27', 'Feb-27', 'Mar-27']
+FY26 = ['Apr-25', 'May-25', 'Jun-25', 'Jul-25', 'Aug-25', 'Sep-25',
+        'Oct-25', 'Nov-25', 'Dec-25', 'Jan-26', 'Feb-26', 'Mar-26']
+AOP_SUMMARY = ['YTD AOP', 'YTD ACH', 'LYTD ACH', "FY\'26-27 AOP", "FY\'26-27 ACH",
+               'LMTD', 'MTD SEC SALES', 'NO OF SFO']
+AOP_HEADERS = (AOP_DIMS + [f'{m} AOP' for m in FY27] + FY26 + FY27 + AOP_SUMMARY)
+
+
+def aop_row(aop=None, cy=None, ly=None, **over):
+    """One wide row. Defaults put a figure in April only, so a total is
+    checkable without adding twelve numbers in your head."""
+    d = {
+        'CHANEL TYPE': 'General Trade', 'HEAD': 'Naagesh Mishra',
+        'GTR HEAD': 'Anil Mehra', 'REPORT.INCHARGE': 'Vikas Gupta',
+        'REGION': 'North', 'Sub-Region': 'Delhi', 'Key': 'x',
+        'I-CODE': 'IC-4412', 'ITEM NAME': 'APIS Honey 500g', 'BRAND': 'APIS',
+        'NO OF SFO': 4,
+        # Totals that must NOT be added to the monthly columns.
+        'YTD AOP': 999999, 'YTD ACH': 888888, 'LYTD ACH': 777777,
+        "FY\'26-27 AOP": 999999, "FY\'26-27 ACH": 888888,
+        'LMTD': 111, 'MTD SEC SALES': 222,
+    }
+    d['Apr-26 AOP'] = 100000 if aop is None else aop
+    d['Apr-26'] = 90000 if cy is None else cy
+    d['Apr-25'] = 80000 if ly is None else ly
+    d.update(over)
+    return d
+
+
+def aop_workbook(rows):
+    return a_workbook(rows, headers=AOP_HEADERS)
+
+
+class ReadingTheWideSheet(TestCase):
+
+    def test_the_sheet_is_recognised_without_being_told(self):
+        self.assertTrue(AOP.looks_like_aop_sheet(AOP_HEADERS))
+        self.assertFalse(AOP.looks_like_aop_sheet(header_names()))
+
+    def test_a_month_header_is_read_from_its_text_not_its_position(self):
+        self.assertEqual(AOP.parse_month_header('Apr-26'), (date(2026, 4, 1), False))
+        self.assertEqual(AOP.parse_month_header('Apr-26 AOP'), (date(2026, 4, 1), True))
+        self.assertEqual(AOP.parse_month_header('Mar-27'), (date(2027, 3, 1), False))
+        # Two digits mean this century: a plan sheet has no 1926 in it.
+        self.assertEqual(AOP.parse_month_header('Jan-27')[0].year, 2027)
+        for not_a_month in ('BRAND', 'YTD ACH', 'I-CODE', 'NO OF SFO', ''):
+            self.assertIsNone(AOP.parse_month_header(not_a_month), not_a_month)
+
+    def test_one_wide_row_becomes_one_record_per_month_that_has_a_figure(self):
+        upload(aop_workbook([aop_row()]))
+        # April 2026 carries plan + actual; April 2025 carries last year's.
+        self.assertEqual(SalesRecord.objects.count(), 2)
+        months = sorted(r.period.isoformat() for r in SalesRecord.objects.all())
+        self.assertEqual(months, ['2025-04-01', '2026-04-01'])
+
+    def test_an_empty_month_is_skipped_rather_than_stored_as_zero(self):
+        """A zero claims nothing sold. A blank cell in a part-finished year
+        is not making that claim."""
+        upload(aop_workbook([aop_row()]))
+        self.assertEqual(SalesRecord.objects.filter(period__gt=date(2026, 4, 1)).count(), 0)
+
+    def test_plan_and_achievement_land_on_the_same_month(self):
+        upload(aop_workbook([aop_row()]))
+        cy = SalesRecord.objects.get(period=date(2026, 4, 1))
+        self.assertEqual(float(cy.target_amount), 100000)
+        self.assertEqual(float(cy.plan_achievement), 90000)
+
+    def test_last_year_is_an_actual_with_no_plan_against_it(self):
+        upload(aop_workbook([aop_row()]))
+        ly = SalesRecord.objects.get(period=date(2025, 4, 1))
+        self.assertEqual(float(ly.target_amount), 0)
+        self.assertEqual(float(ly.plan_achievement), 80000)
+
+    def test_the_business_mapping_is_applied(self):
+        """REGION is a zone here, Sub-Region is a state, GTR HEAD is the RSM
+        and REPORT.INCHARGE is the ASM."""
+        upload(aop_workbook([aop_row()]))
+        r = SalesRecord.objects.filter(period=date(2026, 4, 1)).first()
+        self.assertEqual(r.zone, 'North')
+        self.assertEqual(r.state, 'Delhi')
+        self.assertEqual(r.rsm, 'Anil Mehra')
+        self.assertEqual(r.asm, 'Vikas Gupta')
+        self.assertEqual(r.sales_head, 'Naagesh Mishra')
+        self.assertEqual(r.channel, 'General Trade')
+        self.assertEqual(r.brand, 'APIS')
+        self.assertEqual(r.item_alt_code, 'IC-4412')
+        self.assertEqual(r.sfo_count, 4)
+
+    def test_the_year_total_columns_are_never_added_to_the_months(self):
+        """YTD ACH is the monthly columns already added up. Storing it beside
+        them would report the year roughly twice."""
+        upload(aop_workbook([aop_row()]))
+        total = sum(float(r.plan_achievement) for r in SalesRecord.objects.all())
+        self.assertEqual(total, 170000)         # 90,000 + 80,000, nothing else
+        self.assertFalse(SalesRecord.objects.filter(net_amount=888888).exists())
+
+    def test_the_operator_is_told_the_totals_were_skipped(self):
+        d = upload(aop_workbook([aop_row()])).json()
+        self.assertEqual(d['file_kind'], 'aop')
+        blob = ' '.join(d['warnings']).lower()
+        self.assertIn('skipped on purpose', blob)
+        self.assertIn('ytd ach', blob)
+
+
+class WhichFileTheSalesFigureComesFrom(TestCase):
+    """Both files describe the same money. Summing both would double it."""
+
+    def test_the_aop_sheet_alone_still_shows_sales(self):
+        upload(aop_workbook([aop_row()]))
+        cy = SalesRecord.objects.get(period=date(2026, 4, 1))
+        self.assertEqual(float(cy.net_amount), 90000)
+
+    def test_invoice_detail_takes_over_when_it_arrives(self):
+        upload(aop_workbook([aop_row()]))
+        upload(a_workbook([a_row()]))           # the Pre-Sales Dump
+        plan = SalesRecord.objects.filter(source='plan')
+        self.assertTrue(all(float(r.net_amount) == 0 for r in plan),
+                        'the AOP sheet is still adding its own actuals on top')
+        # The plan itself survives — that is the whole reason to load it.
+        self.assertEqual(float(plan.get(period=date(2026, 4, 1)).target_amount), 100000)
+        # ...and its achievement is kept for reconciliation.
+        self.assertEqual(float(plan.get(period=date(2026, 4, 1)).plan_achievement), 90000)
+
+    def test_the_order_the_files_arrive_in_does_not_matter(self):
+        upload(a_workbook([a_row()]))           # dump first this time
+        upload(aop_workbook([aop_row()]))
+        plan = SalesRecord.objects.filter(source='plan')
+        self.assertTrue(all(float(r.net_amount) == 0 for r in plan))
+
+    def test_removing_the_invoice_data_hands_the_figures_back(self):
+        upload(aop_workbook([aop_row()]))
+        r = upload(a_workbook([a_row()])).json()
+        Client().delete(f"/api/sales/uploads/?id={r['upload_id']}")
+        cy = SalesRecord.objects.get(source='plan', period=date(2026, 4, 1))
+        self.assertEqual(float(cy.net_amount), 90000,
+                         'the dashboard would show zero with a good plan file loaded')
+
+    def test_the_total_is_not_doubled_when_both_files_are_loaded(self):
+        upload(aop_workbook([aop_row(cy=20000)]))
+        upload(a_workbook([a_row()]))           # 20,000 taxable
+        d = Client().get('/api/sales/overview/').json()
+        rev = float(d.get('total_revenue') or d.get('revenue') or 0)
+        self.assertEqual(rev, 20000, f'counted twice: {rev}')

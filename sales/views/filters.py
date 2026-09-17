@@ -28,9 +28,21 @@ DIMENSIONS = {
     'channel': 'channel', 'customer': 'customer_name', 'customer_name': 'customer_name',
     'customer_type': 'customer_type',
     'salesperson': 'salesperson', 'asm': 'asm', 'rsm': 'rsm', 'territory': 'territory',
+
+    # From the two primary-sales files. The sales hierarchy runs
+    # head > rsm > asm, and a dump row also knows which depot billed it and
+    # what kind of customer and warehouse it went to.
+    'sales_head': 'sales_head', 'subzone': 'subzone', 'district': 'customer_district',
+    'business_type': 'business_type', 'warehouse_type': 'warehouse_type',
+    'location': 'location',
+    # Product hierarchy below sub-category.
+    'variant': 'variant', 'prod_group': 'prod_group', 'item_sub_type': 'item_sub_type',
+    'packaging_type': 'packaging_type', 'batch': 'batch_no',
 }
 FILTERABLE = ['state', 'zone', 'area', 'city', 'region', 'category', 'sub_category',
-              'brand', 'channel', 'salesperson', 'asm', 'rsm', 'customer_name', 'sku']
+              'brand', 'channel', 'salesperson', 'asm', 'rsm', 'customer_name', 'sku',
+              'sales_head', 'subzone', 'customer_district', 'business_type',
+              'warehouse_type', 'location', 'variant', 'prod_group']
 
 
 def _multi(request, key):

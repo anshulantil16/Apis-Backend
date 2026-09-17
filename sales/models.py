@@ -84,6 +84,30 @@ class SalesRecord(models.Model):
     target_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 
 
+    # ── Where this row came from ──────────────────────────────────────────
+    # Two primary-sales files describe overlapping ground. The Pre-Sales Dump
+    # is invoice detail; the AOP-vs-ACH sheet is the same sales already
+    # summed by month, alongside the plan. Summing both would count every
+    # rupee twice, so each row records which file it came from and the
+    # dashboards prefer invoice detail wherever it exists.
+    SOURCE_INVOICE = 'invoice'      # Pre-Sales Dump — one row per invoice line
+    SOURCE_PLAN    = 'plan'         # AOP vs ACH — one row per person/item/month
+    source = models.CharField(max_length=20, default=SOURCE_INVOICE, db_index=True)
+
+    # Above RSM in the AOP sheet's hierarchy: HEAD > GTR HEAD > REPORT.INCHARGE.
+    sales_head = models.CharField(max_length=200, blank=True, db_index=True)
+    # Field officers behind this line. A row attribute, not a monthly one, so
+    # it repeats across the months a row unpivots into.
+    sfo_count  = models.IntegerField(default=0)
+
+    # The AOP sheet's own achievement figure, always stored as given. It is the
+    # same money the Pre-Sales Dump reports line by line, so it is kept HERE
+    # rather than in net_amount, and sync_actual_source() decides which of the
+    # two feeds the dashboards. Every aggregate in this app sums net_amount and
+    # target_amount off one queryset, so keeping both sources in net_amount
+    # would double every rupee that appears in both files.
+    plan_achievement = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
     # ── Document identity (Pre-Sales Dump) ────────────────────────────────
     # Whether a row counts as a sale at all is decided here, not in the money
     # columns. An ERP dump carries cancelled invoices and credit memos in the
@@ -166,7 +190,35 @@ class SalesRecord(models.Model):
             models.Index(fields=['period', 'channel']),
             # Every headline figure filters cancelled rows out first.
             models.Index(fields=['is_cancelled', 'period']),
+            # Actuals are read from one source at a time.
+            models.Index(fields=['source', 'period']),
         ]
 
     def __str__(self):
         return f"{self.order_date} {self.product_name or self.sku} — {self.net_amount}"
+
+
+def sync_actual_source():
+    """Decide which file the sales figures come from, and make it so.
+
+    Invoice detail wins wherever it exists: it is line-level, carries the
+    cancellations, and is what reconciles against the ERP. The AOP sheet then
+    supplies only the plan, its achievement columns parked in
+    plan_achievement for comparison.
+
+    With no invoice data loaded, the AOP sheet's achievement becomes the
+    actual, so a dashboard built on that sheet alone still shows sales rather
+    than a row of zeroes.
+
+    Run after every upload and every deletion, so the answer is a function of
+    what is currently loaded rather than of what order things arrived in.
+    """
+    from django.db.models import F
+
+    plan = SalesRecord.objects.filter(source=SalesRecord.SOURCE_PLAN)
+    if not plan.exists():
+        return
+    if SalesRecord.objects.filter(source=SalesRecord.SOURCE_INVOICE).exists():
+        plan.exclude(net_amount=0).update(net_amount=0)
+    else:
+        plan.update(net_amount=F('plan_achievement'))

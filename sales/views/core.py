@@ -10,10 +10,12 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
-from ..models import SalesUpload, SalesRecord
+from ..models import SalesUpload, SalesRecord, sync_actual_source
 from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       TEXT_FIELDS, NUM_FIELDS, TEXT_MAX, DATE_FIELDS,
-                      parse_bool, is_return_type, partition_unknown)
+                      parse_bool, is_return_type, partition_unknown,
+                      state_from_code)
+from .. import aop as AOP
 
 from ..forecasting import forecast_series
 from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters,
@@ -27,6 +29,132 @@ class SalesTemplateView(APIView):
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         resp['Content-Disposition'] = 'attachment; filename="SalesIQ_Template.xlsx"'
         return resp
+
+
+def _ingest_aop(request, f, ws, header_row):
+    """Load the AOP-vs-ACH sheet, unpivoting each row into one per month."""
+    dims, months, unknown = AOP.map_columns(header_row)
+
+    if not months:
+        return Response({'error': 'No month columns found. This sheet should carry '
+                                  'columns like "Apr-26 AOP" and "Apr-26".'}, status=400)
+
+    upload = SalesUpload.objects.create(
+        filename=(f.name or '')[:255],
+        uploaded_by=str(request.query_params.get('user') or '')[:200],
+        status='completed',
+    )
+
+    batch, total_rev, total_target = [], 0.0, 0.0
+    lo = hi = None
+    empty_rows = 0
+    row_no = 1
+    try:
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            row_no += 1
+            if not any(v is not None and str(v).strip() != '' for v in row):
+                continue
+            entries = AOP.unpivot(row, dims, months)
+            if not entries:
+                empty_rows += 1
+                continue
+            for e in entries:
+                period = e['period']
+                rec = SalesRecord(
+                    upload=upload,
+                    source=SalesRecord.SOURCE_PLAN,
+                    order_date=period,
+                    period=period,
+                    net_amount=e['net_amount'],
+                    plan_achievement=e['net_amount'],
+                    target_amount=e['target_amount'],
+                    sfo_count=e['sfo_count'],
+                )
+                for field in ('channel', 'sales_head', 'rsm', 'asm', 'zone', 'state',
+                              'item_alt_code', 'product_name', 'brand'):
+                    setattr(rec, field, str(e.get(field) or '')[:TEXT_MAX.get(field, 200)])
+                batch.append(rec)
+                total_rev += e['net_amount']
+                total_target += e['target_amount']
+                lo = period if lo is None or period < lo else lo
+                hi = period if hi is None or period > hi else hi
+
+                if len(batch) >= 2000:
+                    SalesRecord.objects.bulk_create(batch, batch_size=1000)
+                    batch = []
+        if batch:
+            SalesRecord.objects.bulk_create(batch, batch_size=1000)
+    except Exception as e:
+        upload.status = 'failed'
+        upload.save(update_fields=['status'])
+        upload.records.all().delete()
+        return Response({'error': f'Failed while reading row {row_no}: {e}'}, status=400)
+
+    count = upload.records.count()
+    if count == 0:
+        upload.delete()
+        return Response({'error': 'No usable rows — every row was empty across all months.'},
+                        status=400)
+
+    sync_actual_source()
+
+    upload.row_count = count
+    upload.skipped_rows = empty_rows
+    upload.total_revenue = round(total_rev, 2)
+    upload.period_start, upload.period_end = lo, hi
+
+    warnings = []
+    plan_months = sorted({m for _, m, t in months if t})
+    warnings.append(
+        f'{count:,} month-rows built from this sheet — each row was spread across the '
+        f'{len(set(m for _, m, _ in months))} month columns it carries.')
+    if plan_months:
+        warnings.append(
+            f'Plan (AOP) loaded for {len(plan_months)} months, '
+            f'{plan_months[0]:%b %Y} to {plan_months[-1]:%b %Y}. '
+            f'Targets and achievement now sit side by side on the dashboard.')
+    skipped, unrecognised = [], []
+    for h in unknown:
+        (skipped if h in AOP.IGNORED else unrecognised).append(h)
+    if skipped:
+        warnings.append(
+            f'{len(skipped)} total column(s) skipped on purpose: {", ".join(skipped)}. '
+            f'Each is its own monthly columns added up, and storing a total beside the '
+            f'parts it is made of double-counts the year.')
+    if unrecognised:
+        warnings.append(
+            f'{len(unrecognised)} column(s) were not recognised and are ignored: '
+            f'{", ".join(unrecognised[:12])}.')
+    if empty_rows:
+        warnings.append(f'{empty_rows} row(s) had no figure in any month and were skipped.')
+
+    # The reason both files can live in one table without inflating anything.
+    if SalesRecord.objects.filter(source=SalesRecord.SOURCE_INVOICE).exists():
+        warnings.append(
+            'Invoice-level data is already loaded, so sales figures keep coming from '
+            'it and this sheet supplies the targets. Its own achievement columns are '
+            'stored for reconciliation rather than added on top.')
+
+    upload.warnings = warnings
+    upload.save()
+
+    return Response({
+        'message': f'Imported {count:,} month-rows.',
+        'upload_id': upload.id,
+        'rows': count,
+        'skipped': empty_rows,
+        'total_revenue': _money(total_rev),
+        'total_target': _money(total_target),
+        'file_kind': 'aop',
+        'period': {'from': lo.isoformat() if lo else None,
+                   'to': hi.isoformat() if hi else None},
+        'detected_columns': sorted(dims.keys()),
+        'skipped_columns': skipped,
+        'unrecognised_columns': unrecognised,
+        'cancelled_rows': 0,
+        'return_rows': 0,
+        'warnings': warnings,
+    })
 
 
 class SalesUploadView(APIView):
@@ -46,6 +174,12 @@ class SalesUploadView(APIView):
             header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
         except StopIteration:
             return Response({'error': 'The sheet is empty.'}, status=400)
+
+        # Two primary-sales files, told apart by their own headers rather than
+        # by asking the person uploading to pick — the AOP sheet is the only
+        # one carrying " AOP" month columns.
+        if AOP.looks_like_aop_sheet(header_row):
+            return _ingest_aop(request, f, ws, header_row)
 
         col_map, unknown = map_headers(header_row)
         # The Pre-Sales Dump's sales value is Taxable Amount, which is its own
@@ -160,6 +294,11 @@ class SalesUploadView(APIView):
                     v = cell(row, tf)
                     s = '' if v is None else str(v).strip()
                     setattr(rec, tf, s[:TEXT_MAX.get(tf, 150)])
+                # The dump names no state, only a GST code. Filled in only
+                # when the sheet gave no state of its own, so a file that does
+                # carry one keeps its own spelling.
+                if not rec.state:
+                    rec.state = state_from_code(rec.customer_state_code)
                 for nf in NUM_FIELDS:
                     # The headline five are derived above; the rest are stored
                     # verbatim so the sheet can be reconciled against the ERP.
@@ -186,6 +325,8 @@ class SalesUploadView(APIView):
             upload.save(update_fields=['status'])
             upload.records.all().delete()
             return Response({'error': f'Failed while reading row {row_no}: {e}'}, status=400)
+
+        sync_actual_source()
 
         count = upload.records.count()
         if count == 0:
@@ -609,6 +750,10 @@ class SalesUploadsView(APIView):
                 return Response({'error': 'Upload not found'}, status=404)
             n = u.records.count()
             u.delete()   # cascades to its rows
+            # Removing the invoice data hands the figures back to the AOP
+            # sheet, if one is loaded — otherwise the dashboard would go to
+            # zero while a perfectly good plan file sat in the table.
+            sync_actual_source()
             return Response({'message': f'Removed upload "{u.filename}" and {n:,} row(s).',
                              'deleted': n})
         n = SalesRecord.objects.count()
