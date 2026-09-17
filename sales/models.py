@@ -121,6 +121,13 @@ class SalesRecord(models.Model):
     # same sheet as live sales; counting them is how a dashboard quietly
     # overstates the year.
     document_type  = models.CharField(max_length=60, blank=True, db_index=True)
+    # The dump's "Type" column, which is the LINE type, not the document
+    # type: Business Central writes Item for a product line and G/L Account
+    # for a charge posted straight to a ledger account — freight, rounding,
+    # a manual adjustment. Both are real money on the invoice, but only an
+    # Item line has a product on it, so the two must be told apart before a
+    # product report can be trusted.
+    line_type      = models.CharField(max_length=60, blank=True, db_index=True)
     is_cancelled   = models.BooleanField(default=False, db_index=True)
     # True for a credit memo / return. Kept as its own flag rather than
     # inferred at query time so every aggregate agrees on what a return is.

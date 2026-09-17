@@ -305,6 +305,11 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
     batch, total_rev = [], 0.0
     no_date = bad_value = 0
     cancelled_rows = return_rows = 0
+    # What the Type column actually holds, and how much money sits on
+    # lines that carry no product.
+    line_types = {}
+    non_item_value = 0.0
+    return_negative = return_positive = 0
     lo = hi = None
     row_no = header_row_index
     try:
@@ -335,6 +340,9 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
                 cancelled_rows += 1
             if returned:
                 return_rows += 1
+            lt = str(cell(row, 'line_type') or '').strip()
+            if lt:
+                line_types[lt] = line_types.get(lt, 0) + 1
 
             # ── money ─────────────────────────────────────────────────
             # Taxable Amount is the sales value the business reports on:
@@ -366,6 +374,14 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
                 net = gross - discount
             if not net and not gross and not cancelled:
                 bad_value += 1
+
+            if lt and lt.lower() != 'item':
+                non_item_value += net
+            if returned:
+                if net < 0:
+                    return_negative += 1
+                elif net > 0:
+                    return_positive += 1
 
             rec = SalesRecord(
                 upload=upload,
@@ -426,16 +442,38 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
         }, status=400)
 
     warnings, notes = [], []
+    if line_types:
+        notes.append(
+            'Line types in the Type column: '
+            + ', '.join(f'{k} ({v:,})' for k, v in
+                        sorted(line_types.items(), key=lambda x: -x[1])[:8]) + '.')
+    if non_item_value:
+        notes.append(
+            f'Rs {non_item_value:,.0f} of the total sits on lines with no product '
+            f'on them - freight, rounding and other charges posted straight to a '
+            f'ledger account. They count in the sales total, as they do on the '
+            f'invoice, but they cannot appear in a product or SKU breakdown. That '
+            f'is why those views add up to slightly less than the headline.')
     if cancelled_rows:
         notes.append(
             f'{cancelled_rows} cancelled row(s) were loaded but are excluded from '
             f'every sales figure. They stay in the data so the file still '
             f'reconciles against the ERP.')
     if return_rows:
-        warnings.append(
-            f'{return_rows} credit memo / return row(s) found. Their amounts are '
-            f'stored exactly as the file gives them — if your export writes returns '
-            f'as positive numbers, tell us and we will flip the sign on load.')
+        if return_positive and not return_negative:
+            warnings.append(
+                f'{return_rows} return row(s), every one carrying a POSITIVE amount - '
+                f'so they are ADDING to sales instead of reducing them. Say the word '
+                f'and we will flip the sign on load.')
+        elif return_negative and not return_positive:
+            notes.append(
+                f'{return_rows} return row(s), all negative - they already reduce '
+                f'sales, which is right. Nothing to change.')
+        else:
+            warnings.append(
+                f'{return_rows} return row(s): {return_negative:,} negative and '
+                f'{return_positive:,} positive. A mix means the export is not '
+                f'consistent about which way a return points.')
     if no_date:
         warnings.append(f'{no_date} row(s) skipped — the date column was empty or '
                         f'unreadable. Those sales are NOT in the dashboard.')
@@ -471,6 +509,7 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
         'unrecognised_columns': unrecognised,
         'cancelled_rows': cancelled_rows,
         'return_rows': return_rows,
+        'line_types': line_types,
         'warnings': warnings,
         'notes': notes,
     })

@@ -139,12 +139,41 @@ class WhatCountsAsASale(TestCase):
         self.assertEqual(SalesRecord.objects.filter(is_cancelled=True).count(), 1)
         self.assertEqual(float(SalesUpload.objects.get().total_revenue), 20000)
 
+    def test_the_type_column_is_the_line_type_not_the_document_type(self):
+        """This export writes Item for a product line and G/L Account for a
+        charge posted to a ledger account. Reading it as a document type made
+        every row look like a document kind nobody recognised."""
+        upload(a_workbook([a_row(**{'Type': 'Item'}),
+                           a_row(**{'Type': 'G/L Account', 'Invoice No.': 'INV-2'})]))
+        self.assertEqual(
+            sorted(SalesRecord.objects.values_list('line_type', flat=True)),
+            ['G/L Account', 'Item'])
+        # ...and none of them is a return.
+        self.assertEqual(SalesRecord.objects.filter(is_return=True).count(), 0)
+
+    def test_money_on_a_non_product_line_is_called_out(self):
+        """A G/L Account line is real money on the invoice but has no product,
+        so it cannot appear in a product breakdown. Without saying so, those
+        views quietly add up to less than the headline."""
+        d = upload(a_workbook([a_row(**{'Type': 'Item'}),
+                               a_row(**{'Type': 'G/L Account', 'Invoice No.': 'INV-2',
+                                        'Taxable Amount': 500})])).json()
+        blob = ' '.join(d['notes'])
+        self.assertIn('G/L Account', blob)
+        self.assertIn('no product', blob)
+
     def test_a_credit_memo_is_flagged_as_a_return(self):
-        upload(a_workbook([a_row(), a_row(**{'Type': 'Credit Memo'})]))
+        """Returns come from a Document Type column when the export has one.
+        The Type column in this dump does not carry them."""
+        upload(a_workbook([a_row(), a_row(**{'Document Type': 'Credit Memo',
+                                             'Invoice No.': 'INV-2'})],
+                          headers=header_names() + ['Document Type']))
         self.assertEqual(SalesRecord.objects.filter(is_return=True).count(), 1)
         self.assertTrue(is_return_type('Credit Memo'))
         self.assertTrue(is_return_type('Sales Credit Memo'))
         self.assertFalse(is_return_type('Invoice'))
+        self.assertFalse(is_return_type('Item'))
+        self.assertFalse(is_return_type('G/L Account'))
 
     def test_the_operator_is_told_what_was_found(self):
         """Silently dropping cancelled rows is right; not saying so is not.
@@ -153,10 +182,12 @@ class WhatCountsAsASale(TestCase):
         import doing its job, so it is a note. A credit memo needs a decision
         about its sign, so it is a warning.
         """
-        d = upload(a_workbook([a_row(**{'Cancelled': 'Yes'}),
-                               a_row(**{'Type': 'Credit Memo'})])).json()
+        d = upload(a_workbook(
+            [a_row(**{'Cancelled': 'Yes'}),
+             a_row(**{'Document Type': 'Credit Memo', 'Invoice No.': 'INV-2'})],
+            headers=header_names() + ['Document Type'])).json()
         self.assertIn('cancelled', ' '.join(d['notes']).lower())
-        self.assertIn('credit memo', ' '.join(d['warnings']).lower())
+        self.assertIn('return row', ' '.join(d['warnings']).lower())
 
     def test_a_clean_import_raises_no_warnings_at_all(self):
         """A normal ERP export used to come back with seven amber warnings,
@@ -268,9 +299,10 @@ class WhatTheOperatorIsToldAboutColumns(TestCase):
         self.assertIn('not recognised', ' '.join(d['warnings']).lower())
 
     def test_the_counts_come_back_for_the_screen_to_show(self):
-        d = upload(a_workbook([a_row(),
-                               a_row(**{'Cancelled': 'Yes'}),
-                               a_row(**{'Type': 'Credit Memo'})])).json()
+        d = upload(a_workbook(
+            [a_row(), a_row(**{'Cancelled': 'Yes'}),
+             a_row(**{'Document Type': 'Credit Memo', 'Invoice No.': 'INV-3'})],
+            headers=header_names() + ['Document Type'])).json()
         self.assertEqual(d['cancelled_rows'], 1)
         self.assertEqual(d['return_rows'], 1)
         self.assertEqual(d['rows'], 3)
