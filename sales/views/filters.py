@@ -95,6 +95,61 @@ def pending_months(qs):
             and float(r['measured'] or 0) == 0}
 
 
+def comparable_window(qs):
+    """Revenue and plan over the months where BOTH exist.
+
+    Achievement was being computed as total revenue over total plan, and in
+    the real file those two cover different stretches of time: eighteen
+    months of sales (two financial years) against twelve months of plan (the
+    current one). That reported 86% -- the business's own sheet, comparing
+    like with like in its YTD columns, said 66%.
+
+    The two fail to line up from both ends, so both ends have to be cut:
+
+      * Apr 2025 to Mar 2026 is sales with no plan against it -- last year,
+        loaded so the dashboard can show history and growth. Counting it
+        towards this year's plan inflates achievement.
+      * Oct 2026 to Mar 2027 is plan with no sales against it yet -- the rest
+        of the financial year. Counting it deflates achievement, and is the
+        reason a healthy business reads as though it is missing target.
+
+    What is left is the overlap, which is what "achievement" has always meant
+    and is exactly what the review sheet's YTD AOP and YTD ACH columns hold.
+
+    -> {'revenue', 'target', 'pct', 'months', 'from', 'to'}
+    """
+    from django.db.models import Sum as _Sum
+
+    rows = (qs.values('period')
+              .annotate(planned=_Sum('target_amount'),
+                        measured=_Sum('measured_amount'),
+                        earned=_Sum('net_amount'))
+              .order_by('period'))
+
+    revenue = target = 0.0
+    months = []
+    for r in rows:
+        planned = float(r['planned'] or 0)
+        measured = float(r['measured'] or 0)
+        # A month counts only if it has a plan AND something actually
+        # happened in it. Nothing measured against a plan means the month is
+        # still ahead of the business, not that it sold nothing.
+        if planned <= 0 or measured == 0 or not r['period']:
+            continue
+        revenue += float(r['earned'] or 0)
+        target += planned
+        months.append(r['period'])
+
+    return {
+        'revenue': round(revenue, 2),
+        'target': round(target, 2),
+        'pct': round(revenue / target * 100, 1) if target else None,
+        'months': len(months),
+        'from': months[0].isoformat() if months else None,
+        'to': months[-1].isoformat() if months else None,
+    }
+
+
 def with_actuals(qs):
     """The same slice of the business, minus months still ahead of it.
 

@@ -615,6 +615,61 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
                                  f'{period} is being counted from both files: {live}')
 
 
+class AchievementIsComparedLikeForLike(TestCase):
+    """Revenue and plan cover different stretches of time. Dividing the two
+    totals is what put 508,382%, and then 86%, on this dashboard."""
+
+    def _two_years(self):
+        # Plan for Apr and May 2026 only. Actuals for Apr 2025 (last year,
+        # no plan) and Apr 2026 (this year, planned).
+        upload(aop_workbook([aop_row(aop=100000, cy=60000, ly=500000,
+                                     **{'May-26 AOP': 100000})]))
+
+    def test_last_years_sales_do_not_count_towards_this_years_plan(self):
+        self._two_years()
+        d = Client().get('/api/sales/overview/').json()
+        b = d['achievement_basis']
+        self.assertEqual(b['months'], 1, f'compared {b["months"]} months, not just April 2026')
+        self.assertEqual(b['revenue'], 60000)
+        self.assertEqual(b['target'], 100000)
+        self.assertEqual(d['achievement_pct'], 60.0)
+
+    def test_months_still_to_come_do_not_count_against_it(self):
+        """May is planned and has not happened. Counting it makes a business
+        on plan look like one that is missing."""
+        self._two_years()
+        b = Client().get('/api/sales/overview/').json()['achievement_basis']
+        self.assertNotIn('2026-05', str(b['to']), 'an unstarted month was compared')
+
+    def test_the_headline_totals_are_still_the_real_totals(self):
+        """The revenue and target KPIs keep their full values -- they are
+        just no longer each other's denominator."""
+        self._two_years()
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(float(d['revenue']), 560000)      # 500k last yr + 60k this
+        self.assertEqual(float(d['target']), 200000)       # Apr + May plan
+
+    def test_the_basis_says_which_months_were_compared(self):
+        self._two_years()
+        b = Client().get('/api/sales/overview/').json()['achievement_basis']
+        self.assertEqual(b['from'], '2026-04-01')
+        self.assertEqual(b['to'], '2026-04-01')
+
+
+class PacingRunsOnThePlansOwnPeriod(TestCase):
+
+    def test_the_year_is_not_already_over_because_a_plan_reaches_march(self):
+        """Measured across everything loaded, last year's sales made the
+        financial year look 95.9% elapsed in September."""
+        upload(aop_workbook([aop_row(aop=100000, cy=60000, ly=500000,
+                                     **{'Mar-27 AOP': 100000})]))
+        p = Client().get('/api/sales/pacing/').json()
+        self.assertTrue(p['has_target'])
+        self.assertLess(p['elapsed_pct'], 60,
+                        f"the year cannot be {p['elapsed_pct']}% gone in April")
+        self.assertGreater(p['days_remaining'], 0)
+
+
 class MonthsTheBusinessHasNotReachedYet(TestCase):
     """A full year of plan is loaded in April. Nine of those months have not
     happened, and zero is not what they sold."""

@@ -23,7 +23,7 @@ from .. import aop as AOP
 from ..forecasting import forecast_series
 from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
-                      NOT_SALES_ZONES, with_actuals)
+                      NOT_SALES_ZONES, with_actuals, comparable_window)
 
 class SalesTemplateView(APIView):
     def get(self, request):
@@ -645,6 +645,7 @@ class SalesOverviewView(APIView):
         ]
         revenue = _money(agg['revenue'])
         target = _money(agg['target'])
+        like_for_like = comparable_window(qs)
         lo, hi = _period_bounds(qs)
 
         # Preceding window of identical length, same dimension filters, so the
@@ -682,8 +683,19 @@ class SalesOverviewView(APIView):
             'discount': _money(agg['discount']),
             'avg_order_value': _money(revenue / orders) if orders else 0.0,
             'target': target,
-            'achievement_pct': round((revenue / target) * 100, 1) if target else None,
-            'gap_to_target': _money(target - revenue) if target else None,
+            # Compared over the months that carry both a plan and a result.
+            # Revenue and target above are the full totals for the current
+            # filter and are NOT each other's denominator: they cover
+            # different spans, and dividing one by the other is what put
+            # 508,382% and then 86% on this dashboard.
+            'achievement_pct': like_for_like['pct'],
+            'achievement_basis': like_for_like,
+            # The gap belongs to the same comparison as the percentage
+            # beside it: plan for the months that have happened, less what
+            # was sold in them. Against the full-year plan it read as a
+            # shortfall of Rs 45 crore on a year that is half over.
+            'gap_to_target': (round(like_for_like['target'] - like_for_like['revenue'], 2)
+                              if like_for_like['target'] else None),
             'prev_revenue': prev_rev,
             'revenue_growth_pct': _pct_change(revenue, prev_rev),
             'quantity_growth_pct': _pct_change(_money(agg['qty']),

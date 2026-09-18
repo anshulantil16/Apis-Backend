@@ -439,23 +439,47 @@ def pacing(qs):
     Run-rate is computed on *elapsed* days rather than the whole window,
     because comparing a part-finished period against a full-period target
     always looks like failure and tells you nothing."""
-    agg = qs.aggregate(rev=Sum('net_amount'), tgt=Sum('target_amount'),
-                       lo=Min('order_date'), hi=Max('order_date'))
+    # Pacing is about one plan period, so it is measured on the months that
+    # carry a plan -- not on everything loaded. Measured across the whole
+    # span, last year's sales made the year look 95.9% elapsed while the
+    # financial year it was pacing was half over.
+    planned = (qs.filter(target_amount__gt=0)
+                 .aggregate(lo=Min('period'), hi=Max('period')))
+    plan_lo, plan_hi = planned['lo'], planned['hi']
+    if not plan_lo or not plan_hi:
+        return {'has_target': False,
+                'note': 'Add a Target column to the upload to enable pacing.'}
+
+    window = qs.filter(period__gte=plan_lo, period__lte=plan_hi)
+    agg = window.aggregate(rev=Sum('net_amount'), tgt=Sum('target_amount'),
+                           lo=Min('order_date'))
+    # How far the year has got is set by the last month with RESULTS in it,
+    # not the last month with a plan against it. Reading it off the plan made
+    # the year 91.8% elapsed in September, because the plan already runs to
+    # the following March.
+    done = (window.exclude(measured_amount=0)
+                  .aggregate(hi=Max('order_date'))['hi'])
     rev, tgt = _f(agg['rev']), _f(agg['tgt'])
-    lo, hi = agg['lo'], agg['hi']
+    lo, hi = agg['lo'], done
     if not tgt or not lo or not hi:
         return {'has_target': False,
                 'note': 'Add a Target column to the upload to enable pacing.'}
 
-    # Period is assumed to run to the end of the month the data ends in.
-    period_end = _add_months(hi.replace(day=1), 1) - timedelta(days=1)
+    # The plan period runs from its first planned month to the end of its
+    # last one, whatever the data happens to reach.
+    lo = plan_lo
+    period_end = _add_months(plan_hi.replace(day=1), 1) - timedelta(days=1)
     total_days = (period_end - lo).days + 1
-    elapsed = (hi - lo).days + 1
+    # Elapsed runs to the end of the last completed month, not to the date of
+    # its last invoice: a month with results in it is a month that happened.
+    elapsed_to = _add_months(hi.replace(day=1), 1) - timedelta(days=1)
+    elapsed = (min(elapsed_to, period_end) - lo).days + 1
     frac = min(1.0, elapsed / total_days) if total_days else 1.0
 
     run_rate = rev / elapsed if elapsed else 0
     projected = run_rate * total_days
-    required = (tgt - rev) / max(1, (period_end - hi).days) if period_end > hi else 0
+    remaining_days = max(0, (period_end - elapsed_to).days)
+    required = (tgt - rev) / max(1, remaining_days) if remaining_days else 0
 
     return {
         'has_target': True,
@@ -463,7 +487,7 @@ def pacing(qs):
         'achievement_pct': round(rev / tgt * 100, 1),
         'elapsed_pct': round(frac * 100, 1),
         'days_elapsed': elapsed, 'days_total': total_days,
-        'days_remaining': max(0, (period_end - hi).days),
+        'days_remaining': remaining_days,
         'run_rate_per_day': round(run_rate, 2),
         'required_per_day': round(required, 2),
         'projected_total': round(projected, 2),
