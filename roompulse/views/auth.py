@@ -7,6 +7,7 @@ so the bar for entry is "you work here," not an explicit allowlist.
 """
 import os
 import secrets
+from django.conf import settings
 from django.core.cache import cache
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -19,6 +20,14 @@ SUPER_ADMIN_EMAIL = 'anshul@apisindia.com'
 _OTP_TTL = 300
 _OTP_MAX_ATTEMPTS = 5
 _COMPANY_DOMAIN = '@apisindia.com'
+
+
+def _dev_login():
+    """Same PORTAL_DEV_LOGIN flag the main portal and Goal Setting use — on a
+    developer's machine there is no SMTP configured, so send_mail always
+    fails and nobody can ever receive a code to sign in with. Off unless
+    PORTAL_DEV_LOGIN=1 is in their own .env; absent from every deployed one."""
+    return bool(getattr(settings, 'PORTAL_DEV_LOGIN', False))
 
 
 def resolve_role(email):
@@ -58,9 +67,18 @@ class RoomPulseLoginView(APIView):
 
             code = f"{secrets.randbelow(1000000):06d}"
             cache.set(f'roompulse_otp_{email}', {'code': code, 'attempts': 0}, timeout=_OTP_TTL)
+
+            # See _dev_login() above — this is the one place a code is ever
+            # exposed in the response, and it cannot happen on a server since
+            # PORTAL_DEV_LOGIN is absent from every deployed .env.
+            if _dev_login():
+                print(f'[roompulse] dev sign-in code for {email}: {code}')
+                return Response({'message': f'Login code sent to {_mask(email)}',
+                                 'masked_email': _mask(email), 'expires_in': _OTP_TTL,
+                                 'dev_otp': code})
+
             try:
                 from django.core.mail import send_mail
-                from django.conf import settings
                 send_mail(
                     subject='AdminPulse — Login Code',
                     message=(f"Your AdminPulse login code is:\n\n    {code}\n\n"
