@@ -45,12 +45,52 @@ FILTERABLE = ['state', 'zone', 'area', 'city', 'region', 'category', 'sub_catego
               'warehouse_type', 'location', 'variant', 'prod_group']
 
 
+# The dump's Zone column doubles as a bucket for rows the business has
+# already decided are not sales, and it says so in the value itself. They were
+# being added to revenue and shown as a zone of their own on the zone chart --
+# Rs 15.9 lakh of "NOT A PART OF SALES" sitting beside Delhi and Maharashtra.
+# Excluded here rather than at import so the rows stay in the table and the
+# file still reconciles line for line against the ERP.
+NOT_SALES_ZONES = ['NOT A PART OF SALES']
+
+
 def _multi(request, key):
     """Collect a repeatable / comma-separated query param into a list."""
     vals = []
     for raw in request.query_params.getlist(key):
         vals += [v.strip() for v in str(raw).split(',') if v.strip()]
     return vals
+
+
+def pending_months(qs):
+    """Months with a plan against them and nothing measured yet.
+
+    A financial year is loaded with twelve months of plan the day it opens, so
+    from April the table holds targets for months that have not happened. They
+    aggregate to revenue of zero, which is not the same claim as "nothing
+    sold" -- and every statistic in the dashboard was reading it as though it
+    were: the mean of the last two years was computed over six months of
+    not-yet, the seasonal index for October to March came out half what it
+    should be, and the trend line fell off a cliff at the end of the year.
+    """
+    from django.db.models import Sum as _Sum
+    return {r['period'] for r in
+            (qs.values('period')
+               .annotate(measured=_Sum('measured_amount'),
+                         planned=_Sum('target_amount'))
+               .order_by())
+            if r['period'] and float(r['planned'] or 0) > 0
+            and float(r['measured'] or 0) == 0}
+
+
+def with_actuals(qs):
+    """The same slice of the business, minus months still ahead of it.
+
+    For anything that computes a statistic -- a mean, a seasonal index, a
+    forecast. Views that show the plan itself keep the full span and mark
+    those months instead.
+    """
+    return qs.exclude(period__in=pending_months(qs))
 
 
 def apply_dim_filters(qs, request):
@@ -64,7 +104,7 @@ def apply_dim_filters(qs, request):
     one that got forgotten would quietly report a cancelled invoice as
     revenue.
     """
-    qs = qs.exclude(is_cancelled=True)
+    qs = qs.exclude(is_cancelled=True).exclude(zone__in=NOT_SALES_ZONES)
     applied = {}
     for f in FILTERABLE:
         vals = _multi(request, f)

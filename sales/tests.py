@@ -476,13 +476,13 @@ class ReadingTheWideSheet(TestCase):
         upload(aop_workbook([aop_row()]))
         cy = SalesRecord.objects.get(period=date(2026, 4, 1))
         self.assertEqual(float(cy.target_amount), 100000)
-        self.assertEqual(float(cy.plan_achievement), 90000)
+        self.assertEqual(float(cy.measured_amount), 90000)
 
     def test_last_year_is_an_actual_with_no_plan_against_it(self):
         upload(aop_workbook([aop_row()]))
         ly = SalesRecord.objects.get(period=date(2025, 4, 1))
         self.assertEqual(float(ly.target_amount), 0)
-        self.assertEqual(float(ly.plan_achievement), 80000)
+        self.assertEqual(float(ly.measured_amount), 80000)
 
     def test_the_business_mapping_is_applied(self):
         """REGION is a zone here, Sub-Region is a state, GTR HEAD is the RSM
@@ -503,7 +503,7 @@ class ReadingTheWideSheet(TestCase):
         """YTD ACH is the monthly columns already added up. Storing it beside
         them would report the year roughly twice."""
         upload(aop_workbook([aop_row()]))
-        total = sum(float(r.plan_achievement) for r in SalesRecord.objects.all())
+        total = sum(float(r.measured_amount) for r in SalesRecord.objects.all())
         self.assertEqual(total, 170000)         # 90,000 + 80,000, nothing else
         self.assertFalse(SalesRecord.objects.filter(net_amount=888888).exists())
 
@@ -523,22 +523,67 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
         cy = SalesRecord.objects.get(period=date(2026, 4, 1))
         self.assertEqual(float(cy.net_amount), 90000)
 
-    def test_invoice_detail_takes_over_when_it_arrives(self):
-        upload(aop_workbook([aop_row()]))
-        upload(a_workbook([a_row()]))           # the Pre-Sales Dump
+    def test_invoice_detail_takes_over_for_the_months_it_covers(self):
+        # Both files put April 2026 at 20,000, so the dump plainly covers it
+        # and its line detail is the better record of the same money.
+        upload(aop_workbook([aop_row(cy=20000)]))
+        upload(a_workbook([a_row()]))           # the Pre-Sales Dump, April 2026
         plan = SalesRecord.objects.filter(source='plan')
-        self.assertTrue(all(float(r.net_amount) == 0 for r in plan),
-                        'the AOP sheet is still adding its own actuals on top')
+        cy = plan.get(period=date(2026, 4, 1))
+        self.assertEqual(float(cy.net_amount), 0,
+                         'the AOP sheet is still adding its own actuals on top')
         # The plan itself survives — that is the whole reason to load it.
-        self.assertEqual(float(plan.get(period=date(2026, 4, 1)).target_amount), 100000)
+        self.assertEqual(float(cy.target_amount), 100000)
         # ...and its achievement is kept for reconciliation.
-        self.assertEqual(float(plan.get(period=date(2026, 4, 1)).plan_achievement), 90000)
+        self.assertEqual(float(cy.measured_amount), 20000)
+
+    def test_history_the_dump_never_covered_is_kept(self):
+        """The regression this whole per-month election exists to prevent.
+
+        The real Pre-Sales Dump is a live ERP extract: it holds the month it
+        was taken in and nothing else. The review sheet beside it holds two
+        years. Letting the dump win outright — which is what it used to do —
+        threw eighteen months of the company's history away to keep one month
+        of line detail, and left a trend chart that began below zero.
+        """
+        upload(aop_workbook([aop_row()]))       # April 2025 AND April 2026
+        upload(a_workbook([a_row()]))           # dump covers April 2026 only
+        ly = SalesRecord.objects.get(source='plan', period=date(2025, 4, 1))
+        self.assertEqual(float(ly.net_amount), 80000,
+                         'April 2025 was erased by a dump that never covered it')
+
+    def test_a_month_the_dump_only_clipped_stays_with_the_review_sheet(self):
+        """A handful of stragglers is not a month's sales.
+
+        The extract catches a few invoices either side of the month it was
+        taken in. Treating those as the whole month reported one real file's
+        August at Rs 2.5 crore when the review sheet had it at Rs 23.6 crore.
+        """
+        upload(aop_workbook([aop_row(cy=100000)]))
+        upload(a_workbook([a_row(**{'Taxable Amount': 2000})]))
+        cy = SalesRecord.objects.get(source='plan', period=date(2026, 4, 1))
+        self.assertEqual(float(cy.net_amount), 100000,
+                         'a 2% clipping of the month was allowed to stand in for it')
+
+    def test_a_month_of_nothing_but_credit_notes_is_not_a_covered_month(self):
+        """Seven of the nine months in the real dump were credit notes only.
+
+        Their totals are negative, so a dashboard that took them as the
+        month's sales drew the year opening below the axis.
+        """
+        upload(aop_workbook([aop_row()]))
+        upload(a_workbook([a_row(**{'Taxable Amount': -5000})]))
+        cy = SalesRecord.objects.get(source='plan', period=date(2026, 4, 1))
+        self.assertEqual(float(cy.net_amount), 90000)
+        rev = float(Client().get('/api/sales/overview/').json().get('revenue') or 0)
+        self.assertGreater(rev, 0, 'the month came out negative')
 
     def test_the_order_the_files_arrive_in_does_not_matter(self):
         upload(a_workbook([a_row()]))           # dump first this time
-        upload(aop_workbook([aop_row()]))
+        upload(aop_workbook([aop_row(cy=20000)]))
         plan = SalesRecord.objects.filter(source='plan')
-        self.assertTrue(all(float(r.net_amount) == 0 for r in plan))
+        self.assertEqual(float(plan.get(period=date(2026, 4, 1)).net_amount), 0)
+        self.assertEqual(float(plan.get(period=date(2025, 4, 1)).net_amount), 80000)
 
     def test_removing_the_invoice_data_hands_the_figures_back(self):
         upload(aop_workbook([aop_row()]))
@@ -548,12 +593,198 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
         self.assertEqual(float(cy.net_amount), 90000,
                          'the dashboard would show zero with a good plan file loaded')
 
-    def test_the_total_is_not_doubled_when_both_files_are_loaded(self):
+    def test_a_month_in_both_files_is_counted_once(self):
+        # April 2026 is in both, at 20,000 each. April 2025 is in the review
+        # sheet alone, at 80,000. The right answer counts April 2026 once and
+        # keeps April 2025 — it does not drop the history to prove it can
+        # avoid double counting.
         upload(aop_workbook([aop_row(cy=20000)]))
-        upload(a_workbook([a_row()]))           # 20,000 taxable
+        upload(a_workbook([a_row()]))           # 20,000 taxable, April 2026
         d = Client().get('/api/sales/overview/').json()
         rev = float(d.get('total_revenue') or d.get('revenue') or 0)
-        self.assertEqual(rev, 20000, f'counted twice: {rev}')
+        self.assertEqual(rev, 100000, f'not 20,000 (April 26) + 80,000 (April 25): {rev}')
+
+    def test_the_two_sources_never_both_hold_a_figure_for_one_month(self):
+        """The invariant underneath every total on the dashboard."""
+        upload(aop_workbook([aop_row(cy=20000)]))
+        upload(a_workbook([a_row()]))
+        for period in (date(2025, 4, 1), date(2026, 4, 1)):
+            live = {r.source for r in SalesRecord.objects.filter(period=period)
+                    if float(r.net_amount) != 0}
+            self.assertLessEqual(len(live), 1,
+                                 f'{period} is being counted from both files: {live}')
+
+
+class MonthsTheBusinessHasNotReachedYet(TestCase):
+    """A full year of plan is loaded in April. Nine of those months have not
+    happened, and zero is not what they sold."""
+
+    def _loaded(self):
+        # Plan for April AND May; actuals for April only.
+        upload(aop_workbook([aop_row(cy=20000, **{'May-26 AOP': 50000})]))
+        upload(a_workbook([a_row()]))
+
+    def test_a_month_with_a_plan_and_no_actuals_reports_no_revenue(self):
+        self._loaded()
+        pts = {p['label']: p for p in Client().get('/api/sales/trend/').json()['results']}
+        self.assertIsNone(pts['May 2026']['revenue'],
+                          'a month that has not happened is being reported as zero sales')
+        self.assertEqual(float(pts['May 2026']['target']), 50000,
+                         'the plan for it should still show')
+        self.assertTrue(pts['May 2026']['pending'])
+
+    def test_it_is_not_named_the_worst_month_of_the_year(self):
+        self._loaded()
+        d = Client().get('/api/sales/trend/').json()
+        self.assertNotEqual(d['worst_month']['label'], 'May 2026')
+
+    def test_it_is_not_averaged_into_the_seasonal_index(self):
+        """Averaging a month that has run with one that has not halves it."""
+        self._loaded()
+        by_month = {m['label']: m for m in
+                    Client().get('/api/sales/seasonality/').json()['results']}
+        self.assertEqual(by_month['May']['samples'], 0,
+                         'a month that has not happened was sampled as a zero')
+        # April really did run, twice — last year and this.
+        self.assertEqual(by_month['Apr']['samples'], 2)
+
+    def test_a_month_that_genuinely_sold_nothing_still_reads_as_zero(self):
+        """Only a month with a plan and no actuals is unknown. A month with
+        neither is a real, measured zero."""
+        upload(a_workbook([a_row()]))
+        pts = Client().get('/api/sales/trend/').json()['results']
+        self.assertFalse(any(p['pending'] for p in pts))
+
+
+class SayingHowMuchOfTheBusinessAChartSpeaksFor(TestCase):
+
+    def test_a_breakdown_reports_what_it_cannot_attribute(self):
+        upload(a_workbook([
+            a_row(**{'Taxable Amount': 30000}),
+            a_row(**{'Cust.State Code': '', 'Taxable Amount': 10000}),
+        ]))
+        d = Client().get('/api/sales/breakdown/?dim=state').json()
+        self.assertEqual(d['coverage']['attributed'], 30000)
+        self.assertEqual(d['coverage']['unattributed'], 10000)
+        self.assertEqual(d['coverage']['pct'], 75.0)
+
+    def test_a_complete_dimension_reports_full_coverage(self):
+        upload(a_workbook([a_row()]))
+        d = Client().get('/api/sales/breakdown/?dim=zone').json()
+        self.assertEqual(d['coverage']['pct'], 100.0)
+
+
+class OnePersonOneRow(TestCase):
+    """The review sheet shouts names, the ERP dump does not."""
+
+    def test_the_same_person_spelled_two_ways_is_one_person(self):
+        upload(aop_workbook([aop_row(**{'GTR HEAD': 'VAIBHAV MISHRA'})]))
+        upload(a_workbook([a_row(**{'RSM Name': 'Vaibhav Mishra'})]))
+        names = [r['name'] for r in
+                 Client().get('/api/sales/breakdown/?dim=rsm&limit=50').json()['results']]
+        self.assertEqual(names.count('Vaibhav Mishra'), 1,
+                         f'one person is on the leaderboard twice: {names}')
+
+    def test_their_sales_are_added_together_not_split(self):
+        upload(a_workbook([
+            a_row(**{'RSM Name': 'VAIBHAV MISHRA', 'Taxable Amount': 30000}),
+            a_row(**{'RSM Name': 'Vaibhav Mishra', 'Taxable Amount': 20000}),
+        ]))
+        rows = Client().get('/api/sales/breakdown/?dim=rsm&limit=50').json()['results']
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(float(rows[0]['revenue']), 50000)
+
+    def test_it_does_not_touch_what_was_sold(self):
+        """An item code is case-sensitive; a product name is the brand's to
+        spell. Only who somebody is gets restyled."""
+        upload(a_workbook([a_row(**{'Item Code': 'APS-HNY-500',
+                                    'Item Name': 'APIS Honey 500g'})]))
+        r = SalesRecord.objects.first()
+        self.assertEqual(r.sku, 'APS-HNY-500')
+        self.assertEqual(r.product_name, 'APIS Honey 500g')
+
+
+class RowsTheBusinessSaysAreNotSales(TestCase):
+    """The dump's Zone column carries its own opt-out, and it is not subtle."""
+
+    def test_a_not_a_part_of_sales_row_is_kept_but_never_counted(self):
+        upload(a_workbook([
+            a_row(),
+            a_row(**{'Zone': 'NOT A PART OF SALES', 'Taxable Amount': 500000}),
+        ]))
+        # Still in the table, so the file reconciles line for line with the ERP.
+        self.assertEqual(SalesRecord.objects.count(), 2)
+        rev = float(Client().get('/api/sales/overview/').json().get('revenue') or 0)
+        self.assertEqual(rev, 20000, f'counted a row marked not-a-sale: {rev}')
+
+    def test_it_is_not_offered_as_a_zone_to_look_at(self):
+        upload(a_workbook([
+            a_row(),
+            a_row(**{'Zone': 'NOT A PART OF SALES', 'Taxable Amount': 500000}),
+        ]))
+        d = Client().get('/api/sales/breakdown/?dim=zone&limit=50').json()
+        names = [r['name'] for r in d['results']]
+        self.assertNotIn('NOT A PART OF SALES', names)
+
+    def test_the_uploads_list_and_the_dashboard_agree(self):
+        """Two places showing one number. They are counted the same way or
+        the operator has to decide which of them is lying."""
+        r = upload(a_workbook([
+            a_row(),
+            a_row(**{'Zone': 'NOT A PART OF SALES', 'Taxable Amount': 500000}),
+            a_row(**{'Cancelled': 'Yes', 'Taxable Amount': 700000}),
+        ])).json()
+        listed = float(Client().get('/api/sales/uploads/').json()['results'][0]
+                       ['revenue'])
+        shown = float(Client().get('/api/sales/overview/').json().get('revenue') or 0)
+        self.assertEqual(listed, shown, f'list says {listed}, dashboard says {shown}')
+
+
+class TellingTheOperatorWhichFileAMonthCameFrom(TestCase):
+
+    def test_the_upload_says_which_months_came_from_where(self):
+        upload(aop_workbook([aop_row(cy=20000)]))
+        r = upload(a_workbook([a_row()])).json()
+        blob = ' '.join(r.get('notes', [])).lower()
+        self.assertIn('review sheet', blob)
+        self.assertIn('invoice dump', blob)
+        self.assertIn('apr 2025', blob)
+
+    def test_nothing_is_claimed_when_only_one_file_is_loaded(self):
+        r = upload(a_workbook([a_row()])).json()
+        blob = ' '.join(r.get('notes', [])).lower()
+        self.assertNotIn('never both at once', blob)
+
+
+class TheUnitTheReviewSheetIsWrittenIn(TestCase):
+    """The review sheet is in lakhs; the dump beside it is in rupees."""
+
+    def test_a_sheet_in_lakhs_is_brought_up_to_rupees(self):
+        # A plan cell reading 4.5 is Rs 4,50,000. Read as rupees it put a
+        # Rs 319 crore annual plan on the dashboard as Rs 31,927, and every
+        # achievement figure came out at 508,382%.
+        upload(aop_workbook([aop_row(aop=4.5, cy=3.2, ly=2.8)]))
+        cy = SalesRecord.objects.get(period=date(2026, 4, 1))
+        self.assertEqual(float(cy.target_amount), 450000)
+        self.assertEqual(float(cy.measured_amount), 320000)
+
+    def test_a_sheet_already_in_rupees_is_left_alone(self):
+        upload(aop_workbook([aop_row()]))       # 100000 / 90000 / 80000
+        cy = SalesRecord.objects.get(period=date(2026, 4, 1))
+        self.assertEqual(float(cy.target_amount), 100000)
+
+    def test_the_operator_is_told_the_figures_were_rescaled(self):
+        d = upload(aop_workbook([aop_row(aop=4.5, cy=3.2, ly=2.8)])).json()
+        blob = ' '.join(d['notes']).lower()
+        self.assertIn('lakh', blob)
+
+    def test_the_unit_is_judged_on_the_median_not_one_stray_cell(self):
+        rows = [aop_row(aop=4.5, cy=3.2, ly=2.8) for _ in range(5)]
+        rows.append(aop_row(aop=999999999, cy=1, ly=1))
+        upload(aop_workbook(rows))
+        r = SalesRecord.objects.filter(period=date(2026, 4, 1),
+                                       target_amount=450000)
+        self.assertTrue(r.exists(), 'one huge cell decided the unit for the sheet')
 
 
 class OneWorkbookTwoSheets(TestCase):
@@ -625,7 +856,7 @@ class OneWorkbookTwoSheets(TestCase):
         self.assertEqual(plan.count(), 2, 'the actuals columns were dropped')
         cy = plan.get(period=date(2026, 4, 1))
         self.assertEqual(float(cy.target_amount), 100000)
-        self.assertEqual(float(cy.plan_achievement), 90000)
+        self.assertEqual(float(cy.measured_amount), 90000)
 
     def test_every_message_says_which_sheet_it_came_from(self):
         """With two sheets in one file, an unattributed message leaves you

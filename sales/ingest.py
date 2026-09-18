@@ -209,6 +209,29 @@ ALPHA_STATE_CODES = {
 }
 
 
+# ── one spelling per person ───────────────────────────────────────────────
+#
+# The two primary-sales files disagree about case. The review sheet shouts
+# (VAIBHAV MISHRA, MOHINDER SHARMA); the ERP dump does not (Vaibhav Mishra,
+# Mohinder Sharma). Grouped as written, one person becomes two rows on every
+# leaderboard with their sales split between them, and two separate branches
+# of the org tree -- and nothing on screen suggests the two are the same
+# person. Eight people and accounts in the first real file were split this
+# way, including a national sales head.
+#
+# Folding to one case would group them but would also shout the names back at
+# the user; title case groups them and reads like a name. It is applied to who
+# somebody is, never to what they sold: an item code is case-sensitive and a
+# product name is the brand's to spell.
+NAME_FIELDS = ('salesperson', 'asm', 'rsm', 'sales_head', 'customer_name')
+
+
+def normalise_name(value):
+    """A person or account name, spelled one way."""
+    text = ' '.join(str(value or '').split())
+    return text.title() if text else ''
+
+
 def state_from_code(value):
     """A state code in any of the spellings these exports use -> a state name.
 

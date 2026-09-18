@@ -10,8 +10,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
-from ..models import SalesUpload, SalesRecord, sync_actual_source
+from ..models import (SalesUpload, SalesRecord, sync_actual_source,
+                      elected_sources)
 from ..ingest import (map_headers, parse_date, parse_num, build_template,
+                      NAME_FIELDS, normalise_name,
                       TEXT_FIELDS, NUM_FIELDS, TEXT_MAX, DATE_FIELDS,
                       parse_bool, is_return_type, partition_unknown,
                       state_from_code, state_from_subregion, find_header_row)
@@ -19,7 +21,8 @@ from .. import aop as AOP
 
 from ..forecasting import forecast_series
 from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters,
-                      apply_dim_filters, _period_bounds, _money, _pct_change)
+                      apply_dim_filters, _period_bounds, _money, _pct_change,
+                      NOT_SALES_ZONES, with_actuals)
 
 class SalesTemplateView(APIView):
     def get(self, request):
@@ -48,6 +51,26 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
     lo = hi = None
     empty_rows = 0
     row_no = header_row_index
+
+    # This sheet is written in lakhs and the dump beside it in rupees, so the
+    # unit has to be settled before a single row is stored -- otherwise one
+    # row lands in one unit and its neighbour in another. It is read off the
+    # first few hundred figures and then applied to everything, including the
+    # rows already buffered when it was decided. Nothing is flushed to the
+    # database until it is known.
+    SAMPLE_TARGET = 400
+    sample, scale, unit = [], None, 'rupees'
+
+    def _flush(recs, mult):
+        nonlocal total_rev, total_target
+        for r in recs:
+            r.net_amount = round(float(r.net_amount) * mult, 2)
+            r.measured_amount = r.net_amount
+            r.target_amount = round(float(r.target_amount) * mult, 2)
+            total_rev += float(r.net_amount)
+            total_target += float(r.target_amount)
+        SalesRecord.objects.bulk_create(recs, batch_size=1000)
+
     try:
         for row in ws.iter_rows(min_row=header_row_index + 1, values_only=True):
             row_no += 1
@@ -57,6 +80,12 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
             if not entries:
                 empty_rows += 1
                 continue
+            if scale is None:
+                for e in entries:
+                    if e['net_amount']:
+                        sample.append(e['net_amount'])
+                    if e['target_amount']:
+                        sample.append(e['target_amount'])
             for e in entries:
                 period = e['period']
                 rec = SalesRecord(
@@ -65,29 +94,35 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
                     order_date=period,
                     period=period,
                     net_amount=e['net_amount'],
-                    plan_achievement=e['net_amount'],
+                    measured_amount=e['net_amount'],
                     target_amount=e['target_amount'],
                     sfo_count=e['sfo_count'],
                 )
                 for field in ('channel', 'sales_head', 'rsm', 'asm', 'zone', 'state',
                               'item_alt_code', 'product_name', 'brand'):
-                    setattr(rec, field, str(e.get(field) or '')[:TEXT_MAX.get(field, 200)])
+                    val = str(e.get(field) or '').strip()
+                    if field in NAME_FIELDS:
+                        val = normalise_name(val)
+                    setattr(rec, field, val[:TEXT_MAX.get(field, 200)])
                 # Sub-Region is a selling territory (AP-1), not a state. It
                 # keeps its own column, and the state is read off its code
                 # so this sheet and the invoice dump name states the same way.
                 rec.subzone = rec.state[:100]
                 rec.state = state_from_subregion(rec.subzone)
                 batch.append(rec)
-                total_rev += e['net_amount']
-                total_target += e['target_amount']
                 lo = period if lo is None or period < lo else lo
                 hi = period if hi is None or period > hi else hi
 
-                if len(batch) >= 2000:
-                    SalesRecord.objects.bulk_create(batch, batch_size=1000)
-                    batch = []
+            if scale is None and len(sample) >= SAMPLE_TARGET:
+                scale, unit = AOP.detect_money_scale(sample)
+            if scale is not None and len(batch) >= 2000:
+                _flush(batch, scale)
+                batch = []
+        # A sheet shorter than the sample target decides here instead.
+        if scale is None:
+            scale, unit = AOP.detect_money_scale(sample)
         if batch:
-            SalesRecord.objects.bulk_create(batch, batch_size=1000)
+            _flush(batch, scale)
     except Exception as e:
         # Only this sheet's rows. The upload belongs to the file, and another
         # sheet may already have loaded cleanly into it.
@@ -104,6 +139,12 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
     notes.append(
         f'{count:,} month-rows built from this sheet — each row was spread across the '
         f'{len(set(m for _, m, _ in months))} month columns it carries.')
+    if scale != 1:
+        notes.append(
+            f'Figures on this sheet are in {unit} — a plan cell reading 4.57 is '
+            f'Rs 4,57,000 — so every one was multiplied by {scale:,} to match the '
+            f'invoice data, which is in rupees. Total plan loaded: '
+            f'Rs {total_target:,.0f}.')
     if plan_months:
         notes.append(
             f'Plan (AOP) loaded for {len(plan_months)} months, '
@@ -124,12 +165,8 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
     if empty_rows:
         notes.append(f'{empty_rows} row(s) had no figure in any month and were skipped.')
 
-    # The reason both files can live in one table without inflating anything.
-    if SalesRecord.objects.filter(source=SalesRecord.SOURCE_INVOICE).exists():
-        notes.append(
-            'Invoice-level data is already loaded, so sales figures keep coming from '
-            'it and this sheet supplies the targets. Its own achievement columns are '
-            'stored for reconciliation rather than added on top.')
+    # Which file wins which month is decided once, after every sheet has been
+    # read, so it is reported by the caller rather than guessed at here.
 
 
     return Response({
@@ -228,14 +265,40 @@ class SalesUploadView(APIView):
         # Revenue is counted over what actually sold. A cancelled invoice is
         # stored and reported in the row count — it is a real document — but
         # it is not money, here any more than on the dashboard.
-        earned = upload.records.exclude(is_cancelled=True).aggregate(
-            rev=Sum('net_amount'))['rev']
+        # The same two exclusions the dashboard applies. The number printed
+        # beside a file in the uploads list and the number on the dashboard
+        # are the same claim, so they have to be counted the same way.
+        earned = (upload.records.exclude(is_cancelled=True)
+                  .exclude(zone__in=NOT_SALES_ZONES)
+                  .aggregate(rev=Sum('net_amount'))['rev'])
         upload.row_count = agg['n'] or 0
         upload.skipped_rows = sum(r.data.get('skipped', 0) for _, r in good)
         upload.total_revenue = round(float(earned or 0), 2)
         upload.period_start, upload.period_end = agg['lo'], agg['hi']
         upload.warnings = [f'{t}: {w}' for t, r in good for w in r.data.get('warnings', [])]
         upload.notes = [f'{t}: {n}' for t, r in good for n in r.data.get('notes', [])]
+
+        # Where each month's sales actually came from. This is a fact about
+        # the whole upload, not about either sheet on its own, and it is the
+        # one thing somebody checking a figure against Excel most needs to
+        # know -- the two files cover different spans and different channels,
+        # so which one a month came from decides what the month means.
+        elected = elected_sources()
+        if len(set(elected.values())) > 1:
+            def _span(ms):
+                ms = sorted(ms)
+                if len(ms) == 1:
+                    return ms[0].strftime('%b %Y')
+                return f"{ms[0].strftime('%b %Y')} to {ms[-1].strftime('%b %Y')}"
+            inv = [m for m, src in elected.items() if src == 'invoice']
+            pln = [m for m, src in elected.items() if src == 'plan']
+            upload.notes.append(
+                f'Sales by month come from two places, never both at once. '
+                f'{_span(pln)} ({len(pln)} month(s)) from the review sheet, the '
+                f'only record that covers those months. {_span(inv)} '
+                f'({len(inv)} month(s)) from the invoice dump, which accounts '
+                f'for it in full and carries the line detail. Product, SKU and '
+                f'customer breakdowns exist only for the invoice months.')
         for title, resp in outcomes:
             if resp.status_code != 200:
                 upload.warnings.insert(
@@ -246,6 +309,13 @@ class SalesUploadView(APIView):
             single = good[0][1]
             single.data['rows'] = upload.row_count
             single.data['total_revenue'] = _money(upload.total_revenue)
+            # The file-level notes -- which months came from which file above
+            # all -- are added after the sheet has answered, so the sheet's own
+            # response does not have them. A one-sheet upload was therefore the
+            # one case where the operator never saw the election, which is
+            # exactly the case where a second file has just changed it.
+            single.data['notes'] = upload.notes
+            single.data['warnings'] = upload.warnings
             return single
 
         # More than one sheet loaded: merge into one answer, and say which
@@ -393,6 +463,9 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
                 discount=discount,
                 tax=tax,
                 net_amount=net,
+                # The row's own figure, never overwritten. sync_actual_source()
+                # elects net_amount from this each time it runs.
+                measured_amount=net,
                 target_amount=parse_num(cell(row, 'target_amount')),
                 is_cancelled=cancelled,
                 is_return=returned,
@@ -400,6 +473,8 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
             for tf in TEXT_FIELDS:
                 v = cell(row, tf)
                 s = '' if v is None else str(v).strip()
+                if tf in NAME_FIELDS:
+                    s = normalise_name(s)
                 setattr(rec, tf, s[:TEXT_MAX.get(tf, 150)])
             # The dump names no state, only a GST code. Filled in only
             # when the sheet gave no state of its own, so a file that does
@@ -486,8 +561,13 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
         warnings.append(f'{len(unrecognised)} column(s) were not recognised and are '
                         f'ignored: {shown}. Rename them to match the template, or ask '
                         f'for them to be added.')
+    # 'state' is derived from the customer's state code when no state column
+    # is present, so asking col_map alone produced a note telling the user
+    # their state view would be empty while it was in fact showing all 24 of
+    # their states.
+    DERIVED_FROM = {'state': ('state', 'customer_state_code')}
     missing = [d for d in ('state', 'category', 'channel', 'salesperson')
-               if d not in col_map]
+               if not any(c in col_map for c in DERIVED_FROM.get(d, (d,)))]
     if missing:
         notes.append('No ' + ', '.join(missing) + ' column — those breakdown views '
                         'will be empty. Add the column and re-upload to enable them.')
@@ -584,6 +664,9 @@ class SalesBreakdownView(APIView):
             limit = 15
 
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
+        # What the whole slice is worth BEFORE rows with nothing in this
+        # column are dropped, so the chart can say what it is leaving out.
+        grand = _money(qs.aggregate(v=Sum('net_amount'))['v'])
         qs = qs.exclude(**{field: ''})
         rows = (qs.values(field)
                   .annotate(revenue=Sum('net_amount'), quantity=Sum('quantity'),
@@ -609,11 +692,24 @@ class SalesBreakdownView(APIView):
                 'share_pct': round((rev / total_rev) * 100, 1),
             })
         others = all_rows[limit:]
+        attributed = sum(float(r['revenue'] or 0) for r in all_rows)
         return Response({
             'dimension': dim_key,
             'metric': metric,
             'results': out,
             'total_groups': len(all_rows),
+            # How much of the business this breakdown can actually speak for.
+            # Neither file carries every column: the review sheet has no
+            # customer or SKU, the ERP dump has no brand or sales head, and
+            # national accounts -- Amazon, D-Mart, export -- sit in no state
+            # at all. Without this the state chart quietly totalled 57% of
+            # the headline and looked like it had lost Rs 118 crore.
+            'coverage': {
+                'attributed': round(attributed, 2),
+                'total': grand,
+                'unattributed': round(grand - attributed, 2),
+                'pct': round(attributed / grand * 100, 1) if grand else None,
+            },
             'others': {
                 'count': len(others),
                 'revenue': _money(sum(float(r['revenue'] or 0) for r in others)),
@@ -629,14 +725,25 @@ class SalesTrendView(APIView):
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
         rows = (qs.values('period')
                   .annotate(revenue=Sum('net_amount'), quantity=Sum('quantity'),
+                            measured=Sum('measured_amount'),
                             target=Sum('target_amount'), orders=Count('invoice_no', distinct=True))
                   .order_by('period'))
         out, running = [], 0.0
         prev_rev = None
         for r in rows:
             rev = _money(r['revenue'])
-            running += rev
             tgt = _money(r['target'])
+            # A month the business has not reached yet: a plan against it and
+            # nothing measured. Reported as revenue of zero it drew the line
+            # off a cliff for the rest of the financial year and made the
+            # worst month of the year one that has not happened. Left as null
+            # the line stops where the data stops, and the target bars carry
+            # on beside it.
+            pending = tgt > 0 and _money(r['measured']) == 0
+            if pending:
+                rev = None
+            else:
+                running += rev
             out.append({
                 'period': r['period'].isoformat(),
                 'label': r['period'].strftime('%b %Y'),
@@ -644,14 +751,19 @@ class SalesTrendView(APIView):
                 'quantity': _money(r['quantity']),
                 'orders': r['orders'],
                 'target': tgt,
-                'achievement_pct': round((rev / tgt) * 100, 1) if tgt else None,
+                'pending': pending,
+                'achievement_pct': (round((rev / tgt) * 100, 1)
+                                    if tgt and rev is not None else None),
                 'cumulative': round(running, 2),
-                'mom_growth_pct': _pct_change(rev, prev_rev) if prev_rev is not None else None,
+                'mom_growth_pct': (_pct_change(rev, prev_rev)
+                                   if prev_rev is not None and rev is not None else None),
             })
-            prev_rev = rev
+            if rev is not None:
+                prev_rev = rev
 
-        best = max(out, key=lambda r: r['revenue']) if out else None
-        worst = min(out, key=lambda r: r['revenue']) if out else None
+        scored = [r for r in out if r['revenue'] is not None]
+        best = max(scored, key=lambda r: r['revenue']) if scored else None
+        worst = min(scored, key=lambda r: r['revenue']) if scored else None
         return Response({
             'results': out, 'months': len(out),
             'best_month': best, 'worst_month': worst,
@@ -671,7 +783,8 @@ class SalesForecastView(APIView):
         agg_field = 'quantity' if metric == 'quantity' else 'net_amount'
 
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
-        rows = (qs.values('period').annotate(v=Sum(agg_field)).order_by('period'))
+        rows = (with_actuals(qs).values('period')
+                .annotate(v=Sum(agg_field)).order_by('period'))
         points = [(r['period'], float(r['v'] or 0)) for r in rows]
 
         result = forecast_series(points, periods=periods)
@@ -797,7 +910,8 @@ class SalesInsightsView(APIView):
                 })
 
         # Momentum from the monthly series
-        months = list(qs.values('period').annotate(v=Sum('net_amount')).order_by('period'))
+        months = list(with_actuals(qs).values('period')
+                      .annotate(v=Sum('net_amount')).order_by('period'))
         if len(months) >= 4:
             recent = [float(m['v'] or 0) for m in months[-3:]]
             earlier = [float(m['v'] or 0) for m in months[-6:-3]] or recent

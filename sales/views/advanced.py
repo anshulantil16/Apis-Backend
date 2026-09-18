@@ -18,7 +18,8 @@ from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       TEXT_FIELDS, NUM_FIELDS, TEXT_MAX)
 
 from .. import analytics as AN
-from .filters import (DIMENSIONS, apply_filters, apply_dim_filters, _period_bounds)
+from .filters import (DIMENSIONS, apply_filters, apply_dim_filters, _period_bounds,
+                      with_actuals)
 
 
 
@@ -76,7 +77,8 @@ class SalesAnomaliesView(APIView):
         except (TypeError, ValueError):
             z = 2.0
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
-        data = AN.anomalies(qs, z=z)
+        # A month that has not happened is not an anomaly.
+        data = AN.anomalies(with_actuals(qs), z=z)
         data['filters'] = applied
         return Response(data)
 
@@ -84,7 +86,9 @@ class SalesAnomaliesView(APIView):
 class SalesSeasonalityView(APIView):
     def get(self, request):
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
-        data = AN.seasonality(qs)
+        # Averaging October over a year that has run and one that has not
+        # halved every month in the back half of the financial year.
+        data = AN.seasonality(with_actuals(qs))
         data['filters'] = applied
         return Response(data)
 

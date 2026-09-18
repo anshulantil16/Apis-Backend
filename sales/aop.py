@@ -52,6 +52,41 @@ SUMMARY_COLUMNS = [
 # 'Key' is a concatenation of the columns either side of it.
 IGNORED = ['Key'] + SUMMARY_COLUMNS
 
+# ── the unit this sheet is written in ─────────────────────────────────────
+#
+# A monthly plan for one person-and-item reads as 4.57, not 457000. This sheet
+# is written in LAKHS, the way Indian management review sheets usually are,
+# while the invoice dump beside it is in rupees. Loading the two without
+# reconciling the unit put a Rs 319 crore annual plan onto the dashboard as
+# Rs 31,927, against Rs 16 crore of invoiced sales, and every achievement
+# figure in the product came out at 508,382%.
+#
+# The unit is detected rather than assumed, because the day this sheet is
+# exported in rupees a hard-coded multiplier would be a silent 100,000x error
+# in the other direction. The two scales are four orders of magnitude apart --
+# a plan line in lakhs is single or double digits, the same line in rupees is
+# hundreds of thousands -- so the test has an enormous margin and does not
+# need to be clever.
+LAKH = 100_000
+LAKH_CEILING = 10_000
+
+
+def detect_money_scale(values):
+    """-> (multiplier, unit name) for a sheet's money columns.
+
+    Judged on the median rather than the total or the maximum, so a single
+    stray cell -- a row that holds a footnote, a column total left in place --
+    cannot decide the unit for the whole sheet.
+    """
+    vals = sorted(abs(v) for v in values if v)
+    if not vals:
+        return 1, 'rupees'
+    median = vals[len(vals) // 2]
+    if median < LAKH_CEILING:
+        return LAKH, 'lakhs'
+    return 1, 'rupees'
+
+
 MONTHS = {m: i for i, m in enumerate(
     ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
      'jul', 'aug', 'sep', 'oct', 'nov', 'dec'], start=1)}
