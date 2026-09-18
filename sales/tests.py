@@ -615,6 +615,64 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
                                  f'{period} is being counted from both files: {live}')
 
 
+class TheSheetChecksItself(TestCase):
+    """The review sheet states its own totals. Comparing them against the
+    months actually read turns every upload into a test of itself."""
+
+    def test_it_says_so_when_the_months_add_up_to_the_stated_totals(self):
+        # aop_row's defaults: Apr-26 plan 100,000, Apr-26 actual 90,000,
+        # Apr-25 actual 80,000 -- so the sheet's own totals are those sums.
+        d = upload(aop_workbook([aop_row(**{
+            'YTD AOP': 100000, 'YTD ACH': 90000, 'LYTD ACH': 80000,
+            "FY'26-27 AOP": 100000, "FY'26-27 ACH": 90000,
+        })])).json()
+        blob = ' '.join(d['notes'])
+        self.assertIn('agree to the rupee', blob, blob)
+        self.assertNotIn('Does not match', blob)
+
+    def test_it_says_so_when_they_do_not(self):
+        """A month misread, dropped or double-counted stops these agreeing."""
+        d = upload(aop_workbook([aop_row(**{
+            'YTD AOP': 999999, 'YTD ACH': 90000, 'LYTD ACH': 80000,
+            "FY'26-27 AOP": 999999, "FY'26-27 ACH": 90000,
+        })])).json()
+        blob = ' '.join(d['notes'])
+        self.assertIn('Does not match', blob, blob)
+        self.assertIn('999,999', blob)
+
+    def test_the_totals_are_still_never_stored_as_sales(self):
+        upload(aop_workbook([aop_row(**{
+            'YTD AOP': 100000, 'YTD ACH': 90000, 'LYTD ACH': 80000,
+            "FY'26-27 AOP": 100000, "FY'26-27 ACH": 90000,
+        })]))
+        total = sum(float(r.measured_amount) for r in SalesRecord.objects.all())
+        self.assertEqual(total, 170000, 'a summary column was loaded as data')
+
+    def test_secondary_sales_are_reported_but_not_added_to_primary(self):
+        d = upload(aop_workbook([aop_row(**{'MTD SEC SALES': 45000})])).json()
+        blob = ' '.join(d['notes'])
+        self.assertIn('SEC SALES', blob)
+        rev = float(Client().get('/api/sales/overview/').json()['revenue'])
+        self.assertEqual(rev, 170000, 'secondary sales were added to primary')
+
+
+class GroupingByWhatTheLineActuallyIs(TestCase):
+
+    def test_v_remars_can_be_broken_down(self):
+        """SALES, SR and GOOD SR (stock came back), SCHEME CN (an offer
+        settled later by credit note) -- worth seeing split out."""
+        upload(a_workbook([
+            a_row(**{'V-REMARS': 'SALES'}),
+            a_row(**{'V-REMARS': 'SR', 'Taxable Amount': -3000}),
+            a_row(**{'V-REMARS': 'SCHEME CN', 'Taxable Amount': -1000}),
+        ]))
+        rows = {r['name']: r for r in
+                Client().get('/api/sales/breakdown/?dim=transaction_type').json()['results']}
+        self.assertEqual(float(rows['SALES']['revenue']), 20000)
+        self.assertEqual(float(rows['SR']['revenue']), -3000)
+        self.assertEqual(float(rows['SCHEME CN']['revenue']), -1000)
+
+
 class TheYearRunsAprilToMarch(TestCase):
     """Every one of the business's own files says so: the plan columns run
     Apr-26 to Mar-27 and the summaries are headed FY'26-27."""

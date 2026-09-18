@@ -36,6 +36,88 @@ class SalesTemplateView(APIView):
         return resp
 
 
+def _reconcile_against_sheet(upload, watermark, stated, scale):
+    """Does what we loaded add up to what the sheet says it should?
+
+    The review sheet carries its own totals. Comparing them against the
+    months this importer actually read turns every upload into a test of
+    itself: if a month column were misread, dropped or counted twice, these
+    would stop agreeing and say so, instead of a wrong number reaching the
+    dashboard quietly.
+
+    Rounded to the rupee before comparing. The sheet is written in lakhs to
+    six decimal places, so a few paise of floating-point drift across twenty
+    thousand rows is arithmetic, not a fault.
+    """
+    from ..analytics import financial_year
+
+    rows = (upload.records.filter(id__gt=watermark)
+            .values('period')
+            .annotate(plan=Sum('target_amount'), actual=Sum('measured_amount'))
+            .order_by('period'))
+    by_month = {r['period']: (float(r['plan'] or 0), float(r['actual'] or 0))
+                for r in rows if r['period']}
+    if not by_month:
+        return []
+
+    planned = {m for m, (p, _) in by_month.items() if p > 0}
+    if not planned:
+        return []
+    this_fy = financial_year(max(planned))
+    # "To date" is every month of this financial year that has a result in
+    # it -- which is exactly what the sheet means by YTD.
+    ytd = sorted(m for m in planned
+                 if financial_year(m) == this_fy and by_month[m][1] != 0)
+    last_fy_same = [m for m in by_month
+                    if financial_year(m) == this_fy - 1 and ytd
+                    and m.month in {x.month for x in ytd}]
+
+    loaded = {
+        'fy_plan': sum(by_month[m][0] for m in by_month
+                       if financial_year(m) == this_fy),
+        'fy_actual': sum(by_month[m][1] for m in by_month
+                         if financial_year(m) == this_fy),
+        'ytd_plan': sum(by_month[m][0] for m in ytd),
+        'ytd_actual': sum(by_month[m][1] for m in ytd),
+        'last_ytd': sum(by_month[m][1] for m in last_fy_same),
+    }
+    LABEL = {'fy_plan': "the year's plan", 'fy_actual': 'achieved this year',
+             'ytd_plan': 'plan to date', 'ytd_actual': 'achieved to date',
+             'last_ytd': 'the same months last year'}
+
+    agreed, differed = [], []
+    for key, label in LABEL.items():
+        if key not in stated:
+            continue
+        want = round(stated[key] * scale, 0)
+        got = round(loaded.get(key, 0.0), 0)
+        if abs(want - got) <= max(1.0, abs(want) * 0.0001):
+            agreed.append(label)
+        else:
+            differed.append(f'{label}: your sheet says Rs {want:,.0f}, the months '
+                            f'loaded come to Rs {got:,.0f}')
+
+    out = []
+    if agreed:
+        out.append(
+            'Checked against your own totals on this sheet (YTD AOP, YTD ACH, '
+            'LYTD ACH and the FY columns): ' + ', '.join(agreed) +
+            ' all agree to the rupee. Those columns are not loaded as data — '
+            'each is its own months added up — but they make a good test that '
+            'the months were read correctly.')
+    if differed:
+        out.append('Does not match your own totals on this sheet — '
+                   + '; '.join(differed) +
+                   '. Worth checking before trusting the figures.')
+    if 'secondary' in stated and stated['secondary']:
+        out.append(
+            f'MTD SEC SALES on this sheet totals Rs {stated["secondary"] * scale:,.0f} '
+            f'— secondary sales, month to date. It is read for this check but not '
+            f'loaded as sales: it measures a different thing from the primary '
+            f'figures beside it and adding the two would double the month.')
+    return out
+
+
 def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
     """Load the AOP-vs-ACH sheet, unpivoting each row into one per month."""
     dims, months, unknown = AOP.map_columns(header_row)
@@ -63,6 +145,14 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
     SAMPLE_TARGET = 400
     sample, scale, unit = [], None, 'rupees'
 
+    # The sheet states its own totals in YTD AOP, YTD ACH, LYTD ACH and the
+    # FY columns. They are not stored -- each is its own months added up --
+    # but they are the business's own statement of what those months come to,
+    # which makes them the best available test of whether this importer read
+    # the months correctly. Totalled here, checked at the end.
+    summary_cols = AOP.map_summary_columns(header_row)
+    stated = {k: 0.0 for k in summary_cols}
+
     def _flush(recs, mult):
         nonlocal total_rev, total_target
         for r in recs:
@@ -82,6 +172,8 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
             if not entries:
                 empty_rows += 1
                 continue
+            for k, v in AOP.read_summary(row, summary_cols).items():
+                stated[k] += v
             if scale is None:
                 for e in entries:
                     if e['net_amount']:
@@ -141,6 +233,8 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
     notes.append(
         f'{count:,} month-rows built from this sheet — each row was spread across the '
         f'{len(set(m for _, m, _ in months))} month columns it carries.')
+    if stated:
+        notes.extend(_reconcile_against_sheet(upload, watermark, stated, scale))
     if scale != 1:
         notes.append(
             f'Figures on this sheet are in {unit} — a plan cell reading 4.57 is '

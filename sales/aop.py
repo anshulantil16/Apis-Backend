@@ -52,6 +52,58 @@ SUMMARY_COLUMNS = [
 # 'Key' is a concatenation of the columns either side of it.
 IGNORED = ['Key'] + SUMMARY_COLUMNS
 
+# ── the summary columns, used as a check rather than as data ──────────────
+#
+# Still not stored: every one is its own monthly columns added up, and
+# keeping a total beside the parts it is made of is how a dashboard reports
+# the year twice. But they are the business's own statement of what the
+# months come to, which makes them the best possible test of whether this
+# importer read the months correctly. So they are totalled as the sheet is
+# read and compared against what was actually loaded, and the upload says
+# whether the two agree.
+#
+# What each one means, per the business:
+#   YTD AOP        the plan, April to date
+#   YTD ACH        what was achieved against it, April to date
+#   LYTD ACH       the same months of last year
+#   FY'xx-xx AOP   the plan for the whole financial year
+#   FY'xx-xx ACH   achieved so far this financial year
+#   LMTD           last month to date
+#   MTD SEC SALES  secondary sales, month to date
+# Any of them can be negative: a month with more returned than sold is a real
+# thing, and the sheet writes it as a minus.
+SUMMARY_CHECKS = {
+    'ytd_plan':     re.compile(r'^ytd\s+aop$'),
+    'ytd_actual':   re.compile(r'^ytd\s+ach$'),
+    'last_ytd':     re.compile(r'^lytd\s+ach$'),
+    # _norm leaves the apostrophe in FY'26-27, so it has to be allowed for.
+    'fy_plan':      re.compile(r"^fy\s*'?\s*\d{2}\s*\d{2}\s+aop$"),
+    'fy_actual':    re.compile(r"^fy\s*'?\s*\d{2}\s*\d{2}\s+ach$"),
+    'secondary':    re.compile(r'^mtd\s+sec\s+sales$'),
+}
+
+
+def map_summary_columns(header_row):
+    """-> {check name: column index} for the sheet's own totals."""
+    found = {}
+    for ci, cell in enumerate(header_row):
+        if cell is None:
+            continue
+        key = _norm(cell)
+        for name, pattern in SUMMARY_CHECKS.items():
+            if name not in found and pattern.match(key):
+                found[name] = ci
+    return found
+
+
+def read_summary(row, summary_cols):
+    """-> {check name: value} for one row, in the sheet's own unit."""
+    out = {}
+    for name, ci in summary_cols.items():
+        if ci < len(row):
+            out[name] = parse_num(row[ci])
+    return out
+
 # ── the unit this sheet is written in ─────────────────────────────────────
 #
 # A monthly plan for one person-and-item reads as 4.57, not 457000. This sheet

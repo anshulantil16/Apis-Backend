@@ -46,6 +46,11 @@ DIMENSIONS = {
     'uom': 'uom', 'location_state': 'location_state', 'hsn': 'hsn_code',
     'gst_jurisdiction': 'gst_jurisdiction', 'currency': 'currency_code',
     'line_type': 'line_type', 'gl_account': 'gl_account_name',
+    # The dump's V-REMARS, which is the business's own classification of
+    # every line: SALES, SR and GOOD SR (stock came back), SCHEME CN (an
+    # offer settled later by credit note) and NOT A PART OF SALES. Worth
+    # grouping by in its own right -- how much came back, and on what.
+    'transaction_type': 'remarks',
 }
 FILTERABLE = ['state', 'zone', 'area', 'city', 'region', 'category', 'sub_category',
               'brand', 'channel', 'salesperson', 'asm', 'rsm', 'customer_name', 'sku',
@@ -54,7 +59,7 @@ FILTERABLE = ['state', 'zone', 'area', 'city', 'region', 'category', 'sub_catego
               # See DIMENSIONS above: carried by the dump, previously unusable.
               'customer_type', 'pack_size', 'item_sub_type', 'packaging_type',
               'uom', 'location_state', 'gst_jurisdiction', 'currency_code',
-              'line_type', 'gl_account_name', 'hsn_code']
+              'line_type', 'gl_account_name', 'hsn_code', 'remarks']
 
 
 # The dump's Zone column doubles as a bucket for rows the business has
