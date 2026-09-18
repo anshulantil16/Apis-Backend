@@ -674,6 +674,134 @@ class SayingHowMuchOfTheBusinessAChartSpeaksFor(TestCase):
         self.assertEqual(d['coverage']['pct'], 100.0)
 
 
+class TheVRemarsColumn(TestCase):
+    """The dump has no Document Type column. V-REMARS is the only place the
+    business says what a line actually is."""
+
+    def test_a_sales_return_is_recognised_as_a_return(self):
+        upload(a_workbook([
+            a_row(),
+            a_row(**{'V-REMARS': 'SR', 'Taxable Amount': -5000}),
+            a_row(**{'V-REMARS': 'GOOD SR', 'Taxable Amount': -2000}),
+            a_row(**{'V-REMARS': 'SCHEME CN', 'Taxable Amount': -1000}),
+        ]))
+        self.assertEqual(SalesRecord.objects.filter(is_return=True).count(), 3,
+                         'returns came through as ordinary negative sales')
+
+    def test_returns_still_reduce_sales(self):
+        upload(a_workbook([a_row(),
+                           a_row(**{'V-REMARS': 'SR', 'Taxable Amount': -5000})]))
+        rev = float(Client().get('/api/sales/overview/').json()['revenue'])
+        self.assertEqual(rev, 15000, f'20,000 less a 5,000 return is 15,000, not {rev}')
+
+    def test_not_a_part_of_sales_is_kept_but_never_counted(self):
+        upload(a_workbook([
+            a_row(),
+            a_row(**{'V-REMARS': 'NOT A PART OF SALES', 'Taxable Amount': 90000}),
+        ]))
+        self.assertEqual(SalesRecord.objects.count(), 2, 'the row must survive')
+        self.assertEqual(SalesRecord.objects.filter(is_not_sales=True).count(), 1)
+        rev = float(Client().get('/api/sales/overview/').json()['revenue'])
+        self.assertEqual(rev, 20000, f'freight was counted as sales: {rev}')
+
+    def test_it_is_flagged_from_the_remark_not_the_zone(self):
+        """Matching on Zone caught 176 of 239 flagged lines in the real file
+        and left Rs 27.5 lakh of freight in revenue."""
+        upload(a_workbook([
+            a_row(),
+            a_row(**{'V-REMARS': 'NOT A PART OF SALES', 'Zone': 'EXPORT',
+                     'Taxable Amount': 90000}),
+        ]))
+        rev = float(Client().get('/api/sales/overview/').json()['revenue'])
+        self.assertEqual(rev, 20000, 'only rows that also say so in Zone were excluded')
+
+    def test_the_operator_is_told_what_was_left_out(self):
+        d = upload(a_workbook([
+            a_row(),
+            a_row(**{'V-REMARS': 'NOT A PART OF SALES', 'Taxable Amount': 90000}),
+        ])).json()
+        blob = ' '.join(d['notes'])
+        self.assertIn('NOT A PART OF SALES', blob)
+        self.assertIn('90,000', blob, f'the value reported must match the rows: {blob}')
+
+
+class AnUnfilledPostIsNotAPerson(TestCase):
+
+    def test_a_vacant_territory_is_marked_as_one(self):
+        upload(a_workbook([
+            a_row(**{'ASM Name': 'VACANT-TRI', 'Taxable Amount': 30000}),
+            a_row(**{'ASM Name': 'Rahul', 'Taxable Amount': 10000}),
+        ]))
+        rows = {r['name']: r for r in
+                Client().get('/api/sales/breakdown/?dim=asm').json()['results']}
+        self.assertTrue(rows['Vacant-Tri']['vacant'])
+        self.assertFalse(rows['Rahul']['vacant'])
+
+    def test_its_sales_still_count(self):
+        """The territory is selling even with nobody in the post."""
+        upload(a_workbook([a_row(**{'ASM Name': 'VACANT-HP'})]))
+        self.assertEqual(float(Client().get('/api/sales/overview/').json()['revenue']),
+                         20000)
+
+
+class ExcelErrorsAreNotData(TestCase):
+
+    def test_a_broken_lookup_does_not_become_an_item_code(self):
+        upload(a_workbook([a_row(**{'I-CODE': '#N/A', 'Customer District': '#REF!'})]))
+        r = SalesRecord.objects.first()
+        self.assertEqual(r.item_alt_code, '')
+        self.assertEqual(r.customer_district, '')
+
+    def test_it_is_not_offered_as_something_to_group_by(self):
+        upload(a_workbook([a_row(**{'Customer District': '#N/A'}), a_row()]))
+        names = [x['name'] for x in
+                 Client().get('/api/sales/breakdown/?dim=district').json()['results']]
+        self.assertNotIn('#N/A', names)
+
+
+class ColumnsThatWereReadAndThenIgnored(TestCase):
+
+    def test_customer_type_can_be_grouped_and_filtered(self):
+        """Export / Modern Trade / General Trade is the cleanest split of the
+        business in either file, and nothing could reach it."""
+        upload(a_workbook([
+            a_row(**{'Customer Type': 'Export', 'Taxable Amount': 30000}),
+            a_row(**{'Customer Type': 'Modern Trade', 'Taxable Amount': 10000}),
+        ]))
+        d = Client().get('/api/sales/breakdown/?dim=customer_type').json()
+        self.assertEqual(len(d['results']), 2)
+        one = Client().get('/api/sales/overview/?customer_type=Export').json()
+        self.assertEqual(float(one['revenue']), 30000)
+
+    def test_the_ledger_account_explains_non_product_money(self):
+        upload(a_workbook([a_row(**{'Type': 'G/L Account',
+                                    'GL Account Name': 'Freight Others'})]))
+        r = SalesRecord.objects.first()
+        self.assertEqual(r.gl_account_name, 'Freight Others')
+        names = [x['name'] for x in
+                 Client().get('/api/sales/breakdown/?dim=gl_account').json()['results']]
+        self.assertIn('Freight Others', names)
+
+
+class QuantityIsNotOneUnit(TestCase):
+    """Cases, pieces, kilograms and metres all land in the same column."""
+
+    def test_the_split_by_unit_is_reported(self):
+        upload(a_workbook([
+            a_row(**{'Unit Of Measure Code': 'CASE', 'Quantity': 100}),
+            a_row(**{'Unit Of Measure Code': 'NOS', 'Quantity': 500}),
+        ]))
+        d = Client().get('/api/sales/overview/').json()
+        self.assertTrue(d['mixed_units'])
+        units = {u['unit']: u['quantity'] for u in d['quantity_by_unit']}
+        self.assertEqual(units['CASE'], 100)
+        self.assertEqual(units['NOS'], 500)
+
+    def test_a_single_unit_is_not_flagged_as_mixed(self):
+        upload(a_workbook([a_row(**{'Unit Of Measure Code': 'CASE'})]))
+        self.assertFalse(Client().get('/api/sales/overview/').json()['mixed_units'])
+
+
 class OnePersonOneRow(TestCase):
     """The review sheet shouts names, the ERP dump does not."""
 
@@ -732,6 +860,9 @@ class RowsTheBusinessSaysAreNotSales(TestCase):
         r = upload(a_workbook([
             a_row(),
             a_row(**{'Zone': 'NOT A PART OF SALES', 'Taxable Amount': 500000}),
+            # Flagged in V-REMARS only, which is where the business actually
+            # records it -- the case the zone-only check missed.
+            a_row(**{'V-REMARS': 'NOT A PART OF SALES', 'Taxable Amount': 300000}),
             a_row(**{'Cancelled': 'Yes', 'Taxable Amount': 700000}),
         ])).json()
         listed = float(Client().get('/api/sales/uploads/').json()['results'][0]

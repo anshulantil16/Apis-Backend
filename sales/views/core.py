@@ -13,7 +13,8 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from ..models import (SalesUpload, SalesRecord, sync_actual_source,
                       elected_sources)
 from ..ingest import (map_headers, parse_date, parse_num, build_template,
-                      NAME_FIELDS, normalise_name,
+                      NAME_FIELDS, normalise_name, clean_cell,
+                      is_return_remark, is_not_a_sale, is_vacant,
                       TEXT_FIELDS, NUM_FIELDS, TEXT_MAX, DATE_FIELDS,
                       parse_bool, is_return_type, partition_unknown,
                       state_from_code, state_from_subregion, find_header_row)
@@ -269,6 +270,7 @@ class SalesUploadView(APIView):
         # beside a file in the uploads list and the number on the dashboard
         # are the same claim, so they have to be counted the same way.
         earned = (upload.records.exclude(is_cancelled=True)
+                  .exclude(is_not_sales=True)
                   .exclude(zone__in=NOT_SALES_ZONES)
                   .aggregate(rev=Sum('net_amount'))['rev'])
         upload.row_count = agg['n'] or 0
@@ -344,6 +346,7 @@ class SalesUploadView(APIView):
 def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
     """Load one Pre-Sales Dump sheet."""
     col_map, unknown = map_headers(header_row)
+    not_sales_rows = 0
     # The Pre-Sales Dump's sales value is Taxable Amount, which is its own
     # column rather than a spelling of "Net Amount" — so it counts here.
     VALUE_COLUMNS = ('net_amount', 'gross_amount', 'taxable_amount')
@@ -405,11 +408,18 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
             # row must never reach a sales figure.
             cancelled = parse_bool(cell(row, 'is_cancelled'))
             doc_type = cell(row, 'document_type')
-            returned = is_return_type(doc_type)
+            # V-REMARS is the only column in this export that says what a line
+            # is. Without it 1,693 returns in the first real file came through
+            # as ordinary sales that happened to be negative.
+            remark = clean_cell(cell(row, 'remarks'))
+            returned = is_return_type(doc_type) or is_return_remark(remark)
+            not_sales = is_not_a_sale(remark)
             if cancelled:
                 cancelled_rows += 1
             if returned:
                 return_rows += 1
+            if not_sales:
+                not_sales_rows += 1
             lt = str(cell(row, 'line_type') or '').strip()
             if lt:
                 line_types[lt] = line_types.get(lt, 0) + 1
@@ -469,10 +479,14 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
                 target_amount=parse_num(cell(row, 'target_amount')),
                 is_cancelled=cancelled,
                 is_return=returned,
+                is_not_sales=not_sales,
             )
             for tf in TEXT_FIELDS:
-                v = cell(row, tf)
-                s = '' if v is None else str(v).strip()
+                # clean_cell, not str().strip(): a broken VLOOKUP leaves #N/A
+                # in the cell and it was being stored as an item code and a
+                # district, then offered in the filter bar as a thing to
+                # group the business by.
+                s = clean_cell(cell(row, tf))
                 if tf in NAME_FIELDS:
                     s = normalise_name(s)
                 setattr(rec, tf, s[:TEXT_MAX.get(tf, 150)])
@@ -555,6 +569,21 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
     if bad_value:
         warnings.append(f'{bad_value} row(s) had no sales value (treated as 0). '
                         f'Check the amount column in your export.')
+    if not_sales_rows:
+        not_sales_value = float(
+            upload.records.filter(id__gt=watermark, is_not_sales=True)
+            .aggregate(v=Sum('measured_amount'))['v'] or 0)
+        notes.append(
+            f'{not_sales_rows:,} line(s) worth Rs {not_sales_value:,.0f} are marked '
+            f'"NOT A PART OF SALES" in your V-REMARS column — freight, packaging and '
+            f'spares billed on a sales invoice. They are loaded and kept, so the file '
+            f'still reconciles with the ERP, but they are left out of every sales '
+            f'figure because you have already ruled them out.')
+    if return_rows:
+        notes.append(
+            f'{return_rows:,} line(s) are returns or credit notes (SR, GOOD SR, '
+            f'SCHEME CN in V-REMARS). They reduce sales, as they should, and can now '
+            f'be reported on separately.')
     skipped, unrecognised = partition_unknown(unknown)
     if unrecognised:
         shown = ', '.join(unrecognised[:12]) + (' …' if len(unrecognised) > 12 else '')
@@ -603,8 +632,17 @@ class SalesOverviewView(APIView):
         agg = qs.aggregate(
             revenue=Sum('net_amount'), qty=Sum('quantity'), target=Sum('target_amount'),
             orders=Count('invoice_no', distinct=True), lines=Count('id'),
-            discount=Sum('discount'),
+            discount=Sum('discount'), weight=Sum('net_weight_kg'),
         )
+        # Cases, pieces, kilograms and metres all land in the same quantity
+        # column, so the total is only meaningful once it is split by unit.
+        uom_split = [
+            {'unit': (r['uom'] or 'unspecified'),
+             'quantity': _money(r['q']), 'lines': r['n']}
+            for r in (qs.exclude(quantity=0).order_by().values('uom')
+                        .annotate(q=Sum('quantity'), n=Count('id'))
+                        .order_by('-n'))
+        ]
         revenue = _money(agg['revenue'])
         target = _money(agg['target'])
         lo, hi = _period_bounds(qs)
@@ -628,6 +666,15 @@ class SalesOverviewView(APIView):
         return Response({
             'revenue': revenue,
             'quantity': _money(agg['qty']),
+            # Quantity is counted in whatever unit each line was sold in --
+            # 3,955 lines in cases, 241 in pieces, some in kg and some in
+            # metres -- so the single figure above adds cases to kilograms
+            # and means very little on its own. The split is sent alongside
+            # it, and net weight is the one measure that is comparable across
+            # all of them.
+            'quantity_by_unit': uom_split,
+            'mixed_units': len(uom_split) > 1,
+            'net_weight_kg': _money(agg.get('weight')),
             'orders': orders,
             'lines': agg['lines'] or 0,
             'customers': customers,
@@ -690,6 +737,12 @@ class SalesBreakdownView(APIView):
                 'target': tgt,
                 'achievement_pct': round((rev / tgt) * 100, 1) if tgt else None,
                 'share_pct': round((rev / total_rev) * 100, 1),
+                # The reporting line carries the post, not the holder, so an
+                # empty territory reads as somebody called "Vacant-Tri" and
+                # was being ranked against real managers. Flagged rather than
+                # dropped: the territory is still selling, and an unfilled
+                # post with sales against it is worth seeing.
+                'vacant': is_vacant(r[field] or ''),
             })
         others = all_rows[limit:]
         attributed = sum(float(r['revenue'] or 0) for r in all_rows)

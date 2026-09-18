@@ -135,10 +135,21 @@ class SalesRecord(models.Model):
     # Item line has a product on it, so the two must be told apart before a
     # product report can be trusted.
     line_type      = models.CharField(max_length=60, blank=True, db_index=True)
+    # Which ledger account a G/L Account line was posted to. Without it the
+    # non-product money on an invoice -- Rs 10 lakh in the first real file --
+    # is a number with no explanation; with it, it reads as Freight Others,
+    # Packing Material-Import, Purchase Third Party.
+    gl_account_no   = models.CharField(max_length=40, blank=True)
+    gl_account_name = models.CharField(max_length=150, blank=True, db_index=True)
     is_cancelled   = models.BooleanField(default=False, db_index=True)
     # True for a credit memo / return. Kept as its own flag rather than
     # inferred at query time so every aggregate agrees on what a return is.
     is_return      = models.BooleanField(default=False, db_index=True)
+    # The business's own verdict, from the dump's V-REMARS column: freight,
+    # packaging and spares that ride on a sales invoice but are not sales.
+    # A flag rather than a query-time match on the remark text, so the rule
+    # is decided once at import and every aggregate agrees with every other.
+    is_not_sales   = models.BooleanField(default=False, db_index=True)
 
     invoice_date    = models.DateField(null=True, blank=True)
     posting_date    = models.DateField(null=True, blank=True)

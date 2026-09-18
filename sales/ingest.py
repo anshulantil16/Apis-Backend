@@ -28,6 +28,8 @@ COLUMN_ALIASES = {
     'external_doc_no': ['external doc no', 'external document no', 'ext doc no'],
     'sales_order_no':  ['sales order no', 'so no', 'sales order number'],
     'reason_code':     ['reason code'],
+    'gl_account_no':   ['gl account no', 'gl account number'],
+    'gl_account_name': ['gl account name'],
     'remarks':         ['v remars', 'v remarks', 'remarks', 'remark', 'narration'],
     'invoice_no':    ['invoice no', 'invoice number', 'invoice', 'bill no', 'bill number',
                       'document no', 'order no', 'order number'],
@@ -124,7 +126,8 @@ TEXT_FIELDS = ['invoice_no', 'zone', 'state', 'city', 'area', 'region', 'sku',
                'remarks', 'customer_district', 'customer_state_code', 'customer_gst',
                'business_type', 'warehouse_type', 'subzone', 'location', 'location_state',
                'item_alt_code', 'packaging_type', 'item_sub_type', 'variant',
-               'prod_group', 'hsn_code', 'batch_no', 'gst_jurisdiction', 'currency_code']
+               'prod_group', 'hsn_code', 'batch_no', 'gst_jurisdiction', 'currency_code',
+               'gl_account_no', 'gl_account_name']
 NUM_FIELDS = ['quantity', 'unit_price', 'gross_amount', 'discount', 'tax',
               'net_amount', 'target_amount',
               # Pre-Sales Dump
@@ -145,6 +148,7 @@ TEXT_MAX = {
     'pack_size': 80, 'uom': 40, 'channel': 100, 'customer_code': 100, 'customer_name': 255,
     'customer_type': 100, 'salesperson': 200, 'asm': 200, 'rsm': 200, 'territory': 150,
     'document_type': 60, 'line_type': 60, 'external_doc_no': 100, 'sales_order_no': 100, 'reason_code': 80,
+    'gl_account_no': 40, 'gl_account_name': 150,
     'remarks': 500, 'customer_district': 150, 'customer_state_code': 20, 'customer_gst': 30,
     'business_type': 100, 'warehouse_type': 100, 'subzone': 100, 'location': 150,
     'location_state': 100, 'item_alt_code': 100, 'packaging_type': 100, 'item_sub_type': 100,
@@ -162,6 +166,66 @@ TRUTHY = {'yes', 'y', 'true', '1', 'cancelled', 'canceled', 'x'}
 # the same sheet as live invoices.
 RETURN_TYPES = {'credit memo', 'credit note', 'return', 'sales credit memo',
                 'crmemo', 'cr memo'}
+
+# ── V-REMARS: the business's own verdict on every line ────────────────────
+#
+# The last column of the Pre-Sales Dump is where the sales team says what each
+# line actually is, and it is the only place that says so. There is no
+# Document Type column in this export, so read from the ERP alone a sales
+# return is indistinguishable from an invoice with a minus sign.
+#
+# The vocabulary, and what each one was doing to the figures before this:
+#
+#   SALES               a real sale
+#   SR                  sales return          1,550 rows, not flagged
+#   GOOD SR             return of good stock     35 rows, not flagged
+#   SCHEME CN           scheme credit note      108 rows, not flagged
+#   NOT A PART OF SALES not a sale at all       239 rows, mostly counted
+#
+# The returns net off correctly by sign, so the total was right, but nothing
+# in the product knew they were returns: they could not be counted, filtered
+# or reported on, and a month of nothing but credit notes looked like a month
+# of trading. NOT A PART OF SALES is freight, packaging and spares -- real
+# money on the invoice, but the business has already ruled it out of sales.
+NOT_SALES_REMARK = 'not a part of sales'
+RETURN_REMARKS = {'sr', 'good sr', 'scheme cn', 'cn', 'credit note',
+                  'sales return', 'bad sr'}
+
+
+def is_not_a_sale(remark):
+    """Has the business marked this line as outside sales entirely?"""
+    return _norm(remark) == _norm(NOT_SALES_REMARK)
+
+
+def is_return_remark(remark):
+    """Is this line a return or a credit note, per the business's own column?"""
+    return _norm(remark) in RETURN_REMARKS
+
+
+# ── Excel's error values are not data ─────────────────────────────────────
+#
+# A broken VLOOKUP leaves #N/A in the cell and openpyxl hands it over as the
+# string "#N/A". Stored, it becomes an item code, a district, a customer --
+# 259 rows of the first real file carried one -- and then it is offered in
+# the filter bar as something you can group the business by.
+EXCEL_ERRORS = {'#n/a', '#ref!', '#value!', '#div/0!', '#name?', '#null!',
+                '#num!', 'n/a', '#spill!', '#calc!'}
+
+
+def clean_cell(value):
+    """A text cell, with Excel's error values read as empty."""
+    text = str(value or '').strip()
+    return '' if text.lower() in EXCEL_ERRORS else text
+
+
+# ── an unfilled position is not a person ──────────────────────────────────
+#
+# The reporting line carries the post, not the holder, so an empty territory
+# reads as somebody called "Vacant-Tri". Five of them were being ranked on the
+# ASM leaderboard against real managers, and one of them carried 317 rows.
+def is_vacant(name):
+    """Is this the name of an unfilled position rather than a person?"""
+    return _norm(name).startswith('vacant')
 
 
 # GST state codes -> state name.
@@ -466,7 +530,7 @@ PRE_SALES_DUMP = [
     ('SGST %', False), ('SGST Amount', True),
     ('I-CODE', True), ('Item Category', True),
     ('Item Sub Category (Sub Brand)', True), ('Variant', True), ('Prod. Group', True),
-    ('GL Account No.', False), ('GL Account Name', False),
+    ('GL Account No.', True), ('GL Account Name', True),
     ('Gross Weight In(Kg)', True), ('Net Weight In(Kg)', True),
     ('Sales Order No.', True), ('MRP', True), ('Cancelled *', True),
     ('Customer Posting Group(Business type)', True),
@@ -569,7 +633,9 @@ def build_template():
          '(Invoice Disc.%, Retail Scheme %, IGST %, TCS %) is derivable from the amount '
          'beside it, and a stored percentage that disagrees with its own amount is a '
          'number nobody can act on. Value in Lakhs is Taxable Amount restated. Key, '
-         'Global Dim1, GL Account and the TCS code columns are ledger plumbing, not sales.'),
+         'Global Dim1 and the TCS code columns are ledger plumbing, not sales. '
+         'GL Account Name is read: it is what explains the money on a line with '
+         'no product on it.'),
         ('Cancelled',
          'Loaded, then excluded from every sales figure — so the file still reconciles '
          'against the ERP while no cancelled invoice is ever reported as revenue. '

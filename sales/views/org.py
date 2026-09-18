@@ -12,6 +12,7 @@ from django.db.models import Count, Max, Sum
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from ..ingest import is_vacant
 from ..models import SalesRecord
 from .filters import apply_filters
 
@@ -26,7 +27,7 @@ def _pct(part, whole):
 
 def _node(name, level):
     return {
-        'name': name, 'level': level,
+        'name': name, 'level': level, 'vacant': is_vacant(name),
         'revenue': 0.0, 'target': 0.0, 'quantity': 0.0, 'lines': 0,
         'customers': 0, 'states': 0, 'areas': 0, 'skus': 0, 'field_officers': 0,
         'children': [],
@@ -80,9 +81,19 @@ class SalesOrgView(APIView):
                             customers=Count('customer_name', distinct=True),
                             states=Count('state', distinct=True),
                             areas=Count('subzone', distinct=True),
-                            skus=Count('sku', distinct=True),
-                            field_officers=Max('sfo_count'))
+                            skus=Count('sku', distinct=True))
                   .order_by())
+
+        # Field officers are a headcount attached to a sub-region, not a
+        # measure of a month. The review sheet writes the number once per
+        # territory and the unpivot copies it onto all 24 of that territory's
+        # month-rows, so adding the column up reported 380 officers as 9,120.
+        # Counted here per territory instead, and each territory counted once
+        # however many months of it are in the window.
+        sfo_rows = (qs.exclude(subzone='')
+                      .values(*levels, 'subzone')
+                      .annotate(heads=Max('sfo_count'))
+                      .order_by())
 
         root = _node('All', 'total')
         index = {}
@@ -122,7 +133,32 @@ class SalesOrgView(APIView):
                 node['states'] += r['states'] or 0
                 node['areas'] += r['areas'] or 0
                 node['skus'] += r['skus'] or 0
-                node['field_officers'] += r['field_officers'] or 0
+
+        # Roll the territory headcounts up the same tree, each territory
+        # landing once on every level above it.
+        seen = set()
+        for r in sfo_rows:
+            heads = int(r['heads'] or 0)
+            if not heads:
+                continue
+            path = []
+            for lvl in levels:
+                name = (r.get(lvl) or '').strip()
+                if name:
+                    path.append(name)
+            for depth in range(len(path)):
+                key = tuple(path[:depth + 1])
+                mark = (key, r['subzone'])
+                if mark in seen:
+                    continue
+                seen.add(mark)
+                node = index.get(key)
+                if node is not None:
+                    node['field_officers'] += heads
+            mark = (('__root__',), r['subzone'])
+            if mark not in seen:
+                seen.add(mark)
+                root['field_officers'] += heads
 
         _finish(root)
 

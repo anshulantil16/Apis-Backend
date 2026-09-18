@@ -38,11 +38,23 @@ DIMENSIONS = {
     # Product hierarchy below sub-category.
     'variant': 'variant', 'prod_group': 'prod_group', 'item_sub_type': 'item_sub_type',
     'packaging_type': 'packaging_type', 'batch': 'batch_no',
+
+    # Columns the dump carries that nothing could group or filter by before.
+    # Customer Type is the most useful of them: Export / Modern Trade /
+    # General Trade / Other is the cleanest split of the business in either
+    # file, and it was being stored and then ignored.
+    'uom': 'uom', 'location_state': 'location_state', 'hsn': 'hsn_code',
+    'gst_jurisdiction': 'gst_jurisdiction', 'currency': 'currency_code',
+    'line_type': 'line_type', 'gl_account': 'gl_account_name',
 }
 FILTERABLE = ['state', 'zone', 'area', 'city', 'region', 'category', 'sub_category',
               'brand', 'channel', 'salesperson', 'asm', 'rsm', 'customer_name', 'sku',
               'sales_head', 'subzone', 'customer_district', 'business_type',
-              'warehouse_type', 'location', 'variant', 'prod_group']
+              'warehouse_type', 'location', 'variant', 'prod_group',
+              # See DIMENSIONS above: carried by the dump, previously unusable.
+              'customer_type', 'pack_size', 'item_sub_type', 'packaging_type',
+              'uom', 'location_state', 'gst_jurisdiction', 'currency_code',
+              'line_type', 'gl_account_name', 'hsn_code']
 
 
 # The dump's Zone column doubles as a bucket for rows the business has
@@ -104,7 +116,9 @@ def apply_dim_filters(qs, request):
     one that got forgotten would quietly report a cancelled invoice as
     revenue.
     """
-    qs = qs.exclude(is_cancelled=True).exclude(zone__in=NOT_SALES_ZONES)
+    qs = (qs.exclude(is_cancelled=True)
+            .exclude(is_not_sales=True)
+            .exclude(zone__in=NOT_SALES_ZONES))
     applied = {}
     for f in FILTERABLE:
         vals = _multi(request, f)
