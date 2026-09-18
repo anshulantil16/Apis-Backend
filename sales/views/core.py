@@ -23,7 +23,8 @@ from .. import aop as AOP
 from ..forecasting import forecast_series
 from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
-                      NOT_SALES_ZONES, with_actuals, comparable_window)
+                      NOT_SALES_ZONES, with_actuals, comparable_window,
+                      same_months_last_year)
 
 class SalesTemplateView(APIView):
     def get(self, request):
@@ -452,7 +453,12 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
             # Fall back to gross when the export has no explicit net column.
             if not net and gross:
                 net = gross - discount
-            if not net and not gross and not cancelled:
+            # A free sample really is worth nothing, and the business has
+            # already said so in V-REMARS. Warning "check the amount column"
+            # about it sends somebody looking for an export fault that is not
+            # there -- all four in the first real file were samples and
+            # packaging given away, already excluded from sales.
+            if not net and not gross and not cancelled and not not_sales:
                 bad_value += 1
 
             if lt and lt.lower() != 'item':
@@ -646,6 +652,8 @@ class SalesOverviewView(APIView):
         revenue = _money(agg['revenue'])
         target = _money(agg['target'])
         like_for_like = comparable_window(qs)
+        last_year = same_months_last_year(
+            apply_dim_filters(SalesRecord.objects.all(), request)[0])
         lo, hi = _period_bounds(qs)
 
         # Preceding window of identical length, same dimension filters, so the
@@ -690,6 +698,12 @@ class SalesOverviewView(APIView):
             # 508,382% and then 86% on this dashboard.
             'achievement_pct': like_for_like['pct'],
             'achievement_basis': like_for_like,
+            # The comparison the business makes in its own sheet: this year
+            # to date against the same months last year. The window above
+            # ("prior period") is the stretch immediately before this one,
+            # which for a seasonal business compares a festive quarter with a
+            # quiet one; this lines April up with April.
+            'vs_last_year': last_year,
             # The gap belongs to the same comparison as the percentage
             # beside it: plan for the months that have happened, less what
             # was sold in them. Against the full-year plan it read as a
@@ -891,6 +905,16 @@ class SalesFiltersView(APIView):
         out['date_range'] = {'from': lo.isoformat() if lo else None,
                              'to': hi.isoformat() if hi else None}
         out['dimensions'] = sorted(DIMENSIONS.keys())
+        # Which of them this upload can actually answer. Neither primary file
+        # carries Area, Region, Territory or Salesperson at all, and Sub
+        # Category and Variant are present but empty, so six breakdowns were
+        # being offered and then rendering as blank panels with no
+        # explanation. The UI hides what is not here.
+        available, absent = [], []
+        for key, field in DIMENSIONS.items():
+            (available if qs.exclude(**{field: ''}).exists() else absent).append(key)
+        out['available_dimensions'] = sorted(available)
+        out['absent_dimensions'] = sorted(absent)
         return Response(out)
 
 

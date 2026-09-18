@@ -95,6 +95,57 @@ def pending_months(qs):
             and float(r['measured'] or 0) == 0}
 
 
+def same_months_last_year(qs):
+    """This financial year to date, against the same months of the last one.
+
+    The dashboard already compares against "the prior period", meaning the
+    stretch of equal length immediately before. For a business with a festive
+    quarter that compares Christmas with the monsoon and calls the difference
+    growth. This lines April up with April, which is what the review sheet's
+    LYTD ACH column does and what everybody actually means by "up on last
+    year".
+
+    Deliberately ignores the date filter: narrowing to this year should not
+    take last year's comparison away with it.
+    """
+    from django.db.models import Sum as _Sum
+    from ..analytics import financial_year, fy_label
+
+    rows = (qs.values('period')
+              .annotate(earned=_Sum('net_amount'), measured=_Sum('measured_amount'),
+                        planned=_Sum('target_amount'))
+              .order_by('period'))
+
+    by_fy = {}
+    for r in rows:
+        d = r['period']
+        if not d:
+            continue
+        # A month still ahead of the business is not a month that sold zero.
+        if float(r['planned'] or 0) > 0 and float(r['measured'] or 0) == 0:
+            continue
+        by_fy.setdefault(financial_year(d), {})[d.month] = float(r['earned'] or 0)
+
+    if len(by_fy) < 2:
+        return None
+    years = sorted(by_fy)
+    this_fy, last_fy = years[-1], years[-2]
+    shared = sorted(set(by_fy[this_fy]) & set(by_fy[last_fy]))
+    if not shared:
+        return None
+
+    now = sum(by_fy[this_fy][m] for m in shared)
+    before = sum(by_fy[last_fy][m] for m in shared)
+    return {
+        'this_year': round(now, 2),
+        'last_year': round(before, 2),
+        'growth_pct': round((now / before - 1) * 100, 1) if before else None,
+        'months': len(shared),
+        'this_label': fy_label(this_fy),
+        'last_label': fy_label(last_fy),
+    }
+
+
 def comparable_window(qs):
     """Revenue and plan over the months where BOTH exist.
 

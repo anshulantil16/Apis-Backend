@@ -615,6 +615,92 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
                                  f'{period} is being counted from both files: {live}')
 
 
+class TheYearRunsAprilToMarch(TestCase):
+    """Every one of the business's own files says so: the plan columns run
+    Apr-26 to Mar-27 and the summaries are headed FY'26-27."""
+
+    def test_years_are_financial_not_calendar(self):
+        upload(aop_workbook([aop_row(cy=20000, ly=10000)]))
+        y = Client().get('/api/sales/yoy/').json()
+        self.assertIn('FY26-27', y['years'])
+        self.assertIn('FY25-26', y['years'])
+
+    def test_the_chart_starts_at_april(self):
+        upload(aop_workbook([aop_row()]))
+        labels = [r['label'] for r in Client().get('/api/sales/yoy/').json()['results']]
+        self.assertEqual(labels[0], 'Apr')
+        self.assertEqual(labels[-1], 'Mar')
+
+    def test_a_month_still_to_come_is_not_a_100_percent_collapse(self):
+        """October to March of the current year each read as -100% against
+        last year: a total collapse, in months that have not happened."""
+        upload(aop_workbook([aop_row(cy=20000, ly=10000,
+                                     **{'Oct-26 AOP': 50000, 'Oct-25': 40000})]))
+        rows = {r['label']: r for r in Client().get('/api/sales/yoy/').json()['results']}
+        self.assertIsNone(rows['Oct']['FY26-27'],
+                          'a month that has not happened was reported as zero')
+        self.assertEqual(float(rows['Oct']['FY25-26']), 40000)
+
+    def test_growth_compares_only_the_months_both_years_have(self):
+        upload(aop_workbook([aop_row(cy=20000, ly=10000,
+                                     **{'Oct-26 AOP': 50000, 'Oct-25': 40000})]))
+        g = Client().get('/api/sales/yoy/').json()['growth']['FY26-27']
+        self.assertEqual(g['months'], 1, 'compared a part year against a whole one')
+        self.assertEqual(g['pct'], 100.0)          # 20,000 against 10,000
+
+
+class ComparedWithTheSameMonthsLastYear(TestCase):
+
+    def test_april_is_compared_with_april(self):
+        upload(aop_workbook([aop_row(cy=20000, ly=10000)]))
+        ly = Client().get('/api/sales/overview/').json()['vs_last_year']
+        self.assertEqual(ly['this_year'], 20000)
+        self.assertEqual(ly['last_year'], 10000)
+        self.assertEqual(ly['growth_pct'], 100.0)
+        self.assertEqual(ly['months'], 1)
+
+    def test_nothing_is_claimed_with_only_one_year_loaded(self):
+        upload(a_workbook([a_row()]))
+        self.assertIsNone(Client().get('/api/sales/overview/').json()['vs_last_year'])
+
+
+class FreeSamplesAreNotAnExportFault(TestCase):
+
+    def test_a_zero_value_line_the_business_excluded_raises_no_warning(self):
+        """All four in the first real file were samples and packaging given
+        away, already marked NOT A PART OF SALES. Telling the operator to
+        check their amount column sends them after a fault that is not there."""
+        d = upload(a_workbook([
+            a_row(),
+            a_row(**{'V-REMARS': 'NOT A PART OF SALES', 'Taxable Amount': 0,
+                     'Total Line Amount GST & TCS': 0}),
+        ])).json()
+        blob = ' '.join(d.get('warnings', []))
+        self.assertNotIn('no sales value', blob, f'false alarm: {blob}')
+
+    def test_a_genuinely_missing_value_still_warns(self):
+        d = upload(a_workbook([
+            a_row(),
+            a_row(**{'Taxable Amount': 0, 'Total Line Amount GST & TCS': 0}),
+        ])).json()
+        self.assertIn('no sales value', ' '.join(d.get('warnings', [])))
+
+
+class TheDashboardOnlyOffersWhatTheFileCanAnswer(TestCase):
+
+    def test_absent_columns_are_reported_so_their_panels_can_be_hidden(self):
+        upload(a_workbook([a_row()]))
+        f = Client().get('/api/sales/filters/').json()
+        self.assertIn('area', f['absent_dimensions'])
+        self.assertIn('zone', f['available_dimensions'])
+
+    def test_a_dimension_with_data_is_never_called_absent(self):
+        upload(a_workbook([a_row()]))
+        f = Client().get('/api/sales/filters/').json()
+        self.assertEqual(set(f['available_dimensions']) & set(f['absent_dimensions']),
+                         set())
+
+
 class AchievementIsComparedLikeForLike(TestCase):
     """Revenue and plan cover different stretches of time. Dividing the two
     totals is what put 508,382%, and then 86%, on this dashboard."""

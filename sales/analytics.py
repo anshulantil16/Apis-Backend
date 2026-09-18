@@ -404,32 +404,90 @@ def new_vs_repeat(qs):
 
 
 # ── Year-on-year ─────────────────────────────────────────────────────────
+# The business runs April to March, and says so everywhere in its own files:
+# the plan columns run Apr-26 to Mar-27, the summary columns are headed
+# FY'26-27, and YTD means April onward. A calendar year cuts that in half.
+FY_START_MONTH = 4
+
+
+def financial_year(d):
+    """-> the financial year a date belongs to, as its opening calendar year.
+    April 2026 and February 2027 are both FY 2026-27."""
+    return d.year if d.month >= FY_START_MONTH else d.year - 1
+
+
+def fy_label(y):
+    return f"FY{str(y)[2:]}-{str(y + 1)[2:]}"
+
+
 def year_on_year(qs_all, dim_filtered_qs):
-    """Per-month revenue grouped by calendar year, so the same month across
-    years lines up. Uses the unfiltered-by-date queryset so prior years are
-    still visible when the user has narrowed the date window."""
-    rows = list(dim_filtered_qs.values('period').annotate(v=Sum('net_amount')).order_by('period'))
+    """Per-month revenue by financial year, so the same month lines up.
+
+    Two things were wrong with doing this on the calendar year. The business
+    does not use one -- January sat at the start of a year whose April was in
+    the other column, so the comparison put two halves of one trading year
+    side by side and called them different years. And a month the business
+    has not reached yet was reported as revenue of zero, so October through
+    March of the current year each showed as -100% against last year: a total
+    collapse, in months that have not happened.
+    """
+    rows = list(dim_filtered_qs.values('period')
+                .annotate(v=Sum('net_amount'), measured=Sum('measured_amount'),
+                          planned=Sum('target_amount'))
+                .order_by('period'))
     if not rows:
         return {'years': [], 'results': []}
+
     by_year = {}
     for r in rows:
         d = r['period']
-        by_year.setdefault(d.year, {})[d.month] = _f(r['v'])
+        if not d:
+            continue
+        # Planned but nothing measured means the month is still ahead of the
+        # business. None, not zero -- the chart leaves a gap instead of
+        # drawing a cliff.
+        pending = _f(r['planned']) > 0 and _f(r['measured']) == 0
+        by_year.setdefault(financial_year(d), {})[d.month] = (
+            None if pending else _f(r['v']))
+
     years = sorted(by_year)
     names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
              'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    # April first, the way the year is actually lived.
+    order = [((FY_START_MONTH - 1 + i) % 12) + 1 for i in range(12)]
+
     results = []
-    for m in range(1, 13):
+    for m in order:
         row = {'month': m, 'label': names[m - 1]}
         for y in years:
-            row[str(y)] = round(by_year[y].get(m, 0), 2)
+            row[fy_label(y)] = by_year[y].get(m)
         results.append(row)
-    totals = {str(y): round(sum(by_year[y].values()), 2) for y in years}
+
+    totals, complete = {}, {}
+    for y in years:
+        vals = [v for v in by_year[y].values() if v is not None]
+        totals[fy_label(y)] = round(sum(vals), 2)
+        complete[fy_label(y)] = len(vals)
+
+    # Growth is measured on the months both years actually have, so a part
+    # finished year is not compared against a whole one.
     growth = {}
     for i in range(1, len(years)):
-        growth[str(years[i])] = _pctc(totals[str(years[i])], totals[str(years[i - 1])])
-    return {'years': [str(y) for y in years], 'results': results,
-            'totals': totals, 'growth': growth}
+        cur, prev = by_year[years[i]], by_year[years[i - 1]]
+        shared = [m for m in order
+                  if cur.get(m) is not None and prev.get(m) is not None]
+        if shared:
+            growth[fy_label(years[i])] = {
+                'pct': _pctc(sum(cur[m] for m in shared),
+                             sum(prev[m] for m in shared)),
+                'months': len(shared),
+                'this_year': round(sum(cur[m] for m in shared), 2),
+                'last_year': round(sum(prev[m] for m in shared), 2),
+            }
+
+    return {'years': [fy_label(y) for y in years], 'results': results,
+            'totals': totals, 'months_with_data': complete, 'growth': growth,
+            'basis': 'financial year, April to March'}
 
 
 # ── Target pacing ────────────────────────────────────────────────────────
