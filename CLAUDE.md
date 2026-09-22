@@ -71,6 +71,14 @@ Attachments are allowlisted by extension (`ALLOWED_ATTACHMENT_EXTS`) because
 they are served back from `MEDIA_URL` — an `.html` or `.svg` attachment is a
 script on our own origin.
 
+## Analytics is windowed
+
+`views/analytics.py` measures everything over `?days=` (default 30) and also
+returns all-time `totals`. Anything added to the report needs both, or a quiet
+period is indistinguishable from an empty system and the dashboard looks
+broken. It covers bookings, item requests **and** tickets — the helpdesk was
+missing from it at first, which is most of what people actually use.
+
 ## SalesIQ (`sales/`) — the two primary files
 
 `Primary sales data.xlsx` has two sheets that describe the same business
