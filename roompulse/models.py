@@ -9,8 +9,8 @@ no longer matches the product's public name. AdminPulse is the brand;
 hosts the unrelated Letters Generator — see STRUCTURE.md.
 
 Standalone app: no models, tables or imports shared with pms/sales/eom. Owns
-five tables (Room, BookingRequest, ResourceRequest, Employee, AdminUser) and
-its own URL namespace.
+seven tables (Room, BookingRequest, ResourceRequest, SupportTicket,
+TicketAttachment, Employee, AdminUser) and its own URL namespace.
 """
 from django.db import models
 
@@ -116,13 +116,29 @@ class ResourceRequest(models.Model):
         ('fulfilled', 'Fulfilled'),
         ('cancelled', 'Cancelled'),
     ]
+    # IT-flavoured categories (equipment, access, software...) live on
+    # SupportTicket instead — this list is everything else Admin covers.
     CATEGORY_CHOICES = [
-        ('stationery',   'Stationery'),
-        ('it_equipment', 'IT Equipment'),
-        ('furniture',    'Furniture'),
-        ('pantry',       'Pantry / Housekeeping'),
-        ('printing',     'Printing / Stationery Print'),
-        ('other',        'Other'),
+        ('stationery_office_supplies', 'Stationery & Office Supplies'),
+        ('housekeeping',               'Housekeeping'),
+        ('pantry_refreshments',        'Pantry & Refreshments'),
+        ('furniture_seating',          'Furniture & Seating'),
+        ('facility_maintenance',       'Facility Maintenance'),
+        ('electricity_lighting',       'Electricity & Lighting'),
+        ('plumbing',                   'Plumbing'),
+        ('security_access',            'Security & Access'),
+        ('id_card_employee_badge',     'ID Card / Employee Badge'),
+        ('courier_dispatch',           'Courier & Dispatch'),
+        ('travel_accommodation',       'Travel & Accommodation'),
+        ('cab_transportation',         'Cab / Transportation'),
+        ('meeting_room',               'Meeting Room'),
+        ('office_equipment',           'Office Equipment'),
+        ('printing_photocopy',         'Printing & Photocopy'),
+        ('events_administration',      'Events & Administration'),
+        ('vendor_service_request',     'Vendor / Service Request'),
+        ('workplace_safety',           'Workplace Safety'),
+        ('general_administration',     'General Administration'),
+        ('other',                      'Other'),
     ]
     URGENCY_CHOICES = [
         ('low', 'Low'), ('normal', 'Normal'), ('urgent', 'Urgent'),
@@ -157,6 +173,84 @@ class ResourceRequest(models.Model):
         return f"{self.item_name} x{self.quantity} ({self.status})"
 
 
+class SupportTicket(models.Model):
+    """IT support ticket — technical/access issues, as opposed to the
+    physical-item ResourceRequest above (stationery, equipment...). Reviewed
+    by the IT Support role rather than Admin — see `AdminUser.scope`.
+
+    Status has a pending→approved/rejected gate before work starts, same
+    shape as ResourceRequest, plus an in_progress step for the work itself:
+    pending (awaiting IT Support triage) → approved → in_progress → closed,
+    or rejected at the triage step.
+    """
+    STATUS_CHOICES = [
+        ('pending',     'Pending'),
+        ('approved',    'Approved'),
+        ('rejected',    'Rejected'),
+        ('in_progress', 'In Progress'),
+        ('closed',      'Closed'),
+    ]
+    CATEGORY_CHOICES = [
+        ('account_login_access',       'Account / Login Access'),
+        ('printer_scanner',            'Printer / Scanner'),
+        ('vpn_access',                 'VPN Access'),
+        ('system_application_access',  'System / Application Access'),
+        ('software_installation',      'Software Installation'),
+        ('antivirus_security',         'Antivirus / Security'),
+        ('microsoft_365',              'Microsoft 365'),
+        ('teams_video_conferencing',   'Teams / Video Conferencing'),
+        ('server_storage',             'Server / Storage'),
+        ('database_access',            'Database Access'),
+        ('mobile_device_support',      'Mobile / Device Support'),
+        ('it_asset_request',           'IT Asset Request'),
+        ('other',                      'Other'),
+    ]
+    PRIORITY_CHOICES = [
+        ('low', 'Low'), ('medium', 'Medium'), ('high', 'High'), ('critical', 'Critical'),
+    ]
+
+    requested_by_name  = models.CharField(max_length=200)
+    requested_by_email = models.EmailField()
+    department          = models.CharField(max_length=150, blank=True)
+
+    category    = models.CharField(max_length=30, choices=CATEGORY_CHOICES, default='other', db_index=True)
+    priority    = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
+    subject     = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    related_to  = models.CharField(max_length=100, blank=True)
+
+    status         = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    reviewed_by    = models.CharField(max_length=200, blank=True)
+    reviewed_at    = models.DateTimeField(null=True, blank=True)
+    admin_remarks  = models.CharField(max_length=300, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['status', 'category'])]
+
+    def __str__(self):
+        return f"{self.subject} ({self.status})"
+
+
+class TicketAttachment(models.Model):
+    """One uploaded file on a SupportTicket — a screenshot of the error, a
+    log file, etc. A real FileField (MEDIA_ROOT/MEDIA_URL are already wired
+    up app-wide — see config/urls.py's media serve route), not just a
+    filename string: IT Support needs to actually open what was attached
+    when deciding approve/reject, not just see that something was."""
+    ticket = models.ForeignKey(SupportTicket, on_delete=models.CASCADE,
+                               related_name='attachments', db_constraint=False)
+    file          = models.FileField(upload_to='roompulse_tickets/%Y/%m/')
+    original_name = models.CharField(max_length=255, blank=True)
+    uploaded_at   = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.original_name or self.file.name
+
+
 class Employee(models.Model):
     """Employee directory, bulk-uploaded by Super Admin via Excel (mirrors the
     SalesIQ/PMS upload pattern). Used to auto-fill booking requester details
@@ -170,7 +264,7 @@ class Employee(models.Model):
     a Role column (see views/employees.py) instead of adding people one at a
     time in the Team tab.
     """
-    ROLE_CHOICES = [('employee', 'Employee'), ('admin', 'Admin')]
+    ROLE_CHOICES = [('employee', 'Employee'), ('admin', 'Admin'), ('it_support', 'IT Support')]
 
     employee_code = models.CharField(max_length=50, blank=True, db_index=True)
     name          = models.CharField(max_length=200)
@@ -191,11 +285,22 @@ class Employee(models.Model):
 
 
 class AdminUser(models.Model):
-    """Email allowlist for the Admin role, managed by Super Admin from the UI
-    (unlike SalesIQ's env-var allowlist — AdminPulse expects the roster to
-    change often enough that a redeploy per change would be impractical)."""
+    """Email allowlist for the Admin and IT Support roles, managed by Super
+    Admin from the UI (unlike SalesIQ's env-var allowlist — AdminPulse
+    expects the roster to change often enough that a redeploy per change
+    would be impractical).
+
+    One table for both roles rather than a second allowlist model — same
+    shape (email, name, who added them), same Super-Admin-only management
+    UI, just scoped by what they can approve: Admin reviews room bookings
+    and item requests, IT Support reviews SupportTickets. `resolve_role()`
+    in auth.py returns this `scope` value directly as the caller's role.
+    """
+    SCOPE_CHOICES = [('admin', 'Admin'), ('it_support', 'IT Support')]
+
     email      = models.EmailField(unique=True)
     name       = models.CharField(max_length=200, blank=True)
+    scope      = models.CharField(max_length=20, choices=SCOPE_CHOICES, default='admin')
     added_by   = models.CharField(max_length=200, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

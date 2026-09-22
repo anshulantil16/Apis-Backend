@@ -11,7 +11,7 @@ server.
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from ..models import Room, BookingRequest, ResourceRequest, Employee, AdminUser
+from ..models import Room, BookingRequest, ResourceRequest, SupportTicket, Employee, AdminUser
 from ..seed_data import SEED_ROOMS, SEED_ROOM_DEFAULTS
 from .perms import require_role
 
@@ -27,6 +27,7 @@ class ResetDatabaseView(APIView):
         counts = {
             'bookings': BookingRequest.objects.count(),
             'resource_requests': ResourceRequest.objects.count(),
+            'tickets': SupportTicket.objects.count(),
             'employees': Employee.objects.count(),
             'admins': AdminUser.objects.count(),
             'rooms': Room.objects.count(),
@@ -34,6 +35,7 @@ class ResetDatabaseView(APIView):
 
         BookingRequest.objects.all().delete()
         ResourceRequest.objects.all().delete()
+        SupportTicket.objects.all().delete()
         Employee.objects.all().delete()
         AdminUser.objects.all().delete()
         Room.objects.all().delete()
@@ -44,6 +46,7 @@ class ResetDatabaseView(APIView):
         return Response({
             'message': (f'Database reset. Removed {counts["bookings"]} booking(s), '
                        f'{counts["resource_requests"]} resource request(s), '
+                       f'{counts["tickets"]} ticket(s), '
                        f'{counts["employees"]} employee(s), {counts["admins"]} admin(s) and '
                        f'{counts["rooms"]} room(s) — restored {len(SEED_ROOMS)} rooms.'),
             'deleted': counts,

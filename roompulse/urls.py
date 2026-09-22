@@ -3,6 +3,7 @@ from .views import (
     RoomPulseLoginView, RoomListView, RoomDetailView,
     BookingListView, BookingActionView, RoomCalendarView,
     ResourceRequestListView, ResourceRequestActionView,
+    TicketListView, TicketActionView,
     EmployeeTemplateView, EmployeeUploadView, EmployeeListView,
     AdminRosterView, AnalyticsView, ResetDatabaseView,
 )
@@ -19,6 +20,9 @@ urlpatterns = [
 
     path('resource-requests/', ResourceRequestListView.as_view()),
     path('resource-requests/<int:request_id>/', ResourceRequestActionView.as_view()),
+
+    path('tickets/', TicketListView.as_view()),
+    path('tickets/<int:ticket_id>/', TicketActionView.as_view()),
 
     path('employees/template/', EmployeeTemplateView.as_view()),
     path('employees/upload/', EmployeeUploadView.as_view()),

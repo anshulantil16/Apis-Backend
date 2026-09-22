@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
 from ..models import Employee, AdminUser
-from ..ingest import map_headers, build_template, is_admin_value
+from ..ingest import map_headers, build_template, role_grant
 from .perms import require_role, actor_role
 from .auth import SUPER_ADMIN_EMAIL
 
@@ -61,7 +61,7 @@ class EmployeeUploadView(APIView):
             v = row[ci]
             return str(v).strip() if v is not None else ''
 
-        created = updated = skipped = admins_granted = 0
+        created = updated = skipped = admins_granted = it_support_granted = 0
         skipped_rows = []
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if not any(v is not None and str(v).strip() != '' for v in row):
@@ -73,11 +73,11 @@ class EmployeeUploadView(APIView):
                 skipped_rows.append(row_idx)
                 continue
 
-            # Role column GRANTS admin access, never revokes it — a blank or
-            # "Employee" cell on someone already admin leaves them untouched.
-            # Revoking admin access stays a deliberate action in the Team tab.
-            wants_admin = is_admin_value(cell(row, 'role')) and email != SUPER_ADMIN_EMAIL
-            role = 'admin' if wants_admin else None  # None = "don't change existing role"
+            # Role column GRANTS admin/IT-Support access, never revokes it —
+            # a blank or "Employee" cell on someone who already has access
+            # leaves them untouched. Revoking access stays a deliberate
+            # action in the Team tab.
+            grant = role_grant(cell(row, 'role')) if email != SUPER_ADMIN_EMAIL else None
 
             obj, was_created = Employee.objects.update_or_create(
                 email=email,
@@ -88,17 +88,20 @@ class EmployeeUploadView(APIView):
                     'designation': (cell(row, 'designation') or '')[:150],
                     'location': (cell(row, 'location') or '')[:150],
                     'reporting_manager': (cell(row, 'reporting_manager') or '')[:200],
-                    **({'role': 'admin'} if wants_admin else {}),
+                    **({'role': grant} if grant else {}),
                 },
             )
             created += was_created
             updated += not was_created
 
-            if wants_admin:
+            if grant:
                 _, was_new_admin = AdminUser.objects.get_or_create(
-                    email=email, defaults={'name': name[:200],
+                    email=email, defaults={'name': name[:200], 'scope': grant,
                                            'added_by': f'employee upload by {acting_email}'})
-                admins_granted += was_new_admin
+                if grant == 'admin':
+                    admins_granted += was_new_admin
+                else:
+                    it_support_granted += was_new_admin
 
         warnings = []
         if skipped_rows:
@@ -109,12 +112,15 @@ class EmployeeUploadView(APIView):
             warnings.append(f'{len(unknown)} column(s) not recognised: {", ".join(unknown[:10])}.')
         if admins_granted:
             warnings.append(f'{admins_granted} employee(s) granted Admin access via the Role column.')
+        if it_support_granted:
+            warnings.append(f'{it_support_granted} employee(s) granted IT Support access via the Role column.')
 
         return Response({
             'message': f'{created} added, {updated} updated.'
-                       + (f' {admins_granted} granted Admin access.' if admins_granted else ''),
+                       + (f' {admins_granted} granted Admin access.' if admins_granted else '')
+                       + (f' {it_support_granted} granted IT Support access.' if it_support_granted else ''),
             'created': created, 'updated': updated, 'skipped': skipped,
-            'admins_granted': admins_granted,
+            'admins_granted': admins_granted, 'it_support_granted': it_support_granted,
             'detected_columns': raw_headers, 'warnings': warnings,
         })
 

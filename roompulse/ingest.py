@@ -19,11 +19,12 @@ COLUMN_ALIASES = {
     'role':               ['role', 'access', 'access level', 'user role', 'admin', 'is admin'],
 }
 
-# Values in the Role column that grant Admin access on upload. Anything else
-# (blank, "Employee", "No", ...) leaves the row as a plain Employee — a
-# stray/blank cell can never accidentally REVOKE existing admin access via
-# upload, only grant it (see EmployeeUploadView, which never demotes).
+# Values in the Role column that grant Admin or IT Support access on upload.
+# Anything else (blank, "Employee", "No", ...) leaves the row as a plain
+# Employee — a stray/blank cell can never accidentally REVOKE existing access
+# via upload, only grant it (see EmployeeUploadView, which never demotes).
 ADMIN_ROLE_VALUES = {'admin', 'administrator', 'yes', 'y', 'true', '1'}
+IT_SUPPORT_ROLE_VALUES = {'it support', 'it_support', 'itsupport', 'it-support', 'it'}
 
 
 def _norm(h):
@@ -53,9 +54,15 @@ def map_headers(header_row):
     return col_map, unknown
 
 
-def is_admin_value(v):
-    """True if a Role-column cell should grant Admin access."""
-    return str(v or '').strip().lower() in ADMIN_ROLE_VALUES
+def role_grant(v):
+    """'admin' / 'it_support' / None from a Role-column cell — which access,
+    if any, that cell should grant on upload."""
+    s = str(v or '').strip().lower()
+    if s in ADMIN_ROLE_VALUES:
+        return 'admin'
+    if s in IT_SUPPORT_ROLE_VALUES:
+        return 'it_support'
+    return None
 
 
 def build_template():
@@ -80,6 +87,8 @@ def build_template():
          'Delhi HO', 'Vikas Gupta', 'Admin'],
         ['EMP002', 'Priya Singh', 'priya.singh@apisindia.com', 'Operations', 'Executive',
          'Mumbai', 'Anita Desai', 'Employee'],
+        ['EMP003', 'Karan Mehta', 'karan.mehta@apisindia.com', 'IT', 'Support Engineer',
+         'Delhi HO', 'Vikas Gupta', 'IT Support'],
     ]
     for ri, row in enumerate(samples, 2):
         for ci, v in enumerate(row, 1):
@@ -94,15 +103,18 @@ def build_template():
     ref.column_dimensions['A'].width = 26
     ref.column_dimensions['B'].width = 90
     rows = [
-        ('Role column — grants Admin access', ''),
+        ('Role column — grants Admin or IT Support access', ''),
         ('', ''),
-        ('Admin', 'Write "Admin" to give this person Admin access — they can approve/reject '
-                  'booking requests and book rooms directly. Also accepts: Administrator, Yes, Y, '
-                  'True, 1 (case-insensitive).'),
+        ('Admin', 'Write "Admin" to give this person Admin access — they can approve/reject room '
+                  'bookings and item requests, and book/record directly. Also accepts: '
+                  'Administrator, Yes, Y, True, 1 (case-insensitive).'),
+        ('IT Support', 'Write "IT Support" to give this person IT Support access — they can '
+                       'approve/reject and work IT support tickets. Also accepts: IT_Support, '
+                       'ITSupport, IT-Support, IT (case-insensitive).'),
         ('Employee (default)', 'Leave blank, or write "Employee" / "No" — no change to their access.'),
-        ('Important', 'This upload only GRANTS admin access, it never removes it. A blank or '
-                      '"Employee" cell on someone who is already an Admin does NOT revoke them — '
-                      'remove an admin from the Team tab in AdminPulse instead.'),
+        ('Important', 'This upload only GRANTS access, it never removes it. A blank or "Employee" '
+                      'cell on someone who already has Admin or IT Support access does NOT revoke '
+                      'them — remove them from the Team tab in AdminPulse instead.'),
         ('Super Admin', 'The Super Admin account is fixed in the system and cannot be changed '
                         'via this column.'),
     ]

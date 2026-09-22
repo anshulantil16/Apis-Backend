@@ -1,11 +1,12 @@
 """AdminPulse views package.
 
-    auth.py        email OTP login, role resolution (employee/admin/super_admin)
+    auth.py        email OTP login, role resolution (employee/admin/it_support/super_admin)
     rooms.py        room CRUD (Super Admin) + live status grid (everyone)
     bookings.py      booking create/approve/reject/cancel, day calendar
-    resource_requests.py  item/stationery/equipment requests (non-room)
+    resource_requests.py  item/stationery/equipment requests (non-room), reviewed by Admin
+    tickets.py        IT support tickets, reviewed by IT Support (see AdminUser.scope)
     employees.py     Super Admin employee-directory template/upload/list
-    admins.py        Super Admin admin-roster management
+    admins.py        Super Admin admin/IT-Support roster management
     analytics.py      utilisation stats for Admin/Super Admin
     reset.py          Super Admin full database reset
 
@@ -15,6 +16,7 @@ from .auth import *              # noqa: F401,F403
 from .rooms import *             # noqa: F401,F403
 from .bookings import *          # noqa: F401,F403
 from .resource_requests import * # noqa: F401,F403
+from .tickets import *           # noqa: F401,F403
 from .employees import *         # noqa: F401,F403
 from .admins import *            # noqa: F401,F403
 from .analytics import *         # noqa: F401,F403

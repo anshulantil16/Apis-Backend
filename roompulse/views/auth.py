@@ -1,9 +1,10 @@
-"""AdminPulse access control — email OTP login with three roles.
+"""AdminPulse access control — email OTP login with four roles.
 
-Role resolution order: SUPER_ADMIN_EMAIL constant > AdminUser table > default
-Employee. Any @apisindia.com address may log in (as at least Employee) —
-unlike SalesIQ, this is a company-wide utility, not a revenue-sensitive tool,
-so the bar for entry is "you work here," not an explicit allowlist.
+Role resolution order: SUPER_ADMIN_EMAIL constant > AdminUser table (whose
+`scope` field says 'admin' or 'it_support') > default Employee. Any
+@apisindia.com address may log in (as at least Employee) — unlike SalesIQ,
+this is a company-wide utility, not a revenue-sensitive tool, so the bar for
+entry is "you work here," not an explicit allowlist.
 """
 import os
 import secrets
@@ -34,8 +35,9 @@ def resolve_role(email):
     email = (email or '').strip().lower()
     if email == SUPER_ADMIN_EMAIL:
         return 'super_admin'
-    if AdminUser.objects.filter(email=email).exists():
-        return 'admin'
+    admin = AdminUser.objects.filter(email=email).first()
+    if admin:
+        return admin.scope  # 'admin' or 'it_support'
     if email.endswith(_COMPANY_DOMAIN):
         return 'employee'
     return None
