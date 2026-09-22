@@ -6,8 +6,7 @@ from rest_framework.response import Response
 
 from ..models import Room, BookingRequest
 from ..status import find_conflicts
-from .perms import require_role, actor_role
-from .auth import resolve_role
+from .perms import require_role, actor_role, require_signed_in
 
 
 def _parse_date(s):
@@ -47,7 +46,15 @@ class BookingListView(APIView):
     """
 
     def get(self, request):
+        # Signed in, and an employee sees only their own. This list was open
+        # to anyone who knew the URL, and `mine` let them name whose rows to
+        # read -- the same shape of hole the ticket queue had.
+        if (err := require_signed_in(request)):
+            return err
+        role, email = actor_role(request)
         qs = BookingRequest.objects.select_related('room').all()
+        if role not in ('admin', 'it_support', 'super_admin'):
+            qs = qs.filter(requested_by_email=email)
         room_id = request.query_params.get('room')
         if room_id:
             qs = qs.filter(room_id=room_id)
@@ -67,11 +74,13 @@ class BookingListView(APIView):
         return Response({'results': [_brief(b) for b in qs[:limit]], 'count': qs.count()})
 
     def post(self, request):
+        # Identity from the session, never the body: otherwise anyone can
+        # file this in a colleague's name and the record of who asked for
+        # what is worth nothing.
+        if (err := require_signed_in(request)):
+            return err
+        role, email = actor_role(request)
         d = request.data
-        email = str(d.get('email') or d.get('requested_by_email') or '').strip().lower()
-        role = resolve_role(email)
-        if not role:
-            return Response({'error': 'Please use your @apisindia.com email address.'}, status=403)
 
         try:
             room = Room.objects.get(id=d.get('room_id'), is_active=True)

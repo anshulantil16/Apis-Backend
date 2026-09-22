@@ -189,6 +189,12 @@ class SupportTicket(models.Model):
         ('rejected',    'Rejected'),
         ('in_progress', 'In Progress'),
         ('closed',      'Closed'),
+        # A requester withdrawing their own ticket was being written as
+        # 'rejected' with a remark saying otherwise, so the data could not
+        # tell "IT turned this down" from "the user no longer needed it" --
+        # two very different things to report on, and the remark was the
+        # only evidence, one free-text field away from being overwritten.
+        ('cancelled',   'Cancelled'),
     ]
     CATEGORY_CHOICES = [
         ('account_login_access',       'Account / Login Access'),
@@ -241,14 +247,60 @@ class TicketAttachment(models.Model):
     up app-wide — see config/urls.py's media serve route), not just a
     filename string: IT Support needs to actually open what was attached
     when deciding approve/reject, not just see that something was."""
+    # db_constraint stays on: these files are evidence on a ticket, and an
+    # attachment row whose ticket no longer exists is a file nobody can find
+    # their way back to.
     ticket = models.ForeignKey(SupportTicket, on_delete=models.CASCADE,
-                               related_name='attachments', db_constraint=False)
+                               related_name='attachments')
     file          = models.FileField(upload_to='roompulse_tickets/%Y/%m/')
     original_name = models.CharField(max_length=255, blank=True)
     uploaded_at   = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.original_name or self.file.name
+
+
+class TicketEvent(models.Model):
+    """Every move a ticket makes, kept forever.
+
+    The ticket row holds only where it got to: reviewed_by and reviewed_at are
+    a single slot, so the moment somebody closed a ticket you could no longer
+    see who had approved it, and admin_remarks was overwritten each time. A
+    ticket is meant to be the record of what happened -- who asked, who agreed,
+    who did the work, when -- and that record has to be a list, not a field
+    that the next action overwrites.
+
+    Append-only by intent: rows are written by _log() in views/tickets.py and
+    nothing in the app updates or deletes one.
+    """
+
+    ACTIONS = [
+        ('created',   'Created'),
+        ('approved',  'Approved'),
+        ('rejected',  'Rejected'),
+        ('started',   'Work started'),
+        ('closed',    'Closed'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    ticket      = models.ForeignKey(SupportTicket, on_delete=models.CASCADE,
+                                    related_name='events')
+    action      = models.CharField(max_length=20, choices=ACTIONS)
+    from_status = models.CharField(max_length=20, blank=True)
+    to_status   = models.CharField(max_length=20, blank=True)
+    # Snapshotted, not a foreign key: who did this stays readable even after
+    # somebody leaves and their roster row is removed.
+    actor_email = models.EmailField(blank=True)
+    actor_role  = models.CharField(max_length=20, blank=True)
+    remarks     = models.CharField(max_length=300, blank=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [models.Index(fields=['ticket', 'created_at'])]
+
+    def __str__(self):
+        return f'{self.action} by {self.actor_email or "system"}'
 
 
 class Employee(models.Model):

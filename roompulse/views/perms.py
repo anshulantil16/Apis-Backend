@@ -1,34 +1,57 @@
 """AdminPulse permission helper.
 
-There is no server-side session/token here — like SalesIQ and the PMS
-Simulator, the "session" is just a client-remembered email after OTP
-verification. That means every privileged endpoint MUST re-resolve the role
-from the email on the server side; the client's claimed role is never
-trusted, only used for UI decisions.
+Identity comes from the session token minted at OTP verification and sent
+back in the X-AdminPulse-Session header -- see auth.issue_session().
+
+It used to come from an `email` field in the request itself, which meant the
+login was decorative: anyone could act as anyone by typing their address,
+including the super admin, whose address is a constant in auth.py. The role
+was carefully re-resolved server-side, which looked like a check, but it was
+re-resolving a name the caller had just chosen for themselves.
+
+The rule this file now enforces: an email in a request body is data about the
+request. It is never a claim about who is making it.
 """
 from rest_framework.response import Response
-from .auth import resolve_role
+from .auth import resolve_role, session_email
 
 
 def actor_role(request):
-    """Role for the acting user, taken from ?email= (GET) or body 'email'
-    (POST/PATCH/DELETE) — whichever the endpoint received.
+    """-> (role, email) for the proven sender, or (None, '') if unproven.
 
-    NOTE: `X or Y if C else Z` is a classic trap — Python's conditional
-    expression binds looser than `or`, so that reads as `(X or Y) if C else Z`,
-    not `X or (Y if C else Z)`. Written explicitly here to avoid it.
+    Memoised on the request: a view typically asks once to check permission
+    and again to find out who it is talking to, and each ask was a cache read
+    plus a roster query. Resolving twice per request is not expensive, but it
+    is twice as many chances for the two answers to disagree.
     """
-    body_email = request.data.get('email') if hasattr(request, 'data') else None
-    email = request.query_params.get('email') or body_email
-    return resolve_role(email), (email or '').strip().lower()
+    cached = getattr(request, '_adminpulse_actor', None)
+    if cached is not None:
+        return cached
+    email = session_email(request)
+    result = (resolve_role(email), email) if email else (None, '')
+    try:
+        request._adminpulse_actor = result
+    except AttributeError:
+        pass
+    return result
 
 
 def require_role(request, *allowed):
-    """Returns None if the actor's role is in `allowed`, else a 403 Response.
+    """Returns None if the actor's role is in `allowed`, else 401/403.
     Usage: `if (err := require_role(request, 'admin', 'super_admin')): return err`
     """
     role, email = actor_role(request)
+    if not email:
+        return Response({'error': 'Please sign in again.'}, status=401)
     if role not in allowed:
         return Response({'error': 'You do not have permission to perform this action.'},
                         status=403)
+    return None
+
+
+def require_signed_in(request):
+    """Any verified employee. -> None, or a 401 Response."""
+    role, email = actor_role(request)
+    if not email or not role:
+        return Response({'error': 'Please sign in again.'}, status=401)
     return None

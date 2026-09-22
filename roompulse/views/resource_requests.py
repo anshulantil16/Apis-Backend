@@ -11,8 +11,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from ..models import ResourceRequest
-from .perms import actor_role
-from .auth import resolve_role
+from .perms import actor_role, require_signed_in
 
 
 def _parse_date(s):
@@ -49,7 +48,15 @@ class ResourceRequestListView(APIView):
     """
 
     def get(self, request):
+        # Signed in, and an employee sees only their own. This list was open
+        # to anyone who knew the URL, and `mine` let them name whose rows to
+        # read -- the same shape of hole the ticket queue had.
+        if (err := require_signed_in(request)):
+            return err
+        role, email = actor_role(request)
         qs = ResourceRequest.objects.all()
+        if role not in ('admin', 'it_support', 'super_admin'):
+            qs = qs.filter(requested_by_email=email)
         category = request.query_params.get('category')
         if category:
             qs = qs.filter(category=category)
@@ -66,11 +73,13 @@ class ResourceRequestListView(APIView):
         return Response({'results': [_brief(r) for r in qs[:limit]], 'count': qs.count()})
 
     def post(self, request):
+        # Identity from the session, never the body: otherwise anyone can
+        # file this in a colleague's name and the record of who asked for
+        # what is worth nothing.
+        if (err := require_signed_in(request)):
+            return err
+        role, email = actor_role(request)
         d = request.data
-        email = str(d.get('email') or d.get('requested_by_email') or '').strip().lower()
-        role = resolve_role(email)
-        if not role:
-            return Response({'error': 'Please use your @apisindia.com email address.'}, status=403)
 
         name = str(d.get('requested_by_name') or d.get('name') or '').strip()
         if not name:

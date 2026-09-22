@@ -22,6 +22,54 @@ _OTP_TTL = 300
 _OTP_MAX_ATTEMPTS = 5
 _COMPANY_DOMAIN = '@apisindia.com'
 
+# ── the session the OTP was supposed to be buying ────────────────────────
+#
+# Verifying the code used to return nothing but the email and role, and the
+# browser remembered them. Every privileged call then said who it was by
+# putting that email in its own request body, and the server believed it.
+#
+# So the login was decorative. Anyone could approve a ticket, grant themselves
+# Admin, or POST to /reset/ -- which deletes every ticket, booking and
+# employee -- simply by sending somebody else's address, and the super
+# admin's is a constant in this file. No code, no email, no account needed.
+#
+# Verification now mints a token, held server-side in the cache (the database
+# cache, so it is shared across gunicorn workers), and the caller proves who
+# they are by sending it back. The email in a request body is data about the
+# request, never a claim about its sender.
+_SESSION_TTL = 12 * 3600
+_SESSION_PREFIX = 'roompulse_session_'
+
+
+def issue_session(email):
+    """-> an opaque token standing for a verified sign-in."""
+    token = secrets.token_urlsafe(32)
+    cache.set(_SESSION_PREFIX + token, (email or '').strip().lower(),
+              timeout=_SESSION_TTL)
+    return token
+
+
+def session_email(request):
+    """-> the verified email behind this request, or '' if unproven.
+
+    Read from a header, never from the body: a body field is something the
+    caller is telling us, and identity cannot be one of those.
+    """
+    token = (request.headers.get('X-AdminPulse-Session') or '').strip()
+    if not token:
+        auth = (request.headers.get('Authorization') or '').strip()
+        if auth.lower().startswith('bearer '):
+            token = auth[7:].strip()
+    if not token:
+        return ''
+    return cache.get(_SESSION_PREFIX + token) or ''
+
+
+def revoke_session(request):
+    token = (request.headers.get('X-AdminPulse-Session') or '').strip()
+    if token:
+        cache.delete(_SESSION_PREFIX + token)
+
 
 def _dev_login():
     """Same PORTAL_DEV_LOGIN flag the main portal and Goal Setting use — on a
@@ -112,10 +160,16 @@ class RoomPulseLoginView(APIView):
                 cache.delete(key)
                 role = resolve_role(email)
                 return Response({'success': True, 'email': email, 'role': role,
-                                 'name': email.split('@')[0].replace('.', ' ').title()})
+                                 'name': email.split('@')[0].replace('.', ' ').title(),
+                                 'token': issue_session(email),
+                                 'expires_in': _SESSION_TTL})
             saved['attempts'] = saved.get('attempts', 0) + 1
             cache.set(key, saved, timeout=_OTP_TTL)
             left = _OTP_MAX_ATTEMPTS - saved['attempts']
             return Response({'error': f'Incorrect code. {left} attempt(s) remaining.'}, status=400)
+
+        if action == 'logout':
+            revoke_session(request)
+            return Response({'success': True})
 
         return Response({'error': 'Invalid action.'}, status=400)
