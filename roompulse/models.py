@@ -78,6 +78,14 @@ class BookingRequest(models.Model):
     reviewed_at    = models.DateTimeField(null=True, blank=True)
     admin_remarks  = models.CharField(max_length=300, blank=True)
 
+    # A meeting that finished before its booked end. The room is free from
+    # this moment, but the booking stays approved and keeps the times it was
+    # booked for -- it did happen, and shortening end_time would quietly
+    # rewrite that. `status.effective_end` is what reads this.
+    released_at    = models.DateTimeField(null=True, blank=True)
+    released_by    = models.CharField(max_length=200, blank=True)
+    release_reason = models.CharField(max_length=300, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

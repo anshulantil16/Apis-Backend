@@ -5,7 +5,28 @@ reused wherever a room's current state is needed (grid, calendar, exports).
 """
 from datetime import datetime, timedelta
 
+from django.utils import timezone
+
 UPCOMING_WINDOW_MIN = 60  # a room shows "Upcoming" once its next booking starts within this
+
+
+def effective_end(b):
+    """When the room actually became free — the booked end, or the moment it
+    was released if the meeting finished early.
+
+    Everything that asks "is this room in use?" goes through here, so a
+    release frees the room both on the live grid and for anyone trying to
+    book the remainder of the slot. The booked end_time is left alone: a
+    meeting that ran 10:00-10:30 of a 10:00-11:00 booking still happened.
+    """
+    released = getattr(b, 'released_at', None)
+    if not released:
+        return b.end_time
+    # released_at is a moment; only the part of it on the booking's own day
+    # can shorten it, and it can never extend past what was booked.
+    if released.date() != b.date:
+        return b.end_time
+    return min(b.end_time, released.time())
 
 
 def room_status(room, bookings, now=None):
@@ -17,7 +38,7 @@ def room_status(room, bookings, now=None):
     query, so this stays a pure, fast, testable function instead of doing
     N+1 lookups per room.
     """
-    now = now or datetime.now()
+    now = now or timezone.localtime().replace(tzinfo=None)
     today = now.date()
 
     current = None
@@ -26,7 +47,7 @@ def room_status(room, bookings, now=None):
         if b.date != today:
             continue
         start = datetime.combine(b.date, b.start_time)
-        end = datetime.combine(b.date, b.end_time)
+        end = datetime.combine(b.date, effective_end(b))
         if start <= now < end:
             current = b
             break  # a room can only be in exactly one approved meeting at once
@@ -85,4 +106,4 @@ def find_conflicts(qs, date, start_time, end_time, exclude_id=None):
     qs = qs.filter(date=date)
     if exclude_id:
         qs = qs.exclude(id=exclude_id)
-    return [b for b in qs if overlaps(start_time, end_time, b.start_time, b.end_time)]
+    return [b for b in qs if overlaps(start_time, end_time, b.start_time, effective_end(b))]

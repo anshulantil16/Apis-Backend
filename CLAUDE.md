@@ -37,6 +37,28 @@ it writes files that are not in git and the next deploy conflicts with them.
 alterations on `pms` and `roompulse`. That drift predates this work and is
 deliberately left alone — do not bundle it into an unrelated deploy.
 
+## The clock
+
+`TIME_ZONE = 'Asia/Kolkata'`, `USE_TZ = True`. Datetimes are still stored in
+UTC; what changed is what the server means by *now* and *today*.
+
+Use `timezone.localtime()` / `timezone.localdate()`. **Never `datetime.now()`**
+— that reads the host OS timezone, which on the QA server is UTC. The live
+room grid did exactly that and ran 5.5 hours away from the times people had
+typed in: a 10:00 meeting marked the room occupied at 15:30 IST.
+
+## Freeing a room early
+
+A room's status is derived from the clock on every request — nothing stores
+"occupied", and a meeting frees its room by itself at its end time.
+
+An admin can also end one early. `BookingRequest.released_at` records the
+moment; `end_time` is left as booked, because the meeting did happen and for
+how long it was booked is part of the record. Everything asking "is this room
+in use?" goes through `status.effective_end()`, which is what makes a release
+free the room both on the grid and for the next person trying to book that
+slot. Cancelling is the different case — the meeting never happened.
+
 ## AdminPulse (`roompulse/`) — identity
 
 **An `email` in a request body is data about the request. It is never a claim

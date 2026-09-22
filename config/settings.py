@@ -141,7 +141,16 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+# Everyone using this system is in India, and every time they type into it --
+# a meeting from 10:00, a shift, a letter's date -- is Indian wall-clock time.
+# Left on UTC, "now" was 5.5 hours behind the people entering it: the live
+# room grid marked a 10:00 meeting as in progress at 15:30 IST, and anything
+# asking for "today" rolled over at 05:30 local.
+#
+# USE_TZ stays on, so this changes no stored value: datetimes are still kept
+# in UTC in the database. It only changes what the server means by now,
+# today, and localtime.
+TIME_ZONE = 'Asia/Kolkata'
 
 USE_I18N = True
 
