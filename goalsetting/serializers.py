@@ -7,12 +7,30 @@ from .models import (EmployeeProfile, GoalCycle, GoalPlan, GoalKPI, KRA,
 class EmployeeSerializer(serializers.ModelSerializer):
     manager_name = serializers.SerializerMethodField()
     hod_name = serializers.SerializerMethodField()
+    # How many people ACTUALLY report to this person, as against what the
+    # user_type column in the uploaded sheet happens to say. A manager typed
+    # in as "Employee" -- a blank cell, "Mgr.", a spelling -- would otherwise
+    # sign in and find no team to review, with nothing on screen to explain
+    # why. Reporting lines are the truth; user_type is a label.
+    reports_count = serializers.SerializerMethodField()
+    hod_reports_count = serializers.SerializerMethodField()
 
     class Meta:
         model = EmployeeProfile
         fields = ['id', 'employee_id', 'name', 'email', 'phone', 'designation',
                   'department', 'zone', 'subzone', 'reporting_manager_id', 'hod_id',
-                  'user_type', 'is_active', 'joined_date', 'manager_name', 'hod_name']
+                  'user_type', 'is_active', 'joined_date', 'manager_name', 'hod_name',
+                  'reports_count', 'hod_reports_count']
+
+    def get_reports_count(self, obj):
+        return EmployeeProfile.objects.filter(
+            reporting_manager_id__iexact=obj.employee_id, is_active=True
+        ).exclude(employee_id__iexact=obj.employee_id).count()
+
+    def get_hod_reports_count(self, obj):
+        return EmployeeProfile.objects.filter(
+            hod_id__iexact=obj.employee_id, is_active=True
+        ).exclude(employee_id__iexact=obj.employee_id).count()
 
     def get_manager_name(self, obj):
         m = obj.manager

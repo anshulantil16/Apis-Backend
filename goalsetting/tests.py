@@ -10,6 +10,7 @@ from django.test import TestCase
 from .models import (EmployeeProfile, GoalCycle, GoalPlan, PlanEvent,
                      PlanVersion, diff_snapshots)
 from .services import WorkflowError, advance, get_or_create_plan, readiness, save_kras
+from .session import issue_session
 
 BASE = '/api/goalsetting'
 
@@ -32,6 +33,22 @@ def sheet(*pairs):
 
 FULL = sheet(('Primary sales', 40), ('Retail coverage', 30),
              ('Process audit', 20), ('Team training', 10))
+
+
+class AsAdmin:
+    """Signs the test client in as an administrator.
+
+    These screens belong to the admin, and until recently they did not have to
+    prove it: every admin endpoint was open to anyone who knew the URL,
+    `/reset/` among them. Needing this mixin is the guard doing its job.
+    """
+
+    def setUp(self):
+        super().setUp()
+        admin, _ = EmployeeProfile.objects.get_or_create(
+            employee_id='GS-ADMIN',
+            defaults={'name': 'Goal Setting Admin', 'user_type': 'admin'})
+        self.client.defaults['HTTP_X_GOALSETTING_SESSION'] = issue_session(admin)
 
 
 class Fixture(TestCase):
@@ -363,7 +380,7 @@ class Regressions(Fixture):
         self.assertFalse(self.plan.may_edit('employee'))
 
 
-class AdminPowers(Fixture):
+class AdminPowers(AsAdmin, Fixture):
     """The admin seat overrides the workflow — and is recorded doing it.
 
     The override is only safe because it is visible. These tests exist to keep
@@ -426,9 +443,11 @@ class AdminPowers(Fixture):
         """The override belongs to the admin alone."""
         self.fill()
         advance(self.plan, 'submit', role='employee')
-        for role in ('employee', 'hod'):
-            r = self.post(f'/plans/E1/{self.cycle.id}/', {'role': role, 'kras': FULL})
-            self.assertEqual(r.status_code, 403, role)
+        self.client.defaults.pop('HTTP_X_GOALSETTING_SESSION', None)   # not an admin now
+        for who in ('E1', 'H1'):
+            r = self.post(f'/plans/E1/{self.cycle.id}/',
+                          {'actor_employee_id': who, 'role': 'admin', 'kras': FULL})
+            self.assertEqual(r.status_code, 403, who)
 
     def test_admin_moves_a_sheet_to_any_stage(self):
         self.fill()
@@ -485,7 +504,7 @@ class AdminPowers(Fixture):
         self.assertEqual(feed[0]['actor_name'], 'Arun')
 
 
-class Template(TestCase):
+class Template(AsAdmin, TestCase):
     """The blank sheet an admin downloads, fills in and uploads back.
 
     Generated from the importer's own column list, so the two cannot drift; the
@@ -557,7 +576,7 @@ class Template(TestCase):
         self.assertEqual([p['employee_id'] for p in team], ['T1'])
 
 
-class SampleRows(TestCase):
+class SampleRows(AsAdmin, TestCase):
     """The template ships filled-in rows, and they must be harmless.
 
     An example you have to remember to delete is a trap: forget once and three
@@ -589,7 +608,7 @@ class SampleRows(TestCase):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(r.json()['created'], 0)
         self.assertEqual(r.json()['skipped_samples'], 3)
-        self.assertEqual(EmployeeProfile.objects.count(), 0)
+        self.assertEqual(EmployeeProfile.objects.exclude(employee_id='GS-ADMIN').count(), 0)
 
     def test_real_rows_alongside_samples_still_import(self):
         """Someone typing under the examples rather than over them."""
@@ -602,10 +621,11 @@ class SampleRows(TestCase):
         r = self._upload(pd.concat([df, mine], ignore_index=True))
         self.assertEqual(r.json()['created'], 1)
         self.assertEqual(r.json()['skipped_samples'], 3)
-        self.assertEqual([e.employee_id for e in EmployeeProfile.objects.all()], ['R1'])
+        self.assertEqual([e.employee_id for e in
+                          EmployeeProfile.objects.exclude(employee_id='GS-ADMIN')], ['R1'])
 
 
-class Reset(Fixture):
+class Reset(AsAdmin, Fixture):
     """Clearing the data. Guarded, because it deletes the version history —
     the one thing this product promises is permanent."""
 
@@ -631,23 +651,26 @@ class Reset(Fixture):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(GoalPlan.objects.count(), 0)
         self.assertEqual(PlanVersion.objects.count(), 0)
-        self.assertEqual(EmployeeProfile.objects.count(), 3)
+        self.assertEqual(EmployeeProfile.objects.exclude(employee_id='GS-ADMIN').count(), 3)
         self.assertEqual(GoalCycle.objects.count(), 1)
 
     def test_clearing_people_keeps_the_cycle(self):
         self.post('/reset/', {'scope': 'people', 'confirm': 'RESET_CONFIRMED'})
-        self.assertEqual(EmployeeProfile.objects.count(), 0)
+        self.assertEqual(EmployeeProfile.objects.exclude(employee_id='GS-ADMIN').count(), 0)
         self.assertEqual(GoalCycle.objects.count(), 1)
 
     def test_clearing_everything(self):
         r = self.post('/reset/', {'scope': 'all', 'confirm': 'RESET_CONFIRMED'})
         self.assertEqual(r.status_code, 200, r.content)
-        for model in (GoalPlan, PlanVersion, PlanEvent, EmployeeProfile, GoalCycle):
+        for model in (GoalPlan, PlanVersion, PlanEvent, GoalCycle):
             self.assertEqual(model.objects.count(), 0, model.__name__)
+        # Everyone except the bootstrap admin, who is kept on purpose.
+        self.assertEqual(EmployeeProfile.objects.exclude(employee_id='GS-ADMIN').count(), 0)
 
     def test_the_bootstrap_admin_survives(self):
         """Otherwise a reset locks the administrator out of undoing it."""
-        EmployeeProfile.objects.create(employee_id='GS-ADMIN', name='Admin', user_type='admin')
+        EmployeeProfile.objects.get_or_create(employee_id='GS-ADMIN',
+                                              defaults={'name': 'Admin', 'user_type': 'admin'})
         self.post('/reset/', {'scope': 'all', 'confirm': 'RESET_CONFIRMED'})
         self.assertTrue(EmployeeProfile.objects.filter(employee_id='GS-ADMIN').exists())
 
@@ -658,7 +681,7 @@ class Reset(Fixture):
         self.assertEqual(r.json()['counts']['people'], 3)
 
 
-class Export(Fixture):
+class Export(AsAdmin, Fixture):
     """The workbook of agreed goals.
 
     Three sheets because an admin asks three questions of the same data: what
@@ -739,3 +762,265 @@ class Export(Fixture):
         self.assertEqual(p.loc['E2', 'Waiting on'], 'The HOD, to review')
         self.assertEqual(p.loc['E3', 'Where it is stuck'], 'Not started')
         self.assertNotIn('E1', p.index, 'someone who has agreed is not pending')
+
+
+class EveryoneSetsTheirOwnGoals(Fixture):
+    """A manager and an HOD have goals of their own.
+
+    They could not fill them in. The role came from EmployeeProfile.user_type,
+    which says what you are in the company, not what you are to the sheet in
+    front of you -- so a manager's own draft was "with the employee" while they
+    were "a manager", and their own sheet was read-only to them. Opening it
+    returned "has not started a goal sheet yet" about themselves.
+    """
+
+    def own(self, who):
+        return (f'{BASE}/plans/{who.employee_id}/{self.cycle.id}/'
+                f'?actor_employee_id={who.employee_id}')
+
+    def test_a_manager_opens_their_own_sheet(self):
+        r = self.client.get(self.own(self.mgr))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()['your_role'], 'employee')
+
+    def test_an_hod_opens_their_own_sheet(self):
+        r = self.client.get(self.own(self.hod))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()['your_role'], 'employee')
+
+    def test_a_manager_fills_and_submits_their_own(self):
+        r = self.post(f'/plans/M1/{self.cycle.id}/',
+                      {'actor_employee_id': 'M1', 'kras': FULL})
+        self.assertEqual(r.status_code, 200, r.content)
+
+        plan = GoalPlan.objects.get(employee=self.mgr, cycle=self.cycle)
+        r = self.post(f'/plans/{plan.id}/action/',
+                      {'actor_employee_id': 'M1', 'actor_name': 'Arun', 'action': 'submit'})
+        self.assertEqual(r.status_code, 200, r.content)
+        plan.refresh_from_db()
+        # M1 has an HOD but no manager of their own, so it goes straight there.
+        self.assertEqual(plan.status, 'with_hod')
+
+    def test_a_managers_own_sheet_completes_its_round_trip(self):
+        self.post(f'/plans/M1/{self.cycle.id}/', {'actor_employee_id': 'M1', 'kras': FULL})
+        plan = GoalPlan.objects.get(employee=self.mgr, cycle=self.cycle)
+        self.post(f'/plans/{plan.id}/action/', {'actor_employee_id': 'M1', 'action': 'submit'})
+
+        r = self.post(f'/plans/{plan.id}/action/',
+                      {'actor_employee_id': 'H1', 'actor_name': 'Narendra',
+                       'action': 'to_employee'})
+        self.assertEqual(r.status_code, 200, r.content)
+
+        r = self.post(f'/plans/{plan.id}/action/',
+                      {'actor_employee_id': 'M1', 'action': 'accept'})
+        self.assertEqual(r.status_code, 200, r.content)
+        plan.refresh_from_db()
+        self.assertEqual(plan.status, 'accepted')
+
+    def test_being_a_manager_elsewhere_does_not_follow_you_to_your_own_sheet(self):
+        """M1 reviews E1, but on M1's own sheet M1 is simply the employee."""
+        self.fill()
+        advance(self.plan, 'submit', role='employee')
+        r = self.client.get(f'{BASE}/plans/E1/{self.cycle.id}/?actor_employee_id=M1')
+        self.assertEqual(r.json()['your_role'], 'manager')
+        r = self.client.get(self.own(self.mgr))
+        self.assertEqual(r.json()['your_role'], 'employee')
+
+
+class RoleComesFromTheOrgChart(Fixture):
+    """What you are is decided by the sheet, not by what the caller claims."""
+
+    def test_a_stranger_cannot_open_someone_elses_sheet(self):
+        EmployeeProfile.objects.create(employee_id='X9', name='Nosy')
+        r = self.client.get(f'{BASE}/plans/E1/{self.cycle.id}/?actor_employee_id=X9')
+        self.assertEqual(r.status_code, 403)
+
+    def test_a_stranger_cannot_edit_someone_elses_sheet(self):
+        EmployeeProfile.objects.create(employee_id='X9', name='Nosy')
+        r = self.post(f'/plans/E1/{self.cycle.id}/',
+                      {'actor_employee_id': 'X9', 'role': 'employee', 'kras': FULL})
+        self.assertEqual(r.status_code, 403)
+
+    def test_claiming_to_be_the_employee_does_not_make_you_one(self):
+        """The old API believed `role` in the body, so a manager could post
+        role=employee on a subordinate's draft and edit it as them."""
+        r = self.post(f'/plans/E1/{self.cycle.id}/',
+                      {'actor_employee_id': 'M1', 'role': 'employee', 'kras': FULL})
+        self.assertEqual(r.status_code, 403)
+
+    def test_a_reviewer_looking_does_not_start_a_sheet_for_someone(self):
+        self.assertFalse(GoalPlan.objects.filter(employee=self.mgr).exists())
+        r = self.client.get(f'{BASE}/plans/M1/{self.cycle.id}/?actor_employee_id=H1')
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(r.json()['not_started'])
+        self.assertFalse(GoalPlan.objects.filter(employee=self.mgr).exists())
+
+    def test_the_actor_recorded_is_the_reviewer_not_the_employee(self):
+        """The screen used to send the sheet owner's id as the actor, so every
+        review a manager made was filed under the employee's name."""
+        self.fill()
+        advance(self.plan, 'submit', role='employee')
+        self.post(f'/plans/{self.plan.id}/action/',
+                  {'actor_employee_id': 'M1', 'actor_name': 'Arun', 'action': 'to_hod'})
+        v = PlanVersion.objects.filter(plan=self.plan).order_by('-version_no').first()
+        self.assertEqual(v.actor_role, 'manager')
+        self.assertEqual(v.actor_employee_id, 'M1')
+
+    def test_one_person_who_is_both_manager_and_hod_can_act_at_both_stages(self):
+        """Small departments do this. Holding two roles must not lock you out
+        of one of them."""
+        solo = EmployeeProfile.objects.create(employee_id='S1', name='Solo',
+                                              reporting_manager_id='H1', hod_id='H1')
+        plan = get_or_create_plan(solo, self.cycle)
+        save_kras(plan, FULL)
+        plan.refresh_from_db()
+        advance(plan, 'submit', role='employee')
+
+        r = self.post(f'/plans/{plan.id}/action/',
+                      {'actor_employee_id': 'H1', 'action': 'to_hod'})
+        self.assertEqual(r.status_code, 200, r.content)
+        r = self.post(f'/plans/{plan.id}/action/',
+                      {'actor_employee_id': 'H1', 'action': 'to_employee'})
+        self.assertEqual(r.status_code, 200, r.content)
+        plan.refresh_from_db()
+        self.assertEqual(plan.status, 'awaiting_employee')
+
+
+class NobodyGetsStuck(Fixture):
+    """Rolling this out to the whole company means people whose reporting line
+    is incomplete. A sheet must never reach a stage nobody can act at."""
+
+    def submit_for(self, emp):
+        plan = get_or_create_plan(emp, self.cycle)
+        save_kras(plan, FULL)
+        plan.refresh_from_db()
+        advance(plan, 'submit', role='employee')
+        plan.refresh_from_db()
+        return plan
+
+    def test_no_manager_on_file_goes_straight_to_the_hod(self):
+        orphan = EmployeeProfile.objects.create(employee_id='O1', name='Orphan', hod_id='H1')
+        self.assertEqual(self.submit_for(orphan).status, 'with_hod')
+
+    def test_a_manager_id_naming_nobody_is_not_a_manager(self):
+        ghost = EmployeeProfile.objects.create(employee_id='G1', name='Ghost',
+                                               reporting_manager_id='WHO', hod_id='H1')
+        self.assertEqual(self.submit_for(ghost).status, 'with_hod')
+
+    def test_an_inactive_manager_is_not_a_manager(self):
+        EmployeeProfile.objects.create(employee_id='L1', name='Left', user_type='manager',
+                                       is_active=False)
+        leftover = EmployeeProfile.objects.create(employee_id='R1', name='Reports to leaver',
+                                                  reporting_manager_id='L1', hod_id='H1')
+        self.assertEqual(self.submit_for(leftover).status, 'with_hod')
+
+    def test_nobody_above_you_at_all_comes_back_for_your_acceptance(self):
+        top = EmployeeProfile.objects.create(employee_id='T1', name='Top', user_type='hod')
+        self.assertEqual(self.submit_for(top).status, 'awaiting_employee')
+
+    def test_and_the_record_says_why_it_skipped_a_stage(self):
+        top = EmployeeProfile.objects.create(employee_id='T1', name='Top', user_type='hod')
+        plan = self.submit_for(top)
+        note = PlanVersion.objects.filter(plan=plan).order_by('-version_no').first().note
+        self.assertIn('no ', note.lower())
+
+    def test_pointing_at_yourself_is_not_a_review(self):
+        selfy = EmployeeProfile.objects.create(employee_id='SF', name='Self',
+                                               reporting_manager_id='SF', hod_id='SF')
+        self.assertEqual(self.submit_for(selfy).status, 'awaiting_employee')
+
+
+class AdminDoorsAreShut(Fixture):
+    """Everything that can destroy or rewrite other people's data.
+
+    All of it was open to anyone who could reach the URL. `/reset/` deletes
+    every goal sheet and every version of it -- the one thing this product
+    promises is permanent -- and asked only for a confirmation phrase that is
+    written in the frontend source. Going live for the whole company means
+    every employee has that URL.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.fill()
+        # Signed in, and an ordinary employee: being a real user is not the
+        # same as being an administrator.
+        self.client.defaults['HTTP_X_GOALSETTING_SESSION'] = issue_session(self.emp)
+
+    def test_an_employee_cannot_wipe_the_goal_sheets(self):
+        r = self.post('/reset/', {'scope': 'all', 'confirm': 'RESET_CONFIRMED'})
+        self.assertEqual(r.status_code, 403)
+        self.assertTrue(GoalPlan.objects.exists())
+
+    def test_a_stranger_with_no_session_cannot_either(self):
+        self.client.defaults.pop('HTTP_X_GOALSETTING_SESSION', None)
+        r = self.post('/reset/', {'scope': 'all', 'confirm': 'RESET_CONFIRMED'})
+        self.assertEqual(r.status_code, 403)
+        self.assertTrue(GoalPlan.objects.exists())
+
+    def test_an_employee_cannot_force_their_own_goals_to_accepted(self):
+        r = self.post(f'/plans/{self.plan.id}/status/', {'status': 'accepted'})
+        self.assertEqual(r.status_code, 403)
+        self.plan.refresh_from_db()
+        self.assertEqual(self.plan.status, 'draft')
+
+    def test_an_employee_cannot_reopen_an_agreed_sheet(self):
+        r = self.post(f'/plans/{self.plan.id}/reopen/', {'note': 'let me back in'})
+        self.assertEqual(r.status_code, 403)
+
+    def test_an_employee_cannot_read_the_whole_company(self):
+        for path in ('/all-plans/', '/overview/', '/activity/', '/employees/', '/export/'):
+            r = self.client.get(BASE + path)
+            self.assertEqual(r.status_code, 403, path)
+
+    def test_an_employee_cannot_add_or_retire_people(self):
+        r = self.post('/employees/create/', {'employee_id': 'NEW', 'name': 'Invented'})
+        self.assertEqual(r.status_code, 403)
+        r = self.client.delete(f'{BASE}/employees/E1/')
+        self.assertEqual(r.status_code, 403)
+
+    def test_an_employee_cannot_open_or_close_a_cycle(self):
+        r = self.post('/cycles/', {'name': 'Mine', 'fiscal_year': '2026-27'})
+        self.assertEqual(r.status_code, 403)
+        r = self.client.patch(f'{BASE}/cycles/{self.cycle.id}/', {'status': 'closed'},
+                              content_type='application/json')
+        self.assertEqual(r.status_code, 403)
+        self.cycle.refresh_from_db()
+        self.assertEqual(self.cycle.status, 'open')
+
+    def test_an_admin_can_do_all_of_it(self):
+        admin, _ = EmployeeProfile.objects.get_or_create(
+            employee_id='GS-ADMIN', defaults={'name': 'Admin', 'user_type': 'admin'})
+        self.client.defaults['HTTP_X_GOALSETTING_SESSION'] = issue_session(admin)
+        self.assertEqual(self.client.get(f'{BASE}/overview/').status_code, 200)
+        r = self.post(f'/plans/{self.plan.id}/status/',
+                      {'status': 'with_hod', 'actor_name': 'Admin'})
+        self.assertEqual(r.status_code, 200, r.content)
+
+
+class SigningInProvesIt(Fixture):
+    """The OTP has to be worth something."""
+
+    def test_verifying_an_otp_returns_a_session(self):
+        from .models import OTPToken
+        from django.utils import timezone
+        from datetime import timedelta
+        self.emp.email = 'rahul@apisindia.com'
+        self.emp.save()
+        OTPToken.objects.create(employee=self.emp, otp_code='123456',
+                                expires_at=timezone.now() + timedelta(minutes=5))
+        r = self.post('/auth/verify-otp/', {'employee_id': 'E1', 'otp': '123456'})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertTrue(r.json().get('session'))
+
+    def test_the_session_says_who_you_are_whatever_the_body_claims(self):
+        """A signed-in employee naming someone else is still themselves."""
+        self.client.defaults['HTTP_X_GOALSETTING_SESSION'] = issue_session(self.emp)
+        r = self.client.get(f'{BASE}/plans/E1/{self.cycle.id}/?actor_employee_id=GS-ADMIN')
+        self.assertEqual(r.json()['your_role'], 'employee')
+
+    def test_a_manager_cannot_pass_themselves_off_as_the_employee(self):
+        self.client.defaults['HTTP_X_GOALSETTING_SESSION'] = issue_session(self.mgr)
+        r = self.post(f'/plans/E1/{self.cycle.id}/',
+                      {'actor_employee_id': 'E1', 'role': 'employee', 'kras': FULL})
+        self.assertEqual(r.status_code, 403)

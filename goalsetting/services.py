@@ -157,6 +157,39 @@ _STAMP = {
 _NEEDS_COMPLETE = {'submit', 'to_hod', 'to_employee'}
 
 
+def _reviewer(employee, field):
+    """The manager or HOD named on an employee, if they are really there.
+
+    An id on a profile is not a reviewer: it can name somebody who was never
+    uploaded, or who has since left. Sending a sheet to a stage nobody can act
+    at is how a goal sheet gets stuck with no way forward but the admin.
+    """
+    from .models import EmployeeProfile
+    ident = (getattr(employee, field, '') or '').strip()
+    if not ident:
+        return None
+    reviewer = EmployeeProfile.objects.filter(employee_id__iexact=ident, is_active=True).first()
+    if not reviewer or reviewer.employee_id.lower() == employee.employee_id.lower():
+        return None     # nobody, or themselves -- neither is a review
+    return reviewer
+
+
+def route_after(action, target, plan):
+    """Where a hand-off really lands, once missing reviewers are accounted for.
+
+    Most people have both a manager and an HOD, and for them this changes
+    nothing. But some have neither -- the head of a function, a new joiner
+    whose sheet has not been filled in, a one-person department -- and for
+    them the plain workflow stops dead at a stage with nobody in it.
+    """
+    emp = plan.employee
+    if action == 'submit' and target == 'submitted' and not _reviewer(emp, 'reporting_manager_id'):
+        target = 'with_hod'
+    if target == 'with_hod' and not _reviewer(emp, 'hod_id'):
+        target = 'awaiting_employee'
+    return target
+
+
 class WorkflowError(Exception):
     def __init__(self, message, problems=None, status=400):
         super().__init__(message)
@@ -193,7 +226,10 @@ def advance(plan, action, *, role, name='', employee_id='', note=''):
         if problems:
             raise WorkflowError('This goal sheet is not complete yet.', problems)
 
-    plan.status = target
+    routed = route_after(action, target, plan)
+    skipped = routed != target
+
+    plan.status = routed
     if action == 'submit':
         plan.employee_note = note or plan.employee_note
     elif action in ('to_hod', 'manager_return'):
@@ -208,10 +244,19 @@ def advance(plan, action, *, role, name='', employee_id='', note=''):
         setattr(plan, stamp, timezone.now())
     plan.save()
 
+    trail = note
+    if skipped:
+        # Say so on the record. A sheet that reached the employee without a
+        # manager ever seeing it must not look like one that was reviewed.
+        why = ('No reporting manager is on file, so this went straight on.'
+               if routed != 'submitted' and target == 'submitted'
+               else 'No HOD is on file, so this came back for acceptance without an HOD review.')
+        trail = f'{note} ({why})'.strip()
+
     PlanVersion.record(plan, role=role, name=name, employee_id=employee_id,
-                       action=action, note=note)
+                       action=action, note=trail)
     PlanEvent.objects.create(plan=plan, actor_role=role, actor_name=name,
-                             action=action, note=note)
+                             action=action, note=trail)
     return plan
 
 

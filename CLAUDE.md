@@ -81,6 +81,30 @@ When adding an AdminPulse endpoint:
 - take the actor from `actor_role(request)`, never from `request.data`
 - an employee sees only their own rows; only staff roles see everyone's
 
+## Goal Setting (`goalsetting/`) — roles are relative
+
+**Nobody is "a manager" in the abstract — they are the manager OF someone.**
+`EmployeeProfile.user_type` is a label from the upload sheet; it is not your
+role on the sheet in front of you. On your own goal sheet you are the
+employee, whatever your user_type says.
+
+`views.plan_roles(actor_id, employee)` works out every role an actor holds in
+relation to one sheet, and `acting_role(roles, status)` picks the one that
+holds the pen at the current stage. Views take the role from those, never from
+a `role` field in the request. Reading it off user_type is what stopped every
+manager and HOD in the company from filling in their own goals: their own
+draft was "with the employee" while they were "a manager".
+
+Identity comes from `session.py` — a token minted at OTP verification and
+returned in the `X-GoalSetting-Session` header. Before that, every endpoint
+took the caller's word for who they were, and `/reset/`, which deletes every
+goal sheet and every version of it, was open to anyone with the URL. Guard new
+admin endpoints with `require_admin(request)`.
+
+`services.route_after()` sends a hand-off past reviewers who are not really
+there — no manager on file, an id naming nobody, someone who has left. Without
+it a sheet lands at a stage nobody can act at and only the admin can free it.
+
 ## Tickets are a record
 
 `SupportTicket.reviewed_by` / `reviewed_at` hold only the **most recent**
