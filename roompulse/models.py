@@ -181,6 +181,32 @@ class ResourceRequest(models.Model):
         return f"{self.item_name} x{self.quantity} ({self.status})"
 
 
+IT_TICKET_CATEGORIES = [
+    ('account_login_access',       'Account / Login Access'),
+    ('printer_scanner',            'Printer / Scanner'),
+    ('vpn_access',                 'VPN Access'),
+    ('system_application_access',  'System / Application Access'),
+    ('software_installation',      'Software Installation'),
+    ('antivirus_security',         'Antivirus / Security'),
+    ('microsoft_365',              'Microsoft 365'),
+    ('teams_video_conferencing',   'Teams / Video Conferencing'),
+    ('server_storage',             'Server / Storage'),
+    ('database_access',            'Database Access'),
+    ('mobile_device_support',      'Mobile / Device Support'),
+    ('it_asset_request',           'IT Asset Request'),
+    ('other',                      'Other'),
+]
+
+# Admin's side of the same question, taken from ResourceRequest rather than
+# copied, so the two lists cannot drift apart: a category added for requests
+# is a category admins can log work against on the same day.
+LOGGED_WORK_CATEGORIES = (
+    [c for c in IT_TICKET_CATEGORIES if c[0] != 'other']
+    + [c for c in ResourceRequest.CATEGORY_CHOICES if c[0] != 'other']
+    + [('other', 'Other')]          # kept last, where a fall-through belongs
+)
+
+
 class SupportTicket(models.Model):
     """IT support ticket — technical/access issues, as opposed to the
     physical-item ResourceRequest above (stationery, equipment...). Reviewed
@@ -204,21 +230,17 @@ class SupportTicket(models.Model):
         # only evidence, one free-text field away from being overwritten.
         ('cancelled',   'Cancelled'),
     ]
-    CATEGORY_CHOICES = [
-        ('account_login_access',       'Account / Login Access'),
-        ('printer_scanner',            'Printer / Scanner'),
-        ('vpn_access',                 'VPN Access'),
-        ('system_application_access',  'System / Application Access'),
-        ('software_installation',      'Software Installation'),
-        ('antivirus_security',         'Antivirus / Security'),
-        ('microsoft_365',              'Microsoft 365'),
-        ('teams_video_conferencing',   'Teams / Video Conferencing'),
-        ('server_storage',             'Server / Storage'),
-        ('database_access',            'Database Access'),
-        ('mobile_device_support',      'Mobile / Device Support'),
-        ('it_asset_request',           'IT Asset Request'),
-        ('other',                      'Other'),
-    ]
+    # What a ticket somebody *raises* can be about: IT's own work. This is
+    # the list the IT queue is filtered and reported on, and the only one a
+    # request may use -- see TicketListView.post.
+    IT_CATEGORY_CHOICES = IT_TICKET_CATEGORIES
+    # What a job *logged* after the fact can be about, which is wider,
+    # because Admin logs work here too (see `origin` below) and an admin's
+    # day is not an IT day. Offered only IT's list, an admin filing "got the
+    # pantry tap fixed" had nothing honest to pick, so it landed on 'Other' --
+    # and "Other" was then the largest category in their monthly report,
+    # which is the one thing a report by category must never be.
+    CATEGORY_CHOICES = LOGGED_WORK_CATEGORIES
     PRIORITY_CHOICES = [
         ('low', 'Low'), ('medium', 'Medium'), ('high', 'High'), ('critical', 'Critical'),
     ]

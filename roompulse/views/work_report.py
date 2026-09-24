@@ -1,4 +1,4 @@
-"""What the IT and admin team actually did in a month.
+"""What the IT and admin teams actually did in a month.
 
 Two things feed it and they have to be counted together, or the number is
 wrong in a way nobody notices: tickets people raised and the team closed, and
@@ -8,20 +8,22 @@ printer fixed because somebody walked over and asked -- and until it could be
 logged, a monthly report measured how often people happened to use the ticket
 form rather than how much work was done.
 
-Both live in SupportTicket, separated by `origin`, so this is one query and
-one set of categories. The split is reported rather than hidden: "sixty jobs,
-of which thirty-eight came through the queue" says something about the team
-AND something about whether people are using the queue.
+Both kinds come from work_items.collect, which reads all three queues -- IT
+tickets, item requests and room bookings -- and flattens them to one shape,
+so an Admin's month is counted as fully as an IT engineer's. The split is
+reported rather than hidden: "sixty jobs, of which thirty-eight came through
+a queue" says something about the team AND something about whether people are
+using the queues.
 """
 from calendar import monthrange
 from datetime import date
 
-from django.db.models import Count, Sum
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from ..models import AdminUser, SupportTicket
-from ..worktime import OFFICE_END, OFFICE_START, after_hours_minutes
+from ..models import AdminUser
+from ..work_items import collect, still_open
+from ..worktime import OFFICE_END, OFFICE_START
 from .perms import require_role
 
 
@@ -55,97 +57,89 @@ class WorkReportView(APIView):
                                            timezone.localdate())
 
         # Work that HAPPENED in the month, by the day it was done -- not by
-        # the day the ticket was raised. A ticket opened in March and closed
-        # in April is April's work, and counting it in March would credit a
+        # the day it was asked for. A ticket opened in March and closed in
+        # April is April's work, and counting it in March would credit a
         # month in which nothing was finished.
-        done = SupportTicket.objects.filter(performed_on__range=(first, last))
+        #
+        # Collected across all three queues (see work_items.collect), so an
+        # Admin's month counts the requests they fulfilled and the bookings
+        # they approved, the same way IT's counts the tickets they closed.
+        rows = collect(first, last)
 
-        by_origin = {r['origin']: r['n'] for r in
-                     done.values('origin').annotate(n=Count('id'))}
-        minutes = done.aggregate(m=Sum('time_spent_minutes'))['m'] or 0
-
-        # After-hours time is worked out per row from the window each job was
-        # done in, so it cannot be summed in SQL. Only the rows that recorded
-        # a window are read, which is a short list -- and a job with no window
-        # contributes nothing rather than being guessed at.
-        timed = list(done.exclude(worked_from__isnull=True)
-                     .values('performed_by_email', 'performed_on', 'worked_from', 'worked_to'))
-        after_by_person = {}
-        after_total = 0
-        for row in timed:
-            mins = after_hours_minutes(row['performed_on'], row['worked_from'], row['worked_to'])
-            if not mins:
-                continue
-            after_total += mins
-            email = (row['performed_by_email'] or '').lower()
-            after_by_person[email] = after_by_person.get(email, 0) + mins
-
-        # Per person. Names live on AdminUser for staff, so the report can say
-        # "Ravi" rather than an email address.
         names = {a.email.lower(): a.name for a in AdminUser.objects.all()}
-        people = {}
-        for row in done.values('performed_by_email', 'origin').annotate(
-                n=Count('id'), mins=Sum('time_spent_minutes')):
-            email = (row['performed_by_email'] or '').lower()
-            p = people.setdefault(email, {
-                'email': email,
-                'name': names.get(email) or (email.split('@')[0] if email else 'Unattributed'),
+
+        def who(r):
+            return (names.get(r['email']) or r['name']
+                    or (r['email'].split('@')[0] if r['email'] else 'Unattributed'))
+
+        people, by_category, by_origin, by_source = {}, {}, {}, {}
+        minutes = after_total = 0
+        for r in rows:
+            by_origin[r['origin']] = by_origin.get(r['origin'], 0) + 1
+            by_source[r['source']] = by_source.get(r['source'], 0) + 1
+            minutes += r['minutes'] or 0
+            after_total += r['after_hours_minutes'] or 0
+
+            c = by_category.setdefault(r['category'],
+                                       {'category': r['category'],
+                                        'label': r['category_label'], 'count': 0})
+            c['count'] += 1
+
+            p = people.setdefault(r['email'], {
+                'email': r['email'], 'name': who(r),
                 'closed': 0, 'logged': 0, 'total': 0, 'minutes': 0,
-                'after_hours_minutes': after_by_person.get(email, 0),
+                'after_hours_minutes': 0,
             })
-            key = 'logged' if row['origin'] == 'logged' else 'closed'
-            p[key] += row['n']
-            p['total'] += row['n']
-            p['minutes'] += row['mins'] or 0
+            p['logged' if r['origin'] == 'logged' else 'closed'] += 1
+            p['total'] += 1
+            p['minutes'] += r['minutes'] or 0
+            p['after_hours_minutes'] += r['after_hours_minutes'] or 0
 
         # One person's actual jobs, for showing a manager what the number is
         # made of. A count on its own invites the question straight back.
         person = (request.query_params.get('person') or '').strip().lower()
-        items = []
-        if person:
-            for t in done.filter(performed_by_email__iexact=person).order_by('-performed_on', '-id'):
-                items.append({
-                    'id': t.id,
-                    'date': t.performed_on.isoformat() if t.performed_on else None,
-                    'subject': t.subject,
-                    'category': t.get_category_display(),
-                    'origin': t.origin,
-                    'how': 'Logged' if t.origin == 'logged' else 'From a ticket',
-                    'for': t.logged_for or t.requested_by_name,
-                    'minutes': t.time_spent_minutes,
-                    'worked_from': t.worked_from.strftime('%H:%M') if t.worked_from else None,
-                    'worked_to': t.worked_to.strftime('%H:%M') if t.worked_to else None,
-                    'after_hours_minutes': after_hours_minutes(
-                        t.performed_on, t.worked_from, t.worked_to),
-                    'status': t.get_status_display(),
-                })
-
-        by_category = [
-            {'category': r['category'],
-             'label': dict(SupportTicket.CATEGORY_CHOICES).get(r['category'], r['category']),
-             'count': r['n']}
-            for r in done.values('category').annotate(n=Count('id')).order_by('-n')
-        ]
-
-        # Still open at the end of the month: not output, but the other half
-        # of the picture, and the number a manager asks about next.
-        outstanding = SupportTicket.objects.filter(
-            status__in=('pending', 'approved', 'in_progress')).count()
+        items = [{
+            'id': r['id'],
+            'date': r['date'].isoformat() if r['date'] else None,
+            'subject': r['subject'],
+            'category': r['category_label'],
+            'origin': r['origin'],
+            'source': r['source'],
+            'how': {'ticket': 'From a ticket', 'item': 'Item request',
+                    'room': 'Room booking'}[r['source']]
+                   if r['origin'] != 'logged' else 'Logged',
+            'for': r['for'],
+            'minutes': r['minutes'],
+            'worked_from': r['worked_from'].strftime('%H:%M') if r['worked_from'] else None,
+            'worked_to': r['worked_to'].strftime('%H:%M') if r['worked_to'] else None,
+            'after_hours_minutes': r['after_hours_minutes'],
+            'status': r['status'],
+        } for r in rows if person and r['email'] == person]
 
         return Response({
             'month': f'{first:%Y-%m}',
             'label': label,
             'from': first.isoformat(),
             'to': last.isoformat(),
-            'total': sum(by_origin.values()),
+            'total': len(rows),
             'from_tickets': by_origin.get('requested', 0),
             'logged_directly': by_origin.get('logged', 0),
+            # What the queue half is actually made of, so Admin can see their
+            # own work in it rather than a number labelled "tickets".
+            'from_queue': {
+                'tickets': by_source.get('ticket', 0) - by_origin.get('logged', 0),
+                'item_requests': by_source.get('item', 0),
+                'room_bookings': by_source.get('room', 0),
+            },
             'minutes_recorded': minutes,
             'after_hours_minutes': after_total,
-            'office_hours': f'{OFFICE_START:%H:%M}–{OFFICE_END:%H:%M}',
+            'office_hours': f'{OFFICE_START:%H:%M}-{OFFICE_END:%H:%M}',
             'people': sorted(people.values(), key=lambda p: -p['total']),
-            'by_category': by_category,
-            'still_open': outstanding,
+            'by_category': sorted(by_category.values(), key=lambda c: -c['count']),
+            # Still waiting on somebody at the end of the month: not output,
+            # but the other half of the picture, and the number a manager
+            # asks about next.
+            'still_open': still_open(),
             'person': person,
             'items': items,
         })
@@ -170,9 +164,8 @@ class WorkReportExportView(APIView):
 
         first, last, label = _month_bounds(request.query_params.get('month'),
                                            timezone.localdate())
-        rows = list(SupportTicket.objects
-                    .filter(performed_on__range=(first, last))
-                    .order_by('performed_on', 'id'))
+        rows = collect(first, last)
+        rows.reverse()      # oldest first reads better down a spreadsheet
 
         # The same numbers the screen shows, built the same way -- a file that
         # disagrees with the page it was downloaded from is worse than no file.

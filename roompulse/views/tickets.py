@@ -167,8 +167,15 @@ class TicketListView(APIView):
         if not description:
             return Response({'error': 'Please describe the issue.'}, status=400)
 
+        # Which list applies depends on what this is. A job logged after the
+        # fact may be Admin's work and carries Admin's categories; a ticket
+        # somebody raises is an IT ticket and may not, or the IT queue fills
+        # with plumbing.
+        is_logged = str(d.get('origin') or '').strip() == 'logged'
+        allowed = (SupportTicket.CATEGORY_CHOICES if is_logged
+                   else SupportTicket.IT_CATEGORY_CHOICES)
         category = str(d.get('category') or 'other').strip()
-        if category not in {c[0] for c in SupportTicket.CATEGORY_CHOICES}:
+        if category not in {c[0] for c in allowed}:
             category = 'other'
         priority = str(d.get('priority') or 'medium').strip()
         if priority not in {c[0] for c in SupportTicket.PRIORITY_CHOICES}:
@@ -185,7 +192,7 @@ class TicketListView(APIView):
         # already happened. So it is created at the stage it is really at --
         # done, or still running -- rather than entering the queue at
         # 'pending' and being walked through a workflow after the fact.
-        if str(d.get('origin') or '').strip() == 'logged':
+        if is_logged:
             if role not in ('it_support', 'admin', 'super_admin'):
                 return Response({'error': 'Only IT Support or an admin can log work.'},
                                 status=403)

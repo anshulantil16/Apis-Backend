@@ -6,7 +6,8 @@ privileged endpoint took the caller's word for who they were, read from an
 ones that try to act as somebody else.
 """
 import io
-from datetime import date, time, timedelta
+from calendar import monthrange
+from datetime import date, datetime, time, timedelta
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -15,8 +16,8 @@ from django.test.utils import override_settings as _os  # noqa: F401
 
 from accounts.models import PortalUser
 
-from .models import (AdminUser, BookingRequest, SupportTicket, TicketEvent,
-                     Employee, Room)
+from .models import (AdminUser, BookingRequest, ResourceRequest, SupportTicket,
+                     TicketEvent, Employee, Room)
 from .views.auth import issue_session, resolve_role, SUPER_ADMIN_EMAIL
 from .worktime import after_hours_minutes, duration_minutes, resolve_time
 
@@ -908,3 +909,103 @@ class PendingBookingsAreVisible(HelpdeskBase):
         grid = self.client.get(f'{API}/rooms/', **auth(IT_STAFF)).json()['results']
         mine = next(r for r in grid if r['id'] == room.id)
         self.assertEqual(mine['pending'], [])
+
+
+ADMIN_STAFF = 'meena.admin@apisindia.com'
+
+
+class AnAdminsWorkIsAdminWork(HelpdeskBase):
+    """Two halves of the same complaint: an Admin logging a job had only IT's
+    categories to file it under, and the work their own queues produced was
+    not counted at all. Between them, an Admin's month read as almost empty."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=ADMIN_STAFF, name='Meena', scope='admin')
+
+    def log(self, email, category):
+        return self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Got the pantry tap fixed',
+            'description': 'Plumber came at 11.', 'category': category,
+            'performed_by_name': 'Meena', 'time_spent_minutes': 45,
+        }, content_type='application/json', **auth(email))
+
+    def test_an_admin_can_file_a_job_under_an_admin_category(self):
+        r = self.log(ADMIN_STAFF, 'plumbing')
+        self.assertEqual(r.status_code, 201, r.content[:200])
+        self.assertEqual(SupportTicket.objects.get(pk=r.json()['id']).category, 'plumbing')
+
+    def test_a_raised_ticket_still_cannot_be_admin_work(self):
+        """The IT queue is for IT. An admin category on a request falls back
+        to 'other' rather than filling IT's queue with plumbing."""
+        t = self.raise_ticket(category='housekeeping').json()
+        self.assertEqual(SupportTicket.objects.get(pk=t['id']).category, 'other')
+
+    def test_the_report_names_the_admin_category(self):
+        self.log(ADMIN_STAFF, 'plumbing')
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertIn('Plumbing', [c['label'] for c in d['by_category']])
+
+    def _a_fulfilled_request(self, when=None):
+        req = ResourceRequest.objects.create(
+            requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            category='stationery_office_supplies', item_name='A4 paper', quantity=5,
+            status='fulfilled', reviewed_by=ADMIN_STAFF,
+            fulfilled_by=ADMIN_STAFF, fulfilled_at=when or timezone.now())
+        return req
+
+    def test_fulfilling_an_item_request_counts_as_work_done(self):
+        self._a_fulfilled_request()
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['total'], 1)
+        self.assertEqual(d['from_queue']['item_requests'], 1)
+        mine = next(p for p in d['people'] if p['email'] == ADMIN_STAFF)
+        self.assertEqual(mine['total'], 1)
+
+    def test_approving_a_room_booking_counts_too(self):
+        room = Room.objects.filter(is_active=True).first()
+        BookingRequest.objects.create(
+            room=room, requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            date=timezone.localdate(), start_time=time(15, 0), end_time=time(16, 0),
+            purpose='internal_meeting', status='approved',
+            reviewed_by=ADMIN_STAFF, reviewed_at=timezone.now())
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['from_queue']['room_bookings'], 1)
+
+    def test_approving_your_own_request_is_not_work(self):
+        """Staff requests are auto-approved, so this would let anyone raise
+        their own month's figures by booking rooms."""
+        room = Room.objects.filter(is_active=True).first()
+        BookingRequest.objects.create(
+            room=room, requested_by_name='Meena', requested_by_email=ADMIN_STAFF,
+            date=timezone.localdate(), start_time=time(9, 0), end_time=time(10, 0),
+            purpose='internal_meeting', status='approved',
+            reviewed_by=ADMIN_STAFF, reviewed_at=timezone.now())
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['total'], 0)
+
+    def test_approved_but_not_yet_handed_over_is_not_done(self):
+        ResourceRequest.objects.create(
+            requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            category='stationery_office_supplies', item_name='A4 paper',
+            status='approved', reviewed_by=ADMIN_STAFF, reviewed_at=timezone.now())
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['total'], 0)
+        self.assertEqual(d['still_open'], 1)
+
+    def test_work_on_the_last_day_of_the_month_is_in_the_month(self):
+        """A date range against a datetime column ends at midnight, which
+        drops the whole of the last day."""
+        today = timezone.localdate()
+        last = date(today.year, today.month, monthrange(today.year, today.month)[1])
+        at = timezone.make_aware(datetime.combine(last, time(18, 30)))
+        self._a_fulfilled_request(when=at)
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['total'], 1, f"{last} fell out of {d['label']}")
+
+    def test_the_spreadsheet_agrees_with_the_screen(self):
+        self._a_fulfilled_request()
+        self.log(ADMIN_STAFF, 'plumbing')
+        r = self.client.get(f'{API}/work-report/export/', **auth(ADMIN_STAFF))
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.content[:2] == b'PK', 'not a workbook')
