@@ -289,18 +289,23 @@ class NewsListView(PortalScopedAPIView):
 
     def get(self, request):
         viewer = optional_user(request)
-        if viewer and viewer.is_superadmin:
+        everything = (request.query_params.get('scope') or '') == 'all'
+
+        if everything and viewer and viewer.is_superadmin:
+            # The console manages what exists, so it sees all of it.
             rows = NewsItem.objects.all()
-        elif viewer:
+        elif everything:
             rows = (NewsItem.published() |
-                    NewsItem.objects.filter(submitted_by=viewer)).distinct()
+                    NewsItem.objects.filter(submitted_by=viewer)).distinct() \
+                if viewer else NewsItem.published()
         else:
-            rows = NewsItem.published()
+            # The dashboard strip. Recent only, for everyone including the
+            # super admin -- the point of looking at the dashboard is to see
+            # what the company sees.
+            rows = NewsItem.for_strip()
 
         rows = rows.select_related('submitted_by')
-        if (request.query_params.get('scope') or '') != 'all':
-            # The dashboard strip wants the newest few; everything else is
-            # behind "View all", which asks for scope=all.
+        if not everything:
             rows = rows[:12]
         return Response([_news(n, request, viewer) for n in rows])
 

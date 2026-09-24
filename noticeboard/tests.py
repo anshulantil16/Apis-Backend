@@ -208,20 +208,27 @@ class TheNewsStrip(Base):
         self.assertEqual(r.json()['moderationStatus'], ModerationStatus.PENDING)
 
     def test_a_pending_story_is_not_on_the_strip(self):
-        """The whole point of the gate: this is the company home page."""
+        """The whole point of the gate: this is the company home page.
+
+        Nobody sees it there, the super admin included -- the strip shows what
+        the company sees, and a review queue belongs on the review screen."""
         self.post(self.staff_token)
-        seen = self.client.get(API, **self.auth(self.admin_token)).json()
-        # The admin sees it in order to review it...
-        self.assertEqual(len(seen), 1)
-        # ...but a colleague who did not submit it does not.
+        self.assertEqual(self.client.get(API, **self.auth(self.admin_token)).json(), [])
         other = a_user('other@apisindia.com', 'Other')
         token = PortalSession.start(other)
         self.assertEqual(self.client.get(API, **self.auth(token)).json(), [])
 
-    def test_the_person_who_suggested_it_still_sees_their_own(self):
-        """Otherwise it looks like the submission vanished."""
+    def test_the_console_still_sees_it(self):
+        """...which is where it is reviewed from."""
         self.post(self.staff_token)
-        mine = self.client.get(API, **self.auth(self.staff_token)).json()
+        seen = self.client.get(f'{API}?scope=all', **self.auth(self.admin_token)).json()
+        self.assertEqual(len(seen), 1)
+
+    def test_the_person_who_suggested_it_still_sees_their_own(self):
+        """Otherwise it looks like the submission vanished. Under View all,
+        not on the strip -- the strip is what the whole company sees."""
+        self.post(self.staff_token)
+        mine = self.client.get(f'{API}?scope=all', **self.auth(self.staff_token)).json()
         self.assertEqual(len(mine), 1)
         self.assertTrue(mine[0]['isMine'])
 
@@ -722,11 +729,21 @@ class WhatShipsConfigured(TestCase):
     def test_both_are_there(self):
         self.assertEqual(NewsSource.objects.count(), 2)
 
-    def test_neither_publishes_without_being_read(self):
-        """Run against live data while building this, the company search
-        returned stories about other food companies under an FSSAI scanner
-        alongside the AGM notice."""
-        self.assertFalse(NewsSource.objects.filter(auto_publish=True).exists())
+    def test_they_publish_without_waiting_to_be_read(self):
+        """A deliberate trade, made after the gate was built and used.
+
+        An approval queue that fills every morning gets approved in bulk
+        without being read inside a fortnight, and is then a gate in name only
+        while still being a daily chore. What makes it safe enough: the strip
+        ages out on its own, removal is one click, and this is a per-source
+        switch that a feed added later does not inherit."""
+        self.assertEqual(NewsSource.objects.filter(auto_publish=True).count(), 2)
+
+    def test_a_feed_added_later_still_waits(self):
+        """The switch is per source, not a global setting."""
+        s = NewsSource.objects.create(name='Something new', kind='rss',
+                                      feed_url='https://example.com/f.xml')
+        self.assertFalse(s.auto_publish)
 
     def test_the_company_feed_looks_wider_than_the_trade_one(self):
         """One mid-cap company makes news rarely -- a fortnight's window is the
@@ -771,3 +788,89 @@ class ClearingBeforeNarrowing(TestCase):
         NewsItem.objects.exclude(external_id='').update(external_id='')
         for n in NewsItem.objects.all():
             self.assertLessEqual(len(n.external_id), 64)
+
+
+class TheStripKeepsItself(TestCase):
+    """Nobody has to take an old story down for the strip to stay current.
+
+    This is what makes publishing-by-default workable: if approved stories
+    simply accumulated, the row would quietly fill with last quarter's news and
+    somebody would have to prune it by hand forever.
+    """
+
+    def a_story(self, days_old, **over):
+        d = {'title': f'Story from {days_old} days ago', 'summary': '',
+             'moderation_status': ModerationStatus.APPROVED,
+             'published_on': timezone.localdate() - timedelta(days=days_old)}
+        d.update(over)
+        return NewsItem.objects.create(**d)
+
+    def test_a_recent_story_is_on_the_strip(self):
+        self.a_story(2)
+        self.assertEqual(NewsItem.for_strip().count(), 1)
+
+    def test_an_old_one_drops_off_by_itself(self):
+        self.a_story(NewsItem.STRIP_MAX_AGE_DAYS + 5)
+        self.assertEqual(NewsItem.for_strip().count(), 0)
+
+    def test_but_it_is_not_deleted(self):
+        """It is still there under View all and in the console."""
+        self.a_story(NewsItem.STRIP_MAX_AGE_DAYS + 5)
+        self.assertEqual(NewsItem.objects.count(), 1)
+
+    def test_pinning_keeps_something_up_regardless(self):
+        """Pinning is how somebody says 'keep this one'."""
+        self.a_story(NewsItem.STRIP_MAX_AGE_DAYS + 90, pinned=True)
+        self.assertEqual(NewsItem.for_strip().count(), 1)
+
+    def test_nothing_unapproved_is_ever_on_it(self):
+        self.a_story(1, moderation_status=ModerationStatus.PENDING)
+        self.a_story(1, moderation_status=ModerationStatus.REJECTED)
+        self.assertEqual(NewsItem.for_strip().count(), 0)
+
+    def test_an_expiry_date_still_wins(self):
+        self.a_story(1, expires_on=timezone.localdate() - timedelta(days=1))
+        self.assertEqual(NewsItem.for_strip().count(), 0)
+
+
+class TidyingUpAfterwards(TestCase):
+    """Fetched stories are eventually deleted, so the table does not grow
+    without limit. Nobody looks up what a feed carried three months ago."""
+
+    def setUp(self):
+        self.src = NewsSource.objects.create(name='Feed', kind='rss',
+                                             feed_url='https://example.com/f.xml')
+
+    def fetched(self, days_old, **over):
+        d = {'title': f'Fetched {days_old} days ago', 'summary': '',
+             'source_ref': self.src,
+             'published_on': timezone.localdate() - timedelta(days=days_old)}
+        d.update(over)
+        return NewsItem.objects.create(**d)
+
+    def test_an_ancient_fetched_story_is_removed(self):
+        from noticeboard.newsfeed import purge_old
+        self.fetched(NewsItem.PURGE_AFTER_DAYS + 10)
+        purge_old()
+        self.assertEqual(NewsItem.objects.count(), 0)
+
+    def test_a_recent_one_is_left_alone(self):
+        from noticeboard.newsfeed import purge_old
+        self.fetched(5)
+        purge_old()
+        self.assertEqual(NewsItem.objects.count(), 1)
+
+    def test_something_written_by_hand_is_never_purged(self):
+        """No feed can bring it back."""
+        from noticeboard.newsfeed import purge_old
+        NewsItem.objects.create(
+            title='Written by the admin', summary='x',
+            published_on=timezone.localdate() - timedelta(days=NewsItem.PURGE_AFTER_DAYS + 50))
+        purge_old()
+        self.assertEqual(NewsItem.objects.count(), 1)
+
+    def test_a_pinned_story_survives_the_purge(self):
+        from noticeboard.newsfeed import purge_old
+        self.fetched(NewsItem.PURGE_AFTER_DAYS + 10, pinned=True)
+        purge_old()
+        self.assertEqual(NewsItem.objects.count(), 1)

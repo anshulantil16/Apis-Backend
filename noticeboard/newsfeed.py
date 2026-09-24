@@ -318,6 +318,22 @@ def fetch_source(source):
     return found, added, error
 
 
+def purge_old():
+    """Delete fetched stories past NewsItem.PURGE_AFTER_DAYS.
+
+    Nobody is going to look up what a feed carried three months ago, and a
+    table that only grows is a table that eventually needs explaining. Pinned
+    stories stay, and so does anything written by hand -- that is somebody's
+    own work and no feed can bring it back.
+    """
+    cutoff = timezone.localdate() - timedelta(days=NewsItem.PURGE_AFTER_DAYS)
+    gone, _ = (NewsItem.objects
+               .filter(source_ref__isnull=False, pinned=False,
+                       published_on__lt=cutoff)
+               .delete())
+    return gone
+
+
 def fetch_all():
     """Every active source. Returns a per-source summary for the caller to
     print or show, and does not stop at the first failure."""
@@ -326,4 +342,5 @@ def fetch_all():
         found, added, error = fetch_source(source)
         results.append({'source': source.name, 'found': found,
                         'added': added, 'error': error})
+    purge_old()
     return results

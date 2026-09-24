@@ -18,6 +18,8 @@ They are different in one way that decides how each is governed:
 import os
 import uuid
 
+from datetime import timedelta
+
 from django.db import models
 from django.utils import timezone
 
@@ -170,6 +172,20 @@ class NewsItem(ModeratedContent):
     # worse than no strip. This is what the console measures itself against.
     STALE_AFTER_DAYS = 14
 
+    # How old a story may be and still appear on the dashboard strip. Without
+    # this, approved stories pile up forever and the strip slowly fills with
+    # things that were news last quarter -- the point of the strip is that it
+    # is current, and nothing should have to be taken down by hand for that to
+    # stay true. A pinned story ignores this: pinning is how somebody says
+    # "keep this up regardless".
+    STRIP_MAX_AGE_DAYS = 30
+
+    # Fetched stories older than this are deleted outright on the next run.
+    # They are not history -- nobody is going to look up what a feed carried
+    # three months ago -- and the table should not grow without limit. Anything
+    # written by hand is never purged; that is somebody's own work.
+    PURGE_AFTER_DAYS = 90
+
     title    = models.CharField(max_length=200)
     summary  = models.TextField(max_length=600)
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='industry')
@@ -240,6 +256,19 @@ class NewsItem(ModeratedContent):
         today = timezone.localdate()
         return (cls.objects.filter(moderation_status=ModerationStatus.APPROVED)
                 .filter(models.Q(expires_on__isnull=True) | models.Q(expires_on__gte=today)))
+
+    @classmethod
+    def for_strip(cls):
+        """What the dashboard shows: published, and still recent.
+
+        The age limit is what makes the strip self-maintaining. New stories
+        arrive at the front and old ones leave the back on their own, so nobody
+        has to remember to take anything down -- which is the only way a strip
+        like this stays current once the novelty wears off.
+        """
+        cutoff = timezone.localdate() - timedelta(days=cls.STRIP_MAX_AGE_DAYS)
+        return cls.published().filter(
+            models.Q(pinned=True) | models.Q(published_on__gte=cutoff))
 
 
 class NewsSource(models.Model):

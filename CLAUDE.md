@@ -241,10 +241,18 @@ Feeds (`NewsSource`, `newsfeed.py`) fill it on a schedule, run by
 `manage.py fetch_news` from cron -- a management command, not Celery, for the
 reason spelled out in `accounts/management/commands/sync_hrms.py`.
 
-- **Fetched stories are PENDING.** Verified against live data: a search for the
-  company name returned a honey-trapping court report and an FSSAI story about
-  other food companies. `auto_publish` exists per source and is off by default;
-  leave it off unless someone has decided otherwise.
+- **The two seeded feeds publish straight to the dashboard** (`auto_publish`),
+  decided after the queue was built and used: one that fills every morning gets
+  bulk-approved unread within a fortnight, so it is a gate in name only and a
+  chore as well. A source added later still starts off needing approval -- the
+  switch is per source, not global.
+- What makes that safe is the lifecycle, not vigilance. `NewsItem.for_strip()`
+  shows only what is approved, unexpired and newer than `STRIP_MAX_AGE_DAYS`
+  (pinned bypasses it), so the strip empties itself. `purge_old()` runs at the
+  end of every fetch and deletes fetched rows past `PURGE_AFTER_DAYS`;
+  hand-written and pinned rows are never purged.
+- Nothing unapproved ever reaches the strip, for anyone, superadmin included.
+  The console reads `?scope=all`; the dashboard reads the strip.
 - Google ranks by relevance, not date, so `resolved_url()` appends `when:Nd`
   from `max_age_days`. Without it a narrow query answers with its best matches
   going back years -- one real query returned results from 2013.
