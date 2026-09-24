@@ -129,6 +129,11 @@ class EmployeeListView(APIView):
     def get(self, request):
         from django.db.models import Q
         qs = Employee.objects.all()
+        if request.query_params.get('active') == '1':
+            qs = qs.filter(is_active=True)
+        source = request.query_params.get('source')
+        if source in {c[0] for c in Employee.SOURCE_CHOICES}:
+            qs = qs.filter(source=source)
         search = (request.query_params.get('search') or '').strip()
         if search:
             qs = qs.filter(Q(name__icontains=search) | Q(email__icontains=search) |
@@ -142,12 +147,102 @@ class EmployeeListView(APIView):
             'id': e.id, 'employee_code': e.employee_code, 'name': e.name, 'email': e.email,
             'department': e.department, 'designation': e.designation, 'location': e.location,
             'reporting_manager': e.reporting_manager, 'role': e.role,
+            'source': e.source, 'is_active': e.is_active,
+            'synced_at': e.synced_at.isoformat() if e.synced_at else None,
         } for e in qs[:limit]]
-        return Response({'results': results, 'count': total})
+        return Response({
+            'results': results, 'count': total,
+            'from_directory': Employee.objects.filter(source='directory').count(),
+            'added_here': Employee.objects.filter(source='manual').count(),
+            'inactive': Employee.objects.filter(is_active=False).count(),
+        })
 
     def delete(self, request):
+        """Clear the directory copy. People added by hand survive by default.
+
+        They are here precisely because they are not in HRMS, so a wipe that
+        took them too would quietly undo work that cannot be recovered by
+        syncing again. ?everything=1 to mean it.
+        """
         if (err := require_role(request, 'super_admin')):
             return err
-        n = Employee.objects.count()
-        Employee.objects.all().delete()
-        return Response({'message': f'Cleared {n} employee record(s).', 'deleted': n})
+        qs = Employee.objects.all()
+        if request.query_params.get('everything') != '1':
+            qs = qs.filter(source='directory')
+        n = qs.count()
+        qs.delete()
+        kept = Employee.objects.count()
+        return Response({
+            'message': f'Cleared {n} employee record(s).'
+                       + (f' {kept} added by hand were kept.' if kept else ''),
+            'deleted': n, 'kept': kept,
+        })
+
+
+class EmployeeSyncView(APIView):
+    """Pull the employee master from the company directory.
+
+    Replaces re-uploading a spreadsheet every time somebody joins or leaves.
+    The directory (accounts.PortalUser) is synced from HRMS, so this is one
+    step further along the same chain rather than a second copy of it.
+    """
+
+    def get(self, request):
+        """What a sync would bring, before anyone clicks it."""
+        if (err := require_role(request, 'super_admin')):
+            return err
+        from accounts.models import PortalUser
+        available = PortalUser.objects.exclude(email='').count()
+        last = (Employee.objects.filter(source='directory')
+                .order_by('-synced_at').values_list('synced_at', flat=True).first())
+        return Response({
+            'available': available,
+            'no_email': PortalUser.objects.filter(email='').count(),
+            'here_from_directory': Employee.objects.filter(source='directory').count(),
+            'here_by_hand': Employee.objects.filter(source='manual').count(),
+            'last_synced_at': last.isoformat() if last else None,
+        })
+
+    def post(self, request):
+        if (err := require_role(request, 'super_admin')):
+            return err
+        from ..directory import sync_from_directory
+        result = sync_from_directory()
+        bits = [f"{result['created']} added", f"{result['updated']} updated"]
+        if result['deactivated']:
+            bits.append(f"{result['deactivated']} marked as left")
+        if result['skipped_no_email']:
+            bits.append(f"{result['skipped_no_email']} skipped with no email address")
+        return Response({'message': 'Directory synced — ' + ', '.join(bits) + '.', **result})
+
+
+class EmployeeCreateView(APIView):
+    """Add one person by hand — a contractor, a joiner not yet in HRMS.
+
+    Marked as added here, so a sync updates everybody else around them and
+    leaves this row alone.
+    """
+
+    def post(self, request):
+        if (err := require_role(request, 'super_admin')):
+            return err
+        d = request.data
+        email = str(d.get('email') or '').strip().lower()
+        name = str(d.get('name') or '').strip()
+        if not email or '@' not in email:
+            return Response({'error': 'A valid email address is required — it is how '
+                                      'this person will sign in.'}, status=400)
+        if not name:
+            return Response({'error': 'A name is required.'}, status=400)
+        if Employee.objects.filter(email=email).exists():
+            return Response({'error': f'{email} is already on the list.'}, status=400)
+
+        e = Employee.objects.create(
+            email=email, name=name[:200],
+            employee_code=str(d.get('employee_code') or '').strip()[:50],
+            department=str(d.get('department') or '').strip()[:150],
+            designation=str(d.get('designation') or '').strip()[:150],
+            location=str(d.get('location') or '').strip()[:150],
+            reporting_manager=str(d.get('reporting_manager') or '').strip()[:200],
+            source='manual', is_active=True)
+        return Response({'message': f'{e.name} added.', 'id': e.id}, status=201)

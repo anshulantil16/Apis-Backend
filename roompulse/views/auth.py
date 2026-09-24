@@ -80,12 +80,27 @@ def _dev_login():
 
 
 def resolve_role(email):
+    """-> the role behind a verified address, or None if it belongs to nobody.
+
+    An employee is somebody ON THE DIRECTORY, not somebody with the right
+    domain. The rule used to be "anything @apisindia.com", which shut out most
+    of the company: of the people in the directory, roughly a quarter have a
+    company address and the rest have the personal ones HRMS holds. It also
+    let in any address at that domain whether or not a person was behind it.
+
+    The domain is kept as a fallback so that nobody who can sign in today is
+    locked out by this -- somebody newly joined, or missing from a sync.
+    """
     email = (email or '').strip().lower()
     if email == SUPER_ADMIN_EMAIL:
         return 'super_admin'
     admin = AdminUser.objects.filter(email=email).first()
     if admin:
         return admin.scope  # 'admin' or 'it_support'
+
+    from ..directory import in_directory
+    if in_directory(email):
+        return 'employee'
     if email.endswith(_COMPANY_DOMAIN):
         return 'employee'
     return None

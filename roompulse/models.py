@@ -380,6 +380,23 @@ class Employee(models.Model):
     location      = models.CharField(max_length=150, blank=True)
     reporting_manager = models.CharField(max_length=200, blank=True)
     role          = models.CharField(max_length=20, choices=ROLE_CHOICES, default='employee')
+
+    # Where this row came from, and whether the person is still here.
+    #
+    # The directory is the company's, kept in accounts.PortalUser and synced
+    # from HRMS. Re-uploading a spreadsheet into this app every time somebody
+    # joined or left was work for no reason, and the two copies disagreed the
+    # moment either changed. A sync refreshes everything that came from there
+    # and never touches a row somebody added by hand -- which is the point of
+    # recording which is which, since the people who are not in HRMS (a
+    # contractor, a new joiner not yet on the system) are exactly the ones a
+    # sync would otherwise delete.
+    SOURCE_CHOICES = [('directory', 'Company directory'), ('manual', 'Added here')]
+    source     = models.CharField(max_length=20, choices=SOURCE_CHOICES,
+                                  default='manual', db_index=True)
+    is_active  = models.BooleanField(default=True)
+    synced_at  = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

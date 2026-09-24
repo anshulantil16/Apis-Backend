@@ -105,6 +105,25 @@ admin endpoints with `require_admin(request)`.
 there — no manager on file, an id naming nobody, someone who has left. Without
 it a sheet lands at a stage nobody can act at and only the admin can free it.
 
+## The employee master comes from the directory
+
+`accounts.PortalUser` is the company directory, synced from HRMS. AdminPulse
+pulls from it (`roompulse/directory.py`) instead of holding a second copy
+uploaded from a spreadsheet — two copies disagreed the moment either changed.
+
+`Employee.source` is `directory` or `manual`. A sync refreshes the first,
+marks leavers inactive (never deletes — their name is on tickets), and **never
+touches the second**: people are added by hand precisely because they are not
+in HRMS, so a sync can never bring them back.
+
+`resolve_role` treats somebody as an employee if they are **on the directory**,
+falling back to the `@apisindia.com` domain. The domain alone was the rule, and
+it shut out most of the company: only about a quarter of people have a company
+address, the rest having the personal ones HRMS holds.
+
+Who resolves Admin vs IT tickets stays `AdminUser`, set by the super admin.
+A sync mirrors it onto `Employee.role` for display but never changes it.
+
 ## Tickets are a record
 
 `SupportTicket.reviewed_by` / `reviewed_at` hold only the **most recent**
