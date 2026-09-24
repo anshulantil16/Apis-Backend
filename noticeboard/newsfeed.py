@@ -341,6 +341,11 @@ def fetch_all():
     for source in NewsSource.objects.filter(is_active=True):
         found, added, error = fetch_source(source)
         results.append({'source': source.name, 'found': found,
-                        'added': added, 'error': error})
+                        'added': added, 'error': error,
+                        # Every story from an auto-publishing source went live;
+                        # from any other source it is waiting. The caller needs
+                        # this to say which happened rather than guess.
+                        'published': added if source.auto_publish else 0,
+                        'waiting': 0 if source.auto_publish else added})
     purge_old()
     return results

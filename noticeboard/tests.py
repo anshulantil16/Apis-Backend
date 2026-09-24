@@ -874,3 +874,35 @@ class TidyingUpAfterwards(TestCase):
         self.fetched(NewsItem.PURGE_AFTER_DAYS + 10, pinned=True)
         purge_old()
         self.assertEqual(NewsItem.objects.count(), 1)
+
+
+class WhatTheScheduledRunReports(TestCase):
+    """The line cron writes to a log is the only account of what happened.
+
+    It used to say everything was "waiting for approval unless the source
+    publishes automatically" — which, once the seeded feeds were switched to
+    publish, was the opposite of the truth for every story it described.
+    """
+
+    def setUp(self):
+        NewsSource.objects.all().delete()
+
+    def run_fetch(self, **over):
+        d = {'name': 'Feed', 'kind': 'rss', 'feed_url': 'https://example.com/f.xml',
+             'category': 'industry'}
+        d.update(over)
+        NewsSource.objects.create(**d)
+        from noticeboard import newsfeed
+        with mock.patch.object(newsfeed.requests, 'get',
+                               return_value=FakeResponse(rss_body())):
+            return newsfeed.fetch_all()
+
+    def test_an_auto_publishing_source_reports_stories_as_live(self):
+        results = self.run_fetch(auto_publish=True)
+        self.assertEqual(sum(r['published'] for r in results), 1)
+        self.assertEqual(sum(r['waiting'] for r in results), 0)
+
+    def test_a_reviewed_source_reports_them_as_waiting(self):
+        results = self.run_fetch(auto_publish=False)
+        self.assertEqual(sum(r['published'] for r in results), 0)
+        self.assertEqual(sum(r['waiting'] for r in results), 1)

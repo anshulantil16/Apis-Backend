@@ -47,7 +47,15 @@ class Command(BaseCommand):
             line += f', {len(failed)} source(s) failed'
         self.stdout.write(self.style.SUCCESS(line))
 
-        if added:
-            self.stdout.write(
-                'Waiting for approval unless the source is set to publish '
-                'automatically - review them in Admin Console.')
+        # Say what actually happened. This line used to read "waiting for
+        # approval unless the source publishes automatically", which after the
+        # seeded feeds were switched to publish was the opposite of the truth
+        # for every story it was printed about.
+        live = sum(r['published'] for r in results)
+        held = sum(r['waiting'] for r in results)
+        if live:
+            self.stdout.write(f'{live} went straight to the dashboard. '
+                              f'Remove any you do not want in Admin Console '
+                              f'> Dashboard Content > Daily News.')
+        if held:
+            self.stdout.write(f'{held} waiting for approval in Admin Console.')
