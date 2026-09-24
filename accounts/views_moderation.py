@@ -25,10 +25,30 @@ PAGE_SIZE = 100
 
 
 def _model_for(kind):
+    """The model for a type, by its registry key OR by its Django model name.
+
+    Both, because the two are not the same string and nothing was forcing them
+    to be. A queue row carries `type: self._meta.model_name` (see
+    ModeratedContent.moderation_payload) and the console posts that value
+    straight back, while this registry is keyed by whatever read well as a
+    filter chip. Where the two happened to coincide -- vacancy, wallphoto,
+    announcement -- approving worked. Where they did not, the POST answered
+    "Unknown content type" and the item could not be approved at all:
+    'referral' is EmployeeReferral, and 'news' is NewsItem.
+
+    Resolving both ways keeps the promise in the module docstring, that adding
+    a content type is one line here, true for a model whose name does not
+    happen to match the word the console shows.
+    """
     spec = CONTENT_TYPES.get(kind)
-    if not spec:
-        return None
-    return apps.get_model(*spec['model'])
+    if spec:
+        return apps.get_model(*spec['model'])
+
+    for candidate in CONTENT_TYPES.values():
+        model = apps.get_model(*candidate['model'])
+        if model._meta.model_name == kind:
+            return model
+    return None
 
 
 class AdminModerationView(PortalScopedAPIView):
