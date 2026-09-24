@@ -1,7 +1,13 @@
 """Utilisation analytics — Admin/Super Admin only.
 
 Gives Super Admin the "look over the whole project" view: booking volume,
-approval funnel, busiest rooms/departments/hours, and turnaround time.
+approval funnel, busiest rooms/departments/hours, turnaround time, item
+requests and support tickets.
+
+Everything here is measured over a window (`?days=`, default 30). Alongside
+it, `totals` carries all-time counts, so a caller can tell "nothing has ever
+happened" from "nothing happened lately" — a page of zeroes that cannot tell
+those apart reads as a broken dashboard.
 """
 from datetime import timedelta
 from django.db.models import Count, Avg, F, ExpressionWrapper, DurationField
@@ -9,7 +15,8 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from ..models import Room, BookingRequest, ResourceRequest, Employee, AdminUser
+from ..models import (Room, BookingRequest, ResourceRequest, Employee, AdminUser,
+                      SupportTicket)
 from .perms import require_role
 
 
@@ -65,8 +72,31 @@ class AnalyticsView(APIView):
         r_by_category = list(rqs.exclude(status='cancelled').values('category')
                              .annotate(n=Count('id')).order_by('-n'))
 
+        # ── support tickets over the same window ──
+        # The helpdesk is the busiest thing in AdminPulse and used to be
+        # missing from this page entirely, so a super admin looking at the
+        # whole project saw everything except the part people actually use.
+        # Only what people actually raised. Work the team logged itself is
+        # real work, but it is not demand -- counting it here would say the
+        # helpdesk got busier every time IT wrote up a job nobody asked for.
+        tqs = SupportTicket.objects.filter(created_at__date__gte=since).exclude(origin='logged')
+        t_logged = SupportTicket.objects.filter(
+            origin='logged', performed_on__gte=since).count()
+        t_total = tqs.count()
+        t_by_status = {row['status']: row['n'] for row in
+                       tqs.values('status').annotate(n=Count('id'))}
+        t_by_category = list(tqs.exclude(status='cancelled').values('category')
+                             .annotate(n=Count('id')).order_by('-n'))
+        t_by_priority = list(tqs.exclude(status='cancelled').values('priority')
+                             .annotate(n=Count('id')).order_by('-n'))
+        t_resolved = tqs.filter(status='closed', reviewed_at__isnull=False).annotate(
+            delta=ExpressionWrapper(F('reviewed_at') - F('created_at'), output_field=DurationField())
+        ).aggregate(avg=Avg('delta'))['avg']
+        t_open = sum(t_by_status.get(k, 0) for k in ('pending', 'approved', 'in_progress'))
+
         return Response({
             'period_days': days,
+            'since': since.isoformat(),
             'total_bookings': total,
             'by_status': by_status,
             'approval_rate_pct': approval_rate,
@@ -82,10 +112,26 @@ class AnalyticsView(APIView):
                 'by_category': r_by_category,
                 'pending': r_by_status.get('pending', 0),
             },
+            'tickets': {
+                'total': t_total,
+                'logged_directly': t_logged,
+                'by_status': t_by_status,
+                'by_category': t_by_category,
+                'by_priority': t_by_priority,
+                'open': t_open,
+                'pending': t_by_status.get('pending', 0),
+                'avg_resolution_minutes': (round(t_resolved.total_seconds() / 60, 1)
+                                           if t_resolved else None),
+            },
+            # All-time counts, so a window with nothing in it can say whether
+            # there is nothing at all or only nothing *recently* -- a page of
+            # zeroes otherwise reads as a broken dashboard.
             'totals': {
                 'rooms': Room.objects.filter(is_active=True).count(),
                 'employees': Employee.objects.count(),
                 'admins': AdminUser.objects.count(),
+                'bookings': BookingRequest.objects.count(),
                 'resource_requests': ResourceRequest.objects.count(),
+                'tickets': SupportTicket.objects.count(),
             },
         })

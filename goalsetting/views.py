@@ -23,6 +23,7 @@ from .models import (ADMIN_BOOTSTRAP_EMAIL, CATEGORIES, EmployeeProfile,
                      PlanEvent, PlanVersion)
 from .serializers import (CycleSerializer, EmployeeSerializer, PlanSerializer,
                           PlanSummarySerializer)
+from .session import is_admin, issue_session, session_employee
 from .services import (WorkflowError, advance, force_status, get_or_create_plan,
                        readiness, record_admin_edit, save_kras)
 
@@ -44,6 +45,111 @@ def _plans():
             .select_related('employee', 'cycle')
             .prefetch_related(Prefetch('kras', queryset=KRA.objects.prefetch_related('kpis')),
                               'versions', 'events'))
+
+
+# Who holds the pen at each stage. The one place that says it; GoalPlan.EDITORS
+# says the same thing for saving, and advance() for hand-offs.
+PEN_HOLDER = {
+    'draft':             'employee',
+    'returned':          'employee',
+    'submitted':         'manager',
+    'with_hod':          'hod',
+    'awaiting_employee': 'employee',
+    'accepted':          None,
+}
+
+
+def _same(a, b):
+    return (a or '').strip().lower() == (b or '').strip().lower()
+
+
+def plan_roles(actor_id, employee):
+    """Every role an actor holds IN RELATION TO one person's goal sheet.
+
+    Nobody is "a manager" in the abstract -- they are the manager OF someone,
+    and on their own sheet they are the employee. Reading the role off
+    EmployeeProfile.user_type instead is what stopped every manager and HOD in
+    the company from setting their own goals: their own draft was "with the
+    employee", they were "a manager", so their own sheet was read-only to them
+    and submitting it was refused.
+    """
+    actor = EmployeeProfile.objects.filter(
+        employee_id__iexact=str(actor_id or '').strip()).first() if actor_id else None
+    if not actor:
+        return None, set()
+
+    roles = set()
+    if actor.user_type == 'admin':
+        roles.add('admin')
+    if _same(actor.employee_id, employee.employee_id):
+        roles.add('employee')
+    if _same(employee.reporting_manager_id, actor.employee_id):
+        roles.add('manager')
+    if _same(employee.hod_id, actor.employee_id):
+        roles.add('hod')
+    return actor, roles
+
+
+def acting_role(roles, status):
+    """Which of an actor's roles is the one that can act at this stage.
+
+    Someone can hold more than one at once -- a small department where the HOD
+    is also the manager, or anyone senior enough to be their own reviewer. The
+    role that matters is whichever currently holds the pen; without this, a
+    person who is both would be locked out at one of the two stages.
+    """
+    if 'admin' in roles:
+        return 'admin'
+    pen = PEN_HOLDER.get(status)
+    if pen in roles:
+        return pen
+    for r in ('employee', 'manager', 'hod'):   # a relationship, but not the pen
+        if r in roles:
+            return r
+    return None
+
+
+def _actor_id(request):
+    """The caller's own employee id.
+
+    The signed-in session wins. The `actor_employee_id` parameter is only a
+    fallback for a client that has not signed in under the new scheme yet --
+    it is what the caller SAYS they are, which is why it must never be the
+    answer once a session exists.
+    """
+    signed_in = session_employee(request)
+    if signed_in:
+        return signed_in.employee_id
+    return (request.query_params.get('actor_employee_id')
+            or (request.data.get('actor_employee_id') if hasattr(request, 'data') else None)
+            or '')
+
+
+def actor_name(request, actor, fallback=''):
+    """The name to sign a version with.
+
+    A real person's name comes from their profile -- the body used to carry it,
+    which meant the history said whatever the caller typed. The one exception
+    is the shared GS-ADMIN account: several people sign in through it and its
+    profile name is generic, so there the typed name is the only trace of who
+    actually acted, and it is better than nothing.
+    """
+    supplied = str(request.data.get('actor_name') or '').strip()
+    if actor and actor.employee_id != 'GS-ADMIN':
+        return actor.name
+    return supplied or (actor.name if actor else fallback)
+
+
+def require_admin(request):
+    """None if an admin is signed in, else a refusal.
+
+    Used on everything that can destroy or rewrite other people's data. These
+    were open to anyone who knew the URL -- including `/reset/`, which deletes
+    every goal sheet and every version of it.
+    """
+    if is_admin(request):
+        return None
+    return Response({'error': 'Sign in as an administrator to do that.'}, status=403)
 
 
 def _mask(email):
@@ -119,7 +225,8 @@ class VerifyOTPView(GSView):
 
         token.is_used = True
         token.save(update_fields=['is_used'])
-        return Response({'message': 'Signed in.', 'employee': EmployeeSerializer(emp).data})
+        return Response({'message': 'Signed in.', 'employee': EmployeeSerializer(emp).data,
+                         'session': issue_session(emp)})
 
 
 class AdminOTPView(GSView):
@@ -164,7 +271,8 @@ class AdminVerifyView(GSView):
             return Response({'error': 'That code is not right or has expired.'}, status=400)
         token.is_used = True
         token.save(update_fields=['is_used'])
-        return Response({'message': 'Signed in.', 'employee': EmployeeSerializer(emp).data})
+        return Response({'message': 'Signed in.', 'employee': EmployeeSerializer(emp).data,
+                         'session': issue_session(emp)})
 
 
 # --- reference data ----------------------------------------------------------
@@ -188,6 +296,8 @@ class CycleListView(GSView):
         return Response(CycleSerializer(qs, many=True).data)
 
     def post(self, request):
+        if (err := require_admin(request)):
+            return err
         name = str(request.data.get('name') or '').strip()
         fy = str(request.data.get('fiscal_year') or '').strip()
         if not name or not fy:
@@ -207,6 +317,8 @@ class CycleListView(GSView):
 
 class CycleDetailView(GSView):
     def patch(self, request, cycle_id):
+        if (err := require_admin(request)):
+            return err
         cycle = GoalCycle.objects.filter(id=cycle_id).first()
         if not cycle:
             return Response({'error': 'Cycle not found.'}, status=404)
@@ -238,13 +350,31 @@ class PlanView(GSView):
         if not emp or not cycle:
             return Response({'error': 'Employee or cycle not found.'}, status=404)
 
+        # The role is worked out from the org chart, not taken from the query
+        # string: `?role=` said what screen you were on, which is not the same
+        # as what you are to this sheet.
+        actor, roles = plan_roles(_actor_id(request), emp)
+        if actor is None:
+            # No actor named: an older client. Fall back to the declared role
+            # so nothing breaks mid-deploy, but only for reading.
+            declared = request.query_params.get('role')
+            roles = {declared} if declared in ('employee', 'manager', 'hod', 'admin') else set()
+        elif not roles:
+            return Response({'error': f'You are not {emp.name}, their manager or their HOD, '
+                                      f'so this sheet is not yours to open.'}, status=403)
+
         plan = GoalPlan.objects.filter(employee=emp, cycle=cycle).first()
         if not plan:
-            if request.query_params.get('role') != 'employee':
+            # Only the sheet's own owner starts one. A reviewer opening a name
+            # must not mark that person as having begun.
+            if 'employee' not in roles:
                 return Response({'error': f'{emp.name} has not started a goal sheet for '
                                           f'{cycle.name} yet.', 'not_started': True}, status=404)
             plan = get_or_create_plan(emp, cycle)
-        return Response(PlanSerializer(_plans().get(id=plan.id)).data)
+
+        data = PlanSerializer(_plans().get(id=plan.id)).data
+        data['your_role'] = acting_role(roles, plan.status)
+        return Response(data)
 
     def post(self, request, employee_id, cycle_id):
         """Save the table. Who may save is decided by where the plan sits, not
@@ -255,8 +385,15 @@ class PlanView(GSView):
         if not emp or not cycle:
             return Response({'error': 'Employee or cycle not found.'}, status=404)
 
-        role = str(request.data.get('role') or 'employee')
         plan = get_or_create_plan(emp, cycle)
+
+        actor, roles = plan_roles(_actor_id(request), emp)
+        if actor is None:
+            roles = {str(request.data.get('role') or 'employee')}   # older client
+        elif not roles:
+            return Response({'error': f'You are not {emp.name}, their manager or their HOD, '
+                                      f'so this sheet is not yours to edit.'}, status=403)
+        role = acting_role(roles, plan.status) or 'employee'
 
         # An admin edits regardless of the cycle being locked, or of whose turn
         # it is. That is the point of the seat: the workflow exists to keep
@@ -275,11 +412,13 @@ class PlanView(GSView):
             save_kras(plan, request.data.get('kras'))
             plan.refresh_from_db()
             if role == 'admin':
-                record_admin_edit(plan, name=str(request.data.get('actor_name') or 'Administrator'),
+                record_admin_edit(plan,
+                                  name=actor_name(request, actor, 'Administrator'),
                                   note=str(request.data.get('note') or ''))
         plan.refresh_from_db()
         data = PlanSerializer(_plans().get(id=plan.id)).data
         data['problems'] = readiness(plan)
+        data['your_role'] = acting_role(roles, plan.status)
         return Response(data)
 
 
@@ -291,7 +430,14 @@ class PlanActionView(GSView):
         if not plan:
             return Response({'error': 'Goal sheet not found.'}, status=404)
 
-        role = str(request.data.get('role') or '')
+        actor, roles = plan_roles(_actor_id(request), plan.employee)
+        if actor is None:
+            roles = {str(request.data.get('role') or '')}           # older client
+        elif not roles:
+            return Response({'error': f'You are not {plan.employee.name}, their manager or '
+                                      f'their HOD, so this sheet is not yours to move.'},
+                            status=403)
+        role = acting_role(roles, plan.status) or ''
 
         # The save and the hand-off are ONE transaction, deliberately.
         #
@@ -316,28 +462,52 @@ class PlanActionView(GSView):
                             status=409)
                     save_kras(plan, request.data.get('kras'))
                     plan.refresh_from_db()
+                # The name on the record comes from the profile behind the
+                # session where there is one. Taking it from the body meant a
+                # history that said whatever the caller typed -- and once the
+                # session made the body field unnecessary, it said nothing at
+                # all: every version was signed by an empty id.
                 advance(plan, str(request.data.get('action') or ''),
                         role=role,
-                        name=str(request.data.get('actor_name') or ''),
-                        employee_id=str(request.data.get('actor_employee_id') or ''),
+                        name=actor_name(request, actor),
+                        employee_id=(actor.employee_id if actor else
+                                     str(request.data.get('actor_employee_id') or '')),
                         note=str(request.data.get('note') or ''))
         except WorkflowError as e:
             plan.refresh_from_db()
             return Response({'error': e.message, 'problems': e.problems}, status=e.status)
 
-        return Response(PlanSerializer(_plans().get(id=plan.id)).data)
+        plan = _plans().get(id=plan.id)
+        data = PlanSerializer(plan).data
+        # The sheet has moved on, so who the caller now is to it may have
+        # changed with it -- a manager who just sent it to the HOD is no
+        # longer the one holding the pen.
+        data['your_role'] = acting_role(roles, plan.status)
+        return Response(data)
 
 
 class PlanDetailView(GSView):
+    """One sheet by its id. Someone's goals are theirs, their reviewers' and
+    the admin's -- this used to hand any sheet to anyone who guessed a number."""
+
     def get(self, request, plan_id):
         plan = _plans().filter(id=plan_id).first()
         if not plan:
             return Response({'error': 'Goal sheet not found.'}, status=404)
-        return Response(PlanSerializer(plan).data)
+        actor, roles = plan_roles(_actor_id(request), plan.employee)
+        if actor is not None and not roles:
+            return Response({'error': 'This goal sheet is not yours to read.'}, status=403)
+        data = PlanSerializer(plan).data
+        data['your_role'] = acting_role(roles, plan.status)
+        return Response(data)
 
 
 class MyPlansView(GSView):
     def get(self, request, employee_id):
+        signed_in = session_employee(request)
+        if signed_in and not (_same(signed_in.employee_id, employee_id)
+                              or signed_in.user_type == 'admin'):
+            return Response({'error': 'These are not your goal sheets.'}, status=403)
         qs = _plans().filter(employee__employee_id__iexact=employee_id)
         return Response(PlanSummarySerializer(qs, many=True).data)
 
@@ -365,8 +535,19 @@ def _team_response(request, people, cycle_id):
     return Response(rows)
 
 
+def _own_team_only(request, reviewer_id):
+    """A team list is the reviewer's own, or an admin's to see."""
+    signed_in = session_employee(request)
+    if signed_in and not (_same(signed_in.employee_id, reviewer_id)
+                          or signed_in.user_type == 'admin'):
+        return Response({'error': 'This is not your team.'}, status=403)
+    return None
+
+
 class ManagerTeamView(GSView):
     def get(self, request, manager_id):
+        if (err := _own_team_only(request, manager_id)):
+            return err
         if not EmployeeProfile.objects.filter(employee_id__iexact=manager_id).exists():
             return Response({'error': 'Manager not found.'}, status=404)
         team = EmployeeProfile.objects.filter(reporting_manager_id__iexact=manager_id, is_active=True)
@@ -375,6 +556,8 @@ class ManagerTeamView(GSView):
 
 class HODTeamView(GSView):
     def get(self, request, hod_id):
+        if (err := _own_team_only(request, hod_id)):
+            return err
         if not EmployeeProfile.objects.filter(employee_id__iexact=hod_id).exists():
             return Response({'error': 'HOD not found.'}, status=404)
         team = EmployeeProfile.objects.filter(hod_id__iexact=hod_id, is_active=True)
@@ -405,6 +588,8 @@ class EmployeeImportView(GSView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
+        if (err := require_admin(request)):
+            return err
         f = request.FILES.get('file')
         if not f:
             return Response({'error': 'No file uploaded.'}, status=400)
@@ -521,6 +706,8 @@ class EmployeeTemplateView(GSView):
 
 class EmployeeListView(GSView):
     def get(self, request):
+        if (err := require_admin(request)):
+            return err
         qs = EmployeeProfile.objects.all()
         q = str(request.query_params.get('q') or '').strip()
         if q:
@@ -534,6 +721,8 @@ class EmployeeListView(GSView):
 
 class EmployeeDetailView(GSView):
     def patch(self, request, employee_id):
+        if (err := require_admin(request)):
+            return err
         emp = EmployeeProfile.objects.filter(employee_id__iexact=employee_id).first()
         if not emp:
             return Response({'error': 'Employee not found.'}, status=404)
@@ -545,6 +734,8 @@ class EmployeeDetailView(GSView):
         return Response(EmployeeSerializer(emp).data)
 
     def delete(self, request, employee_id):
+        if (err := require_admin(request)):
+            return err
         emp = EmployeeProfile.objects.filter(employee_id__iexact=employee_id).first()
         if not emp:
             return Response({'error': 'Employee not found.'}, status=404)
@@ -555,6 +746,8 @@ class EmployeeDetailView(GSView):
 
 class AllPlansView(GSView):
     def get(self, request):
+        if (err := require_admin(request)):
+            return err
         qs = _plans()
         if request.query_params.get('cycle_id'):
             qs = qs.filter(cycle_id=request.query_params['cycle_id'])
@@ -567,6 +760,8 @@ class OverviewView(GSView):
     """The admin's answer to "where is everyone?"."""
 
     def get(self, request):
+        if (err := require_admin(request)):
+            return err
         cycle_id = request.query_params.get('cycle_id')
         plans = GoalPlan.objects.all()
         if cycle_id:
@@ -597,6 +792,8 @@ class PlanReopenView(GSView):
     """
 
     def post(self, request, plan_id):
+        if (err := require_admin(request)):
+            return err
         plan = _plans().filter(id=plan_id).first()
         if not plan:
             return Response({'error': 'Goal sheet not found.'}, status=404)
@@ -615,6 +812,8 @@ class PlanStatusView(GSView):
     """Admin override: put a sheet at any stage."""
 
     def post(self, request, plan_id):
+        if (err := require_admin(request)):
+            return err
         plan = _plans().filter(id=plan_id).first()
         if not plan:
             return Response({'error': 'Goal sheet not found.'}, status=404)
@@ -631,6 +830,8 @@ class EmployeeCreateView(GSView):
     """Add one person by hand, for the joiner who missed the upload."""
 
     def post(self, request):
+        if (err := require_admin(request)):
+            return err
         emp_id = str(request.data.get('employee_id') or '').strip()
         name = str(request.data.get('name') or '').strip()
         if not emp_id or not name:
@@ -662,6 +863,8 @@ class ActivityView(GSView):
     """
 
     def get(self, request):
+        if (err := require_admin(request)):
+            return err
         events = (PlanEvent.objects
                   .select_related('plan', 'plan__employee', 'plan__cycle')
                   .order_by('-created_at'))
@@ -709,6 +912,8 @@ class ResetView(GSView):
     }
 
     def get(self, request):
+        if (err := require_admin(request)):
+            return err
         """What a reset would remove, so the count is seen before the click."""
         return Response({
             'scopes': [{'key': k, 'label': v} for k, v in self.SCOPES.items()],
@@ -722,6 +927,8 @@ class ResetView(GSView):
         })
 
     def post(self, request):
+        if (err := require_admin(request)):
+            return err
         if request.data.get('confirm') != 'RESET_CONFIRMED':
             return Response({'error': 'This needs confirmation. Type the phrase to proceed.'},
                             status=400)
@@ -765,6 +972,8 @@ class ExportView(GSView):
     """
 
     def get(self, request):
+        if (err := require_admin(request)):
+            return err
         from django.http import HttpResponse
         from .export import build_export
 

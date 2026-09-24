@@ -34,6 +34,8 @@ def _brief(b):
         'status': b.status, 'reviewed_by': b.reviewed_by,
         'reviewed_at': b.reviewed_at.isoformat() if b.reviewed_at else None,
         'admin_remarks': b.admin_remarks, 'created_at': b.created_at.isoformat(),
+        'released_at': b.released_at.isoformat() if b.released_at else None,
+        'released_by': b.released_by, 'release_reason': b.release_reason,
     }
 
 
@@ -149,11 +151,14 @@ class BookingListView(APIView):
 
 
 class BookingActionView(APIView):
-    """PATCH { action: 'approve'|'reject'|'cancel', email, remarks? }
+    """PATCH { action: 'approve'|'reject'|'cancel'|'release', remarks? }
 
     - approve/reject: Admin or Super Admin only.
     - cancel: the requester themself (any status not already cancelled), or
-      Admin/Super Admin (any booking, any status).
+      Admin/Super Admin (any booking, any status). The meeting did not happen.
+    - release: Admin or Super Admin only, and only on a meeting running right
+      now. The meeting happened but finished early; the room goes free from
+      this moment while the booking keeps its record.
     """
 
     def patch(self, request, booking_id):
@@ -193,6 +198,36 @@ class BookingActionView(APIView):
             booking.save()
             return Response({'message': f'Booking {booking.status}.', 'booking': _brief(booking)})
 
+        if action == 'release':
+            # The meeting finished early, so give the room back now instead
+            # of leaving it showing Occupied until its booked end. Nothing is
+            # rewritten: the booking keeps its times and stays approved, and
+            # `status.effective_end` is what treats the room as free from
+            # here. Cancelling is the other, different thing -- it says the
+            # meeting never happened.
+            if role not in ('admin', 'super_admin'):
+                return Response({'error': 'Only an admin can free a room early.'}, status=403)
+            if booking.status != 'approved':
+                return Response({'error': f'This booking is {booking.status}, not in progress.'},
+                                status=400)
+            if booking.released_at:
+                return Response({'error': 'This room has already been freed.'}, status=400)
+
+            now = timezone.localtime()
+            if booking.date != now.date() or not (booking.start_time <= now.time() < booking.end_time):
+                return Response({'error': 'Only a meeting happening right now can be ended early.'},
+                                status=400)
+
+            booking.released_at = now
+            booking.released_by = email
+            booking.release_reason = str(request.data.get('remarks') or '').strip()[:300]
+            booking.save(update_fields=['released_at', 'released_by', 'release_reason', 'updated_at'])
+            return Response({
+                'message': (f'{booking.room} is free. The meeting by '
+                            f'{booking.requested_by_name} was ended at {now.strftime("%H:%M")}.'),
+                'booking': _brief(booking),
+            })
+
         if action == 'cancel':
             is_owner = email == booking.requested_by_email.lower()
             is_staff = role in ('admin', 'super_admin')
@@ -216,6 +251,10 @@ class RoomCalendarView(APIView):
     Admin can see pending requests alongside confirmed ones for that day."""
 
     def get(self, request, room_id):
+        # A day's bookings carry who booked the room and what for. This was
+        # readable by anyone who knew the URL.
+        if (err := require_signed_in(request)):
+            return err
         d = _parse_date(request.query_params.get('date')) or timezone.localdate()
         try:
             room = Room.objects.get(id=room_id)

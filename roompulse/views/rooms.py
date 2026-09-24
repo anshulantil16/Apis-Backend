@@ -1,5 +1,5 @@
 """Room list (live status grid, everyone) + Room CRUD (Super Admin only)."""
-from datetime import datetime
+from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
@@ -25,7 +25,10 @@ class RoomListView(APIView):
     POST: create a room (Super Admin only)."""
 
     def get(self, request):
-        now = datetime.now()
+        # The project's clock, not the machine's. This was datetime.now(),
+        # which reads the server's OS timezone -- on a UTC host that put the
+        # whole live grid 5.5 hours away from the times people had typed in.
+        now = timezone.localtime().replace(tzinfo=None)
         rooms = list(Room.objects.filter(is_active=True))
         today_bookings = BookingRequest.objects.filter(status='approved', date=now.date())
         by_room = {}

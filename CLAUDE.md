@@ -37,6 +37,28 @@ it writes files that are not in git and the next deploy conflicts with them.
 alterations on `pms` and `roompulse`. That drift predates this work and is
 deliberately left alone — do not bundle it into an unrelated deploy.
 
+## The clock
+
+`TIME_ZONE = 'Asia/Kolkata'`, `USE_TZ = True`. Datetimes are still stored in
+UTC; what changed is what the server means by *now* and *today*.
+
+Use `timezone.localtime()` / `timezone.localdate()`. **Never `datetime.now()`**
+— that reads the host OS timezone, which on the QA server is UTC. The live
+room grid did exactly that and ran 5.5 hours away from the times people had
+typed in: a 10:00 meeting marked the room occupied at 15:30 IST.
+
+## Freeing a room early
+
+A room's status is derived from the clock on every request — nothing stores
+"occupied", and a meeting frees its room by itself at its end time.
+
+An admin can also end one early. `BookingRequest.released_at` records the
+moment; `end_time` is left as booked, because the meeting did happen and for
+how long it was booked is part of the record. Everything asking "is this room
+in use?" goes through `status.effective_end()`, which is what makes a release
+free the room both on the grid and for the next person trying to book that
+slot. Cancelling is the different case — the meeting never happened.
+
 ## AdminPulse (`roompulse/`) — identity
 
 **An `email` in a request body is data about the request. It is never a claim
@@ -59,6 +81,60 @@ When adding an AdminPulse endpoint:
 - take the actor from `actor_role(request)`, never from `request.data`
 - an employee sees only their own rows; only staff roles see everyone's
 
+## Goal Setting (`goalsetting/`) — roles are relative
+
+**Nobody is "a manager" in the abstract — they are the manager OF someone.**
+`EmployeeProfile.user_type` is a label from the upload sheet; it is not your
+role on the sheet in front of you. On your own goal sheet you are the
+employee, whatever your user_type says.
+
+`views.plan_roles(actor_id, employee)` works out every role an actor holds in
+relation to one sheet, and `acting_role(roles, status)` picks the one that
+holds the pen at the current stage. Views take the role from those, never from
+a `role` field in the request. Reading it off user_type is what stopped every
+manager and HOD in the company from filling in their own goals: their own
+draft was "with the employee" while they were "a manager".
+
+Identity comes from `session.py` — a token minted at OTP verification and
+returned in the `X-GoalSetting-Session` header. Before that, every endpoint
+took the caller's word for who they were, and `/reset/`, which deletes every
+goal sheet and every version of it, was open to anyone with the URL. Guard new
+admin endpoints with `require_admin(request)`.
+
+`services.route_after()` sends a hand-off past reviewers who are not really
+there — no manager on file, an id naming nobody, someone who has left. Without
+it a sheet lands at a stage nobody can act at and only the admin can free it.
+
+## The Super Admin's overview
+
+`views/overview.py` is one call answering three questions: what is waiting on
+somebody (with how long the oldest has waited), what is happening right now,
+and whether the setup itself is broken — nobody assigned to a queue, no rooms,
+an empty or stale directory. All of it was visible somewhere already across
+five tabs, which is fine for doing a job and useless for noticing one.
+
+Anything actionable carries the number that makes it actionable: a queue's
+depth means little, `oldest_days` and `stale` are what someone acts on.
+
+## The employee master comes from the directory
+
+`accounts.PortalUser` is the company directory, synced from HRMS. AdminPulse
+pulls from it (`roompulse/directory.py`) instead of holding a second copy
+uploaded from a spreadsheet — two copies disagreed the moment either changed.
+
+`Employee.source` is `directory` or `manual`. A sync refreshes the first,
+marks leavers inactive (never deletes — their name is on tickets), and **never
+touches the second**: people are added by hand precisely because they are not
+in HRMS, so a sync can never bring them back.
+
+`resolve_role` treats somebody as an employee if they are **on the directory**,
+falling back to the `@apisindia.com` domain. The domain alone was the rule, and
+it shut out most of the company: only about a quarter of people have a company
+address, the rest having the personal ones HRMS holds.
+
+Who resolves Admin vs IT tickets stays `AdminUser`, set by the super admin.
+A sync mirrors it onto `Employee.role` for display but never changes it.
+
 ## Tickets are a record
 
 `SupportTicket.reviewed_by` / `reviewed_at` hold only the **most recent**
@@ -67,9 +143,39 @@ transition, with actor and timestamp. Write to it through `_log()` in
 `views/tickets.py` whenever a ticket's status changes; nothing updates or
 deletes an event.
 
+Not all work arrives as a ticket. `SupportTicket.origin` is `requested` or
+`logged` — the second is a job IT or Admin did that nobody raised a ticket
+for, recorded so the monthly count is the real one. It lives in the same table
+so "what did IT do in September" stays one query; a report assembled from two
+tables drifts the first time a field is added to one of them.
+
+`performed_by_email` / `performed_on` are what a report groups by, set when a
+ticket is closed and when a job is logged. `performed_on` is the day the work
+happened, not the row's timestamp — closing a logged job must never move it,
+or a Friday job written up on Monday lands in the wrong month.
+
+`worktime.py` owns how long a job took and how much of it was outside office
+hours (09:30–18:30, and all of Saturday and Sunday). After-hours time is
+computed from the window worked, never claimed: "ninety minutes" reads the
+same whether it was a Tuesday afternoon or 23:00–00:30 bringing a server back.
+A job with no window recorded contributes nothing rather than counting as
+zero — silent is not the same as inside hours.
+
+Anything that counts tickets has to say which kind it means. Analytics counts
+demand, so it excludes `logged`; the work report counts output, so it includes
+both and reports the split.
+
 Attachments are allowlisted by extension (`ALLOWED_ATTACHMENT_EXTS`) because
 they are served back from `MEDIA_URL` — an `.html` or `.svg` attachment is a
 script on our own origin.
+
+## Analytics is windowed
+
+`views/analytics.py` measures everything over `?days=` (default 30) and also
+returns all-time `totals`. Anything added to the report needs both, or a quiet
+period is indistinguishable from an empty system and the dashboard looks
+broken. It covers bookings, item requests **and** tickets — the helpdesk was
+missing from it at first, which is most of what people actually use.
 
 ## SalesIQ (`sales/`) — the two primary files
 
