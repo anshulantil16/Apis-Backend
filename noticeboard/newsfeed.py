@@ -165,6 +165,34 @@ def _key(value):
     return hashlib.sha256((value or '').encode('utf-8', 'replace')).hexdigest()
 
 
+def _tidy_summary(summary, title, publisher):
+    """The blurb, or nothing at all if it only repeats the headline.
+
+    Google News sets every description to the headline followed by the
+    publisher, so a card drawn straight from the feed says the same sentence
+    twice in two sizes. Better to show a headline alone than a headline and its
+    own echo, so anything that adds nothing is dropped and the card lays itself
+    out without a blurb.
+    """
+    def norm(v):
+        return re.sub(r'[^a-z0-9]+', ' ', (v or '').lower()).strip()
+
+    n_sum, n_title = norm(summary), norm(title)
+    if not n_sum or not n_title:
+        return ''
+    if n_sum == n_title:
+        return ''
+    if n_sum.startswith(n_title):
+        rest = n_sum[len(n_title):].strip()
+        # What is left is usually just the publisher's name, or nothing.
+        if not rest or rest == norm(publisher) or len(rest) < 10:
+            return ''
+    # Anything else is a different sentence and is kept. A blunter rule -- drop
+    # whatever is not much longer than the headline -- also throws away a real
+    # one-line blurb, which is worth more than the echoes it would catch.
+    return summary
+
+
 def _tidy_title(title, feed_source):
     """Google News appends ' - The Publisher' to every headline. On a card
     that already shows the publisher underneath, it is the same words twice."""
@@ -253,7 +281,7 @@ def fetch_source(source):
             if NewsItem.objects.filter(source_url=link).exists():
                 continue
 
-            summary = e['summary'] or title
+            summary = _tidy_summary(e['summary'], title, publisher)
             n = NewsItem(
                 title=title[:200],
                 summary=summary[:600],

@@ -432,6 +432,35 @@ class FetchingTheNews(TestCase):
         self.assertEqual(NewsItem.objects.first().moderation_status,
                          ModerationStatus.APPROVED)
 
+    def test_a_summary_that_only_echoes_the_headline_is_dropped(self):
+        """Google News sets every description to the headline plus the
+        publisher, so the card said the same sentence twice in two sizes."""
+        from noticeboard.newsfeed import _tidy_summary
+        title = 'Honey exports rise sharply'
+        self.assertEqual(
+            _tidy_summary('Honey exports rise sharply The Tribune', title, 'The Tribune'), '')
+        self.assertEqual(_tidy_summary('Honey exports rise sharply', title, ''), '')
+
+    def test_a_short_blurb_that_is_genuinely_different_survives(self):
+        """Dropping everything not much longer than the headline would also
+        throw away a real one-line summary."""
+        from noticeboard.newsfeed import _tidy_summary
+        self.assertEqual(
+            _tidy_summary('Volumes up a third on last year.',
+                          'Honey exports rise sharply', 'The Tribune'),
+            'Volumes up a third on last year.')
+
+    def test_a_summary_that_adds_something_is_kept(self):
+        from noticeboard.newsfeed import _tidy_summary
+        title = 'Honey exports rise sharply'
+        real = ('Honey exports rise sharply as APEDA clears the first consignment '
+                'from Assam, with volumes up by a third on last year.')
+        self.assertEqual(_tidy_summary(real, title, 'The Tribune'), real)
+
+    def test_an_empty_summary_is_fine(self):
+        from noticeboard.newsfeed import _tidy_summary
+        self.assertEqual(_tidy_summary('', 'A headline of some length', ''), '')
+
     def test_html_does_not_reach_the_card(self):
         """Feed descriptions are routinely a whole anchor tag."""
         self.run_fetch()
