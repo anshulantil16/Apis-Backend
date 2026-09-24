@@ -278,7 +278,7 @@ def _read_news_fields(data):
         'title': title[:200], 'summary': summary[:600],
         'category': _category(data.get('category')),
         'source_name': (data.get('sourceName') or '').strip()[:120],
-        'source_url': url[:500], 'image_url': image_url[:500],
+        'source_url': url[:2000], 'image_url': image_url[:2000],
         'published_on': _date(data.get('publishedOn')) or timezone.localdate(),
         'expires_on': _date(data.get('expiresOn')),
     }, None

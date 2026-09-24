@@ -491,6 +491,24 @@ class FetchingTheNews(TestCase):
         self.run_fetch(body)
         self.assertEqual(NewsItem.objects.count(), 1)
 
+    def test_a_long_link_is_stored_whole_not_clipped(self):
+        """A clipped Google News link is not a shorter link, it is a broken
+        one: Google answers it with 400, malformed. In one real feed 13 of 39
+        were over 500 characters and the longest was 824."""
+        long_link = 'https://news.google.com/rss/articles/' + ('A' * 700) + '?oc=5'
+        body = rss_body().replace('https://example.com/a<', long_link + '<')
+        self.run_fetch(body)
+        stored = NewsItem.objects.first().source_url
+        self.assertEqual(stored, long_link)
+        self.assertGreater(len(stored), 700)
+
+    def test_the_dedupe_key_stays_short_enough_to_index(self):
+        """MySQL's utf8mb4 index limit is 3072 bytes, so the raw id could not
+        carry an index at all."""
+        long_id = 'tag:example.com,2026:' + ('x' * 900)
+        self.run_fetch(rss_body().replace('tag:example.com,2026:a', long_id))
+        self.assertEqual(len(NewsItem.objects.first().external_id), 64)
+
     def test_a_placeholder_title_is_not_made_into_a_card(self):
         """One real government feed answers with a title of literally
         'BlogDescription'."""
@@ -498,6 +516,15 @@ class FetchingTheNews(TestCase):
                                   'BlogDescription')
         found, added, error = self.run_fetch(body)
         self.assertEqual(added, 0)
+
+    def test_a_placeholder_hiding_behind_a_publisher_suffix_is_caught_too(self):
+        """Google appends ' - The Publisher' to every title, so the junk row
+        arrives as 'BlogDescription - PIB' and sails past a check made before
+        the suffix is stripped."""
+        body = rss_body().replace('Honey exports rise sharply - The Tribune',
+                                  'BlogDescription - The Tribune')
+        found, added, error = self.run_fetch(body)
+        self.assertEqual(added, 0, NewsItem.objects.values_list('title', flat=True))
 
     # ── when things go wrong ──
     def test_a_feed_that_is_down_does_not_raise(self):

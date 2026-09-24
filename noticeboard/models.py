@@ -177,14 +177,19 @@ class NewsItem(ModeratedContent):
     # Where it came from. Both optional: a company post has no outside source,
     # and a curator may have the headline but not a link worth sending people to.
     source_name = models.CharField(max_length=120, blank=True)
-    source_url  = models.URLField(max_length=500, blank=True)
+    # 2000, not 500. Google News article links are opaque encoded ids and run
+    # long -- in one real feed, 13 of 39 were over 500 characters and the
+    # longest was 824. Truncating one produces a URL that Google answers with
+    # "400, the server cannot process the request because it is malformed",
+    # which is what every one of those stories did when clicked.
+    source_url  = models.URLField(max_length=2000, blank=True)
 
     # Either an uploaded file or somebody else's URL. Two fields rather than
     # one because they fail differently: an upload is ours and keeps working,
     # a remote URL can rot or be blocked at any time, and the card has to be
     # able to fall back to no picture at all without looking broken.
     image     = models.ImageField(upload_to=news_image_path, null=True, blank=True)
-    image_url = models.URLField(max_length=500, blank=True)
+    image_url = models.URLField(max_length=2000, blank=True)
 
     # The day the story is *about*. An article found late still belongs on its
     # own date, or the strip claims a week-old piece broke this morning.
@@ -197,9 +202,13 @@ class NewsItem(ModeratedContent):
     # feed ever produced" possible when a source turns out to be noise.
     source_ref = models.ForeignKey('NewsSource', null=True, blank=True,
                                    on_delete=models.SET_NULL, related_name='items')
-    # The feed's own id for the story. Feeds re-publish the same item with a
-    # changed link often enough that the link alone is not a safe key.
-    external_id = models.CharField(max_length=500, blank=True, db_index=True)
+    # A SHA-256 of the feed's own id for the story, not the id itself. Feeds
+    # re-publish the same item with a changed link often enough that the link
+    # alone is not a safe key -- but Google's ids run past 800 characters, and
+    # this column is indexed. MySQL's utf8mb4 index limit is 3072 bytes, so a
+    # column wide enough to hold the raw id could not carry an index at all.
+    # A hash is 64 characters, indexes cleanly, and compares exactly.
+    external_id = models.CharField(max_length=64, blank=True, db_index=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

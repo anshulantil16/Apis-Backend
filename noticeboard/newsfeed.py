@@ -20,6 +20,7 @@ this runs from cron and from a button on an admin screen, and a feed being
 down, slow, or answering with an HTML error page is a normal Tuesday. Every
 failure is recorded on the source row and the run continues to the next one.
 """
+import hashlib
 import logging
 import re
 from datetime import datetime, timedelta, timezone as dt_timezone
@@ -158,6 +159,12 @@ def _entries(xml_text):
     return out
 
 
+def _key(value):
+    """The dedupe key for a feed item: a hash, because the raw id is too long
+    to index. See NewsItem.external_id."""
+    return hashlib.sha256((value or '').encode('utf-8', 'replace')).hexdigest()
+
+
 def _tidy_title(title, feed_source):
     """Google News appends ' - The Publisher' to every headline. On a card
     that already shows the publisher underneath, it is the same words twice."""
@@ -219,10 +226,13 @@ def fetch_source(source):
             title, link = e['title'].strip(), e['link'].strip()
             if not title or not link.startswith('http'):
                 continue
-            # Feeds emit placeholder rows -- one real government feed answers
-            # with a title of literally "BlogDescription". A headline is a
-            # sentence fragment, so a single wordless token is not one, and it
-            # would otherwise become a card on the company home page.
+            # Judged on the FINAL headline, not the raw one. Google appends
+            # " - The Publisher" to every title, so a placeholder row arrives as
+            # "BlogDescription - PIB" -- which has spaces and sails past a check
+            # made too early, then loses the suffix and becomes a card reading
+            # "BlogDescription".
+            publisher = e['source'] or ''
+            title = _tidy_title(title, publisher)
             if len(title) < 12 or ' ' not in title:
                 continue
             # See NewsSource.max_age_days: without this the job walks backwards
@@ -233,26 +243,24 @@ def fetch_source(source):
             # Two keys because feeds re-publish: the feed's own id, and the
             # link. Either one matching means we have already carried it.
             #
-            # Truncated BEFORE the lookup, not only on the way in. Google News
-            # guids and links run well past 500 characters, so comparing a full
-            # key against a stored, truncated one never matches and every run
-            # carries the same stories again.
-            key = (e['guid'] or link)[:500]
-            link = link[:500]
+            # The id is hashed rather than stored: Google's run past 800
+            # characters and the column is indexed. Nothing here is truncated
+            # any more -- a clipped link is a broken link, and a clipped key
+            # matches nothing, so every run re-carried the same stories.
+            key = _key(e['guid'] or link)
             if NewsItem.objects.filter(external_id=key).exists():
                 continue
             if NewsItem.objects.filter(source_url=link).exists():
                 continue
 
-            publisher = e['source'] or ''
             summary = e['summary'] or title
             n = NewsItem(
-                title=_tidy_title(title, publisher)[:200],
+                title=title[:200],
                 summary=summary[:600],
                 category=source.category,
                 source_name=publisher[:120],
                 source_url=link,
-                image_url=(e['image'] or '')[:500],
+                image_url=(e['image'] or '')[:2000],
                 published_on=e['date'],
                 source_ref=source,
                 external_id=key,

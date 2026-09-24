@@ -233,9 +233,16 @@ reason spelled out in `accounts/management/commands/sync_hrms.py`.
 - Google ranks by relevance, not date, so `resolved_url()` appends `when:Nd`
   from `max_age_days`. Without it a narrow query answers with its best matches
   going back years -- one real query returned results from 2013.
-- Dedupe keys are truncated *before* the lookup, not only on save. Google News
-  guids run past 500 characters, so comparing a full key to a stored truncated
-  one never matches and every run re-carries everything.
+- **Never truncate a feed link.** Google News article links are opaque encoded
+  ids: in one real feed 13 of 39 were over 500 characters and the longest was
+  824. A clipped link is not a shorter link, it is a broken one -- Google
+  answers it with "400, malformed". `source_url`/`image_url` are 2000.
+- `external_id` is a SHA-256 of the feed's id, not the id itself. It is
+  indexed, and MySQL's utf8mb4 limit is 3072 bytes, so a column wide enough for
+  the raw id could carry no index at all.
+- Junk titles are judged on the *final* headline. Google appends
+  " - The Publisher" to every title, so a placeholder arrives as
+  "BlogDescription - PIB" and passes a check made before the suffix is stripped.
 - A source stops fetching at `BACKLOG_LIMIT` unreviewed stories and records
   that as `paused`, not `failed` -- nothing is broken.
 
