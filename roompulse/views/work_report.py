@@ -40,7 +40,8 @@ def _month_bounds(raw, today):
 
 
 class WorkReportView(APIView):
-    """GET ?month=YYYY-MM — the month's work, per person and per category."""
+    """GET ?month=YYYY-MM — the month's work, per person and per category.
+    With ?person=<email>, also every job that person did."""
 
     def get(self, request):
         # The team's own record of its output. An employee sees their own
@@ -79,6 +80,24 @@ class WorkReportView(APIView):
             p['total'] += row['n']
             p['minutes'] += row['mins'] or 0
 
+        # One person's actual jobs, for showing a manager what the number is
+        # made of. A count on its own invites the question straight back.
+        person = (request.query_params.get('person') or '').strip().lower()
+        items = []
+        if person:
+            for t in done.filter(performed_by_email__iexact=person).order_by('-performed_on', '-id'):
+                items.append({
+                    'id': t.id,
+                    'date': t.performed_on.isoformat() if t.performed_on else None,
+                    'subject': t.subject,
+                    'category': t.get_category_display(),
+                    'origin': t.origin,
+                    'how': 'Logged' if t.origin == 'logged' else 'From a ticket',
+                    'for': t.logged_for or t.requested_by_name,
+                    'minutes': t.time_spent_minutes,
+                    'status': t.get_status_display(),
+                })
+
         by_category = [
             {'category': r['category'],
              'label': dict(SupportTicket.CATEGORY_CHOICES).get(r['category'], r['category']),
@@ -103,4 +122,43 @@ class WorkReportView(APIView):
             'people': sorted(people.values(), key=lambda p: -p['total']),
             'by_category': by_category,
             'still_open': outstanding,
+            'person': person,
+            'items': items,
         })
+
+
+class WorkReportExportView(APIView):
+    """GET ?month=YYYY-MM — the same month as a workbook.
+
+    Separate from the JSON because this one leaves the building: it is what
+    gets attached to an email to a manager, so it carries the sentence about
+    how the counting works rather than assuming whoever opens it was told.
+    """
+
+    def get(self, request):
+        if (err := require_role(request, 'it_support', 'admin', 'super_admin')):
+            return err
+
+        from django.http import HttpResponse
+        from django.utils import timezone
+
+        from ..work_export import build_work_report
+
+        first, last, label = _month_bounds(request.query_params.get('month'),
+                                           timezone.localdate())
+        rows = list(SupportTicket.objects
+                    .filter(performed_on__range=(first, last))
+                    .order_by('performed_on', 'id'))
+
+        # The same numbers the screen shows, built the same way -- a file that
+        # disagrees with the page it was downloaded from is worse than no file.
+        inner = WorkReportView()
+        inner.request = request
+        report = inner.get(request).data
+
+        r = HttpResponse(build_work_report(report, rows),
+                         content_type='application/vnd.openxmlformats-officedocument'
+                                      '.spreadsheetml.sheet')
+        r['Content-Disposition'] = (
+            f'attachment; filename="work-done-{first:%Y-%m}.xlsx"')
+        return r
