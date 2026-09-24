@@ -127,6 +127,10 @@ class EmployeeUploadView(APIView):
 
 class EmployeeListView(APIView):
     def get(self, request):
+        # The whole staff list: every name, email address and department.
+        # This was readable by anyone signed in, which is most of the company.
+        if (err := require_role(request, 'admin', 'it_support', 'super_admin')):
+            return err
         from django.db.models import Q
         qs = Employee.objects.all()
         if request.query_params.get('active') == '1':
@@ -177,6 +181,48 @@ class EmployeeListView(APIView):
                        + (f' {kept} added by hand were kept.' if kept else ''),
             'deleted': n, 'kept': kept,
         })
+
+
+class EmployeeRowView(APIView):
+    """One person: correct their details, or take out somebody added by hand.
+
+    A directory row is not editable here -- it would be overwritten by the
+    next sync, which is a confusing way to lose work. Fix those in HRMS.
+    """
+
+    def patch(self, request, employee_id):
+        if (err := require_role(request, 'super_admin')):
+            return err
+        row = Employee.objects.filter(id=employee_id).first()
+        if not row:
+            return Response({'error': 'Not on the list.'}, status=404)
+        if row.source == 'directory':
+            return Response({'error': f'{row.name} comes from the company directory, so a '
+                                      f'sync would undo any change made here. Correct it in '
+                                      f'HRMS instead.'}, status=400)
+        d = request.data
+        for field, cap in (('name', 200), ('department', 150), ('designation', 150),
+                           ('location', 150), ('employee_code', 50)):
+            if field in d:
+                setattr(row, field, str(d[field] or '').strip()[:cap])
+        if 'is_active' in d:
+            row.is_active = bool(d['is_active'])
+        row.save()
+        return Response({'message': f'{row.name} updated.'})
+
+    def delete(self, request, employee_id):
+        if (err := require_role(request, 'super_admin')):
+            return err
+        row = Employee.objects.filter(id=employee_id).first()
+        if not row:
+            return Response({'error': 'Not on the list.'}, status=404)
+        if row.source == 'directory':
+            return Response({'error': f'{row.name} comes from the company directory. Removing '
+                                      f'them here would only last until the next sync -- mark '
+                                      f'them as left in HRMS.'}, status=400)
+        name = row.name
+        row.delete()
+        return Response({'message': f'{name} removed.'})
 
 
 class EmployeeSyncView(APIView):

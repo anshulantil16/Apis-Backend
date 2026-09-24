@@ -5,8 +5,8 @@ from .views import (
     ResourceRequestListView, ResourceRequestActionView,
     TicketListView, TicketActionView,
     EmployeeTemplateView, EmployeeUploadView, EmployeeListView,
-    EmployeeSyncView, EmployeeCreateView,
-    AdminRosterView, AnalyticsView, WorkReportView, WorkReportExportView,
+    EmployeeSyncView, EmployeeCreateView, EmployeeRowView,
+    AdminRosterView, AdminRoleView, AnalyticsView, WorkReportView, WorkReportExportView,
     ResetDatabaseView,
 )
 
@@ -31,8 +31,10 @@ urlpatterns = [
     path('employees/', EmployeeListView.as_view()),
     path('employees/sync/', EmployeeSyncView.as_view()),
     path('employees/add/', EmployeeCreateView.as_view()),
+    path('employees/<int:employee_id>/', EmployeeRowView.as_view()),
 
     path('admins/', AdminRosterView.as_view()),
+    path('admins/role/', AdminRoleView.as_view()),
 
     path('analytics/', AnalyticsView.as_view()),
     path('work-report/', WorkReportView.as_view()),
