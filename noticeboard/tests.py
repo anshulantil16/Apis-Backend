@@ -709,3 +709,36 @@ class WhatShipsConfigured(TestCase):
     def test_they_ask_google_for_recent_results_only(self):
         for src in NewsSource.objects.all():
             self.assertIn('when%3A', src.resolved_url())
+
+
+class ClearingBeforeNarrowing(TestCase):
+    """Migration 0007 empties the fetched rows so 0008 can shrink the column
+    they sit in. MySQL refuses to narrow a column while a row would be
+    truncated; SQLite does it silently, which is why this got to QA."""
+
+    def setUp(self):
+        from noticeboard.models import NewsSource
+        self.src = NewsSource.objects.create(name='Feed', kind='rss',
+                                             feed_url='https://example.com/f.xml')
+
+    def test_fetched_rows_go(self):
+        NewsItem.objects.create(title='From a feed', summary='x',
+                                source_ref=self.src, external_id='y' * 60)
+        NewsItem.objects.filter(source_ref__isnull=False).delete()
+        self.assertEqual(NewsItem.objects.count(), 0)
+
+    def test_hand_written_rows_stay(self):
+        """No feed can bring these back."""
+        NewsItem.objects.create(title='Written by the admin', summary='x')
+        NewsItem.objects.create(title='From a feed', summary='x',
+                                source_ref=self.src, external_id='y' * 60)
+        NewsItem.objects.filter(source_ref__isnull=False).delete()
+        self.assertEqual(NewsItem.objects.count(), 1)
+        self.assertEqual(NewsItem.objects.first().title, 'Written by the admin')
+
+    def test_nothing_is_left_too_long_for_the_new_column(self):
+        NewsItem.objects.create(title='Written by the admin', summary='x')
+        NewsItem.objects.filter(source_ref__isnull=False).delete()
+        NewsItem.objects.exclude(external_id='').update(external_id='')
+        for n in NewsItem.objects.all():
+            self.assertLessEqual(len(n.external_id), 64)

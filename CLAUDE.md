@@ -37,6 +37,21 @@ it writes files that are not in git and the next deploy conflicts with them.
 alterations on `pms` and `roompulse`. That drift predates this work and is
 deliberately left alone — do not bundle it into an unrelated deploy.
 
+**Local is SQLite, QA and Live are MySQL, and they disagree about what is an
+error.** A green test run here is not evidence a migration will apply there.
+The ones that bite:
+
+- **Narrowing a column** fails on MySQL if any existing row would be
+  truncated — `(1265, "Data truncated for column ...")`. SQLite applies the
+  same `ALTER` silently and keeps the long values. Clear or shorten the data
+  in an earlier migration, then change the schema in the next one. Ordering
+  these the other way round is what broke a QA deploy of
+  `noticeboard.NewsItem.external_id`.
+- **Indexed columns** cannot exceed MySQL's utf8mb4 key limit of 3072 bytes,
+  i.e. 768 characters. SQLite has no such limit. If a value must be long and
+  looked up, store a hash and index that.
+- **Widening is always safe**; it is only shrinking that needs the two-step.
+
 ## The clock
 
 `TIME_ZONE = 'Asia/Kolkata'`, `USE_TZ = True`. Datetimes are still stored in
