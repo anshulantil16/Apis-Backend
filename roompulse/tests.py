@@ -6,9 +6,11 @@ privileged endpoint took the caller's word for who they were, read from an
 ones that try to act as somebody else.
 """
 import io
+from datetime import timedelta
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from django.test.utils import override_settings as _os  # noqa: F401
 
 from .models import AdminUser, SupportTicket, TicketEvent, Employee, Room
@@ -19,6 +21,7 @@ API = '/api/roompulse'
 EMPLOYEE = 'priya.sharma@apisindia.com'
 IT_STAFF = 'it.desk@apisindia.com'
 OUTSIDER = 'attacker@gmail.com'
+OTHER_IT = 'sana.it@apisindia.com'
 
 
 def auth(email):
@@ -323,3 +326,169 @@ class TheQueueStaysCheapToLoad(HelpdeskBase):
         for i in range(12):
             self.raise_ticket(subject=f'U{i}')
         count_queries(24)
+
+
+# ── work nobody raised a ticket for ──────────────────────────────────────
+class LoggingWorkNobodyAskedFor(HelpdeskBase):
+    """A large part of what IT does never becomes a ticket -- a server
+    restarted, a laptop rebuilt for a joiner, a printer fixed because someone
+    walked over and said so. Counted only what came through the queue, the
+    monthly figure measured how often people used the ticket form rather than
+    how much work was done.
+    """
+
+    def log_work(self, email=IT_STAFF, **over):
+        body = {'origin': 'logged', 'subject': 'Restarted the mail server',
+                'description': 'Queue was stuck; restarted it and cleared the backlog.',
+                'category': 'server_storage', 'time_spent_minutes': 45,
+                'logged_for': 'Whole office'}
+        body.update(over)
+        return self.client.post(f'{API}/tickets/', body,
+                                content_type='application/json', **auth(email))
+
+    def test_an_employee_cannot_log_work(self):
+        self.assertEqual(self.log_work(EMPLOYEE).status_code, 403)
+
+    def test_it_support_can(self):
+        self.assertEqual(self.log_work().status_code, 201)
+
+    def test_it_is_recorded_as_done_rather_than_queued(self):
+        """There is nobody waiting on it and nothing to approve -- it has
+        already happened. Entering it at 'pending' would mean walking it
+        through a workflow after the fact."""
+        self.log_work()
+        t = SupportTicket.objects.get(origin='logged')
+        self.assertEqual(t.status, 'closed')
+        self.assertEqual(t.performed_by_email, IT_STAFF)
+        self.assertEqual(t.performed_on, timezone.localdate())
+        self.assertEqual(t.time_spent_minutes, 45)
+        self.assertEqual([e.action for e in t.events.all()], ['logged'])
+
+    def test_it_belongs_to_the_day_the_work_happened(self):
+        """This is usually written up afterwards -- at the end of the day, or
+        on Monday for something done on Friday."""
+        friday = timezone.localdate() - timedelta(days=3)
+        self.assertEqual(self.log_work(performed_on=friday.isoformat()).status_code, 201)
+        self.assertEqual(SupportTicket.objects.get(origin='logged').performed_on, friday)
+
+    def test_work_cannot_be_logged_in_the_future(self):
+        tomorrow = timezone.localdate() + timedelta(days=1)
+        self.assertEqual(self.log_work(performed_on=tomorrow.isoformat()).status_code, 400)
+
+    def test_a_mistyped_year_is_caught(self):
+        """Otherwise it is filed under a month nobody will look at again."""
+        long_ago = timezone.localdate() - timedelta(days=400)
+        self.assertEqual(self.log_work(performed_on=long_ago.isoformat()).status_code, 400)
+
+    def test_an_unreadable_date_is_refused(self):
+        self.assertEqual(self.log_work(performed_on='12/09/2026').status_code, 400)
+
+    def test_closing_a_logged_job_does_not_move_its_date(self):
+        """Logged as still running on Friday, closed on Monday. If closing
+        stamped today, the job would move -- and across a month end, into the
+        wrong month's report."""
+        friday = timezone.localdate() - timedelta(days=3)
+        r = self.log_work(performed_on=friday.isoformat(), status='in_progress')
+        tid = r.json()['id']
+        self.client.patch(f'{API}/tickets/{tid}/', {'action': 'close'},
+                          content_type='application/json', **auth(IT_STAFF))
+        t = SupportTicket.objects.get(id=tid)
+        self.assertEqual(t.status, 'closed')
+        self.assertEqual(t.performed_on, friday)
+
+    def test_an_employee_never_sees_the_teams_work_log(self):
+        """It is a record of what IT did, not correspondence with them."""
+        self.log_work()
+        self.raise_ticket()
+        rows = self.client.get(f'{API}/tickets/', **auth(EMPLOYEE)).json()['results']
+        self.assertTrue(all(r['origin'] != 'logged' for r in rows))
+
+    def test_a_logged_job_cannot_smuggle_a_dangerous_attachment(self):
+        r = self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 's', 'description': 'd',
+            'attachments': SimpleUploadedFile('payload.html', b'<script>')}, **auth(IT_STAFF))
+        self.assertEqual(r.status_code, 400)
+
+
+class WhatTheMonthAddsUpTo(HelpdeskBase):
+    """The report has to count both kinds of work, and keep them apart."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=OTHER_IT, name='Sana', scope='it_support')
+
+    def close_a_raised_ticket(self, closer=IT_STAFF):
+        tid = self.raise_ticket().json()['id']
+        for action in ('approve', 'start'):
+            self.client.patch(f'{API}/tickets/{tid}/', {'action': action},
+                              content_type='application/json', **auth(IT_STAFF))
+        self.client.patch(f'{API}/tickets/{tid}/', {'action': 'close'},
+                          content_type='application/json', **auth(closer))
+        return tid
+
+    def log_one(self, **over):
+        body = {'origin': 'logged', 'subject': 'Rebuilt a laptop', 'description': 'Joiner setup',
+                'category': 'it_asset_request', 'time_spent_minutes': 30}
+        body.update(over)
+        return self.client.post(f'{API}/tickets/', body,
+                                content_type='application/json', **auth(IT_STAFF))
+
+    def report(self, email=IT_STAFF, month=''):
+        q = f'?month={month}' if month else ''
+        return self.client.get(f'{API}/work-report/{q}', **auth(email))
+
+    def test_an_employee_cannot_read_it(self):
+        self.assertEqual(self.report(EMPLOYEE).status_code, 403)
+
+    def test_both_kinds_are_counted_and_kept_apart(self):
+        self.close_a_raised_ticket()
+        self.log_one()
+        d = self.report().json()
+        self.assertEqual(d['total'], 2)
+        self.assertEqual(d['from_tickets'], 1)
+        self.assertEqual(d['logged_directly'], 1)
+
+    def test_a_ticket_is_credited_to_whoever_finished_it(self):
+        """Not to whoever picked it up -- the row has one slot and closing
+        is the fact the report is about."""
+        self.close_a_raised_ticket(closer=OTHER_IT)
+        people = {p['email']: p for p in self.report().json()['people']}
+        self.assertEqual(people[OTHER_IT]['closed'], 1)
+        self.assertNotIn(IT_STAFF, people)
+
+    def test_people_are_named_not_emailed(self):
+        self.log_one()
+        self.assertEqual(self.report().json()['people'][0]['name'], 'IT Desk')
+
+    def test_time_is_totalled(self):
+        self.log_one()
+        self.log_one(time_spent_minutes=15)
+        self.assertEqual(self.report().json()['minutes_recorded'], 45)
+
+    def test_work_lands_in_the_month_it_was_done(self):
+        """A ticket raised in March and closed in April is April's work."""
+        last_month = timezone.localdate().replace(day=1) - timedelta(days=1)
+        self.log_one(performed_on=last_month.isoformat())
+        self.assertEqual(self.report(month=f'{last_month:%Y-%m}').json()['total'], 1)
+        self.assertEqual(self.report().json()['total'], 0)
+
+    def test_an_empty_month_reads_as_empty_not_as_broken(self):
+        d = self.report(month='2019-03').json()
+        self.assertEqual(d['total'], 0)
+        self.assertEqual(d['label'], 'March 2019')
+
+    def test_a_junk_month_falls_back_to_this_one(self):
+        self.assertEqual(self.report(month='rubbish').json()['month'],
+                         f'{timezone.localdate():%Y-%m}')
+
+    def test_logged_work_is_not_counted_as_demand_on_the_dashboard(self):
+        """Analytics measures what people asked for. Counting the team's own
+        jobs there would say the helpdesk got busier every time IT wrote one
+        up -- and their near-zero age would drag the resolution average down
+        with it."""
+        self.close_a_raised_ticket()
+        self.log_one()
+        d = self.client.get(f'{API}/analytics/?days=30', **auth(SUPER_ADMIN_EMAIL)).json()
+        self.assertEqual(d['tickets']['total'], 1)
+        self.assertEqual(d['tickets']['logged_directly'], 1)
+        self.assertEqual(d['totals']['tickets'], 2)

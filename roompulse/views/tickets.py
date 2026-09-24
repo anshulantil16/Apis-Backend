@@ -3,6 +3,8 @@ role rather than Admin (see AdminUser.scope). Mirrors resource_requests.py's
 approve/reject shape, plus the two steps that move an approved ticket to
 done: 'start' (approved -> in_progress) and 'close' (in_progress -> closed).
 """
+from datetime import datetime
+
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -71,6 +73,12 @@ def _brief(t, request=None):
         'attachments': [{'id': a.id, 'name': a.original_name or a.file.name, 'url': _url(a)}
                         for a in t.attachments.all()],
         'status': t.status, 'status_label': t.get_status_display(),
+        'origin': t.origin, 'origin_label': t.get_origin_display(),
+        'logged_for': t.logged_for,
+        'performed_by_email': t.performed_by_email,
+        'performed_by_name': t.performed_by_name,
+        'performed_on': t.performed_on.isoformat() if t.performed_on else None,
+        'time_spent_minutes': t.time_spent_minutes,
         'reviewed_by': t.reviewed_by,
         'reviewed_at': t.reviewed_at.isoformat() if t.reviewed_at else None,
         'admin_remarks': t.admin_remarks,
@@ -113,10 +121,15 @@ class TicketListView(APIView):
         # An employee sees their own tickets. Only IT Support and the super
         # admin see everybody's.
         if role not in ('it_support', 'super_admin'):
-            qs = qs.filter(requested_by_email=email)
+            # Their own tickets, and never the team's internal work log --
+            # that is a record of what IT did, not correspondence with them.
+            qs = qs.filter(requested_by_email=email).exclude(origin='logged')
         category = request.query_params.get('category')
         if category:
             qs = qs.filter(category=category)
+        origin = request.query_params.get('origin')
+        if origin in dict(SupportTicket.ORIGIN_CHOICES):
+            qs = qs.filter(origin=origin)
         status = request.query_params.get('status')
         if status:
             qs = qs.filter(status=status)
@@ -160,6 +173,18 @@ class TicketListView(APIView):
             return Response({'error': 'These files cannot be attached: '
                                       + '; '.join(refused) + '.'}, status=400)
 
+        # A job IT did that nobody raised a ticket for. It is not a request:
+        # there is no one waiting on it and nothing to approve, because it has
+        # already happened. So it is created at the stage it is really at --
+        # done, or still running -- rather than entering the queue at
+        # 'pending' and being walked through a workflow after the fact.
+        if str(d.get('origin') or '').strip() == 'logged':
+            if role not in ('it_support', 'admin', 'super_admin'):
+                return Response({'error': 'Only IT Support or an admin can log work.'},
+                                status=403)
+            return self._log_work(request, d, role, email, subject, description,
+                                  category, priority, files)
+
         auto_approve = role in ('it_support', 'super_admin')
         ticket = SupportTicket.objects.create(
             requested_by_name=str(d.get('requested_by_name') or d.get('name') or '').strip()[:200],
@@ -180,6 +205,78 @@ class TicketListView(APIView):
             'id': ticket.id, 'status': ticket.status,
             'message': ('Recorded and approved.' if auto_approve
                        else 'Ticket submitted — IT Support will review it shortly.'),
+            'ticket': _brief(ticket, request),
+        }, status=201)
+
+
+    # --- work nobody raised a ticket for -------------------------------------
+
+    def _log_work(self, request, d, role, email, subject, description,
+                  category, priority, files):
+        """Record a job that was done, for the monthly count.
+
+        `performed_on` is asked for rather than assumed, because this is
+        usually written up afterwards -- at the end of the day, or on Monday
+        for something done on Friday -- and it belongs to the day the work
+        happened, not the day someone found time to type it in.
+        """
+        today = timezone.localdate()
+        raw_date = str(d.get('performed_on') or '').strip()
+        if raw_date:
+            try:
+                performed_on = datetime.strptime(raw_date, '%Y-%m-%d').date()
+            except ValueError:
+                return Response({'error': 'Give the date as YYYY-MM-DD.'}, status=400)
+        else:
+            performed_on = today
+
+        if performed_on > today:
+            return Response({'error': 'That date is in the future — log work once it is done.'},
+                            status=400)
+        # A typo in the year would otherwise file this under a month nobody
+        # will ever look at again.
+        if (today - performed_on).days > 365:
+            return Response({'error': 'That date is over a year ago. Check the year.'},
+                            status=400)
+
+        minutes = d.get('time_spent_minutes')
+        if minutes not in (None, ''):
+            try:
+                minutes = max(0, min(60 * 24, int(minutes)))
+            except (TypeError, ValueError):
+                return Response({'error': 'Time spent must be a number of minutes.'}, status=400)
+        else:
+            minutes = None
+
+        # 'closed' unless they say it is still running. Either way it is real
+        # work and counts; the status only says whether it finished.
+        done = str(d.get('status') or 'closed').strip()
+        if done not in ('closed', 'in_progress'):
+            done = 'closed'
+
+        actor_name = str(d.get('performed_by_name') or d.get('requested_by_name') or '').strip()
+        ticket = SupportTicket.objects.create(
+            origin='logged',
+            requested_by_name=actor_name[:200],
+            requested_by_email=email,          # the person who did and logged it
+            logged_for=str(d.get('logged_for') or '').strip()[:200],
+            department=str(d.get('department') or '').strip()[:150],
+            category=category, priority=priority,
+            subject=subject[:200], description=description,
+            related_to=str(d.get('related_to') or '').strip()[:100],
+            status=done,
+            performed_by_email=email, performed_by_name=actor_name[:200],
+            performed_on=performed_on, time_spent_minutes=minutes,
+            reviewed_by=email, reviewed_at=timezone.now(),
+        )
+        for f in files:
+            TicketAttachment.objects.create(ticket=ticket, file=f, original_name=f.name[:255])
+        _log(ticket, 'logged', role, email,
+             str(d.get('remarks') or '').strip() or 'Work logged directly — no ticket was raised.')
+
+        return Response({
+            'id': ticket.id, 'status': ticket.status,
+            'message': f'Logged against {performed_on:%d %b %Y}.',
             'ticket': _brief(ticket, request),
         }, status=201)
 
@@ -227,6 +324,10 @@ class TicketActionView(APIView):
             if ticket.status != 'approved':
                 return Response({'error': 'Only an approved ticket can move to In Progress.'}, status=400)
             ticket.status = 'in_progress'
+            # Whoever picked it up owns it for the monthly count, unless
+            # someone else finishes it -- 'close' below has the last word.
+            if ticket.origin != 'logged':
+                ticket.performed_by_email = email
             ticket.save()
             # Logged rather than written over reviewed_by: whoever approved
             # the ticket and whoever picked the work up are two different
@@ -240,6 +341,18 @@ class TicketActionView(APIView):
             if ticket.status != 'in_progress':
                 return Response({'error': 'Only a ticket In Progress can be closed.'}, status=400)
             ticket.status = 'closed'
+            # The two facts a monthly report needs, on the row it can group
+            # by: who did this, and on what day. The history has said so all
+            # along, but a report cannot group by a free-text trail.
+            #
+            # A job the team logged already carries both, and its date is the
+            # day the work happened. Someone logging Friday's job as still
+            # running and closing it on Monday must not have it moved to
+            # Monday -- and if that crosses a month end, moved into the wrong
+            # month's report.
+            if ticket.origin != 'logged':
+                ticket.performed_by_email = email
+                ticket.performed_on = timezone.localdate()
             ticket.save()
             _log(ticket, 'closed', role, email, remarks, was)
             return Response({'message': 'Ticket closed.', 'ticket': _brief(ticket, request)})

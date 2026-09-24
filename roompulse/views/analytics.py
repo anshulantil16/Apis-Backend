@@ -76,7 +76,12 @@ class AnalyticsView(APIView):
         # The helpdesk is the busiest thing in AdminPulse and used to be
         # missing from this page entirely, so a super admin looking at the
         # whole project saw everything except the part people actually use.
-        tqs = SupportTicket.objects.filter(created_at__date__gte=since)
+        # Only what people actually raised. Work the team logged itself is
+        # real work, but it is not demand -- counting it here would say the
+        # helpdesk got busier every time IT wrote up a job nobody asked for.
+        tqs = SupportTicket.objects.filter(created_at__date__gte=since).exclude(origin='logged')
+        t_logged = SupportTicket.objects.filter(
+            origin='logged', performed_on__gte=since).count()
         t_total = tqs.count()
         t_by_status = {row['status']: row['n'] for row in
                        tqs.values('status').annotate(n=Count('id'))}
@@ -109,6 +114,7 @@ class AnalyticsView(APIView):
             },
             'tickets': {
                 'total': t_total,
+                'logged_directly': t_logged,
                 'by_status': t_by_status,
                 'by_category': t_by_category,
                 'by_priority': t_by_priority,

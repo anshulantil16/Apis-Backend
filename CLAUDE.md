@@ -113,6 +113,21 @@ transition, with actor and timestamp. Write to it through `_log()` in
 `views/tickets.py` whenever a ticket's status changes; nothing updates or
 deletes an event.
 
+Not all work arrives as a ticket. `SupportTicket.origin` is `requested` or
+`logged` — the second is a job IT or Admin did that nobody raised a ticket
+for, recorded so the monthly count is the real one. It lives in the same table
+so "what did IT do in September" stays one query; a report assembled from two
+tables drifts the first time a field is added to one of them.
+
+`performed_by_email` / `performed_on` are what a report groups by, set when a
+ticket is closed and when a job is logged. `performed_on` is the day the work
+happened, not the row's timestamp — closing a logged job must never move it,
+or a Friday job written up on Monday lands in the wrong month.
+
+Anything that counts tickets has to say which kind it means. Analytics counts
+demand, so it excludes `logged`; the work report counts output, so it includes
+both and reports the split.
+
 Attachments are allowlisted by extension (`ALLOWED_ATTACHMENT_EXTS`) because
 they are served back from `MEDIA_URL` — an `.html` or `.svg` attachment is a
 script on our own origin.

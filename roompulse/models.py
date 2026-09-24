@@ -238,12 +238,48 @@ class SupportTicket(models.Model):
     reviewed_at    = models.DateTimeField(null=True, blank=True)
     admin_remarks  = models.CharField(max_length=300, blank=True)
 
+    # Where the work came from.
+    #
+    # Plenty of IT and admin work is never asked for in writing: a server
+    # restarted, a laptop rebuilt for a joiner, a printer fixed because
+    # somebody walked over and said so. Counted only what came through the
+    # queue, the monthly report understated the team's work by however much
+    # of it people happened to raise tickets for -- which is the opposite of
+    # what a report is for.
+    #
+    # Logged work lives in this table rather than its own, so "what did IT do
+    # in September" is one query over one set of categories and statuses. A
+    # report assembled from two tables drifts apart the first time a field is
+    # added to one of them.
+    ORIGIN_CHOICES = [
+        ('requested', 'Raised by someone'),
+        ('logged',    'Logged by IT / Admin'),
+    ]
+    origin = models.CharField(max_length=20, choices=ORIGIN_CHOICES,
+                              default='requested', db_index=True)
+    # Who the logged job was for -- a person, a department, "the server room".
+    # Free text on purpose: much of this work is for nobody in particular.
+    logged_for = models.CharField(max_length=200, blank=True)
+
+    # Who actually did the work, and when it happened. Set when a ticket is
+    # closed as well as on a logged job, so one monthly figure covers both.
+    # `performed_on` is a date, not the row's timestamp: work is often written
+    # up the following morning, and it belongs to the day it was done.
+    performed_by_email = models.EmailField(blank=True, db_index=True)
+    performed_by_name  = models.CharField(max_length=200, blank=True)
+    performed_on       = models.DateField(null=True, blank=True, db_index=True)
+    time_spent_minutes = models.PositiveIntegerField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['-created_at']
-        indexes = [models.Index(fields=['status', 'category'])]
+        indexes = [
+            models.Index(fields=['status', 'category']),
+            # The monthly report: everything one person did in a date range.
+            models.Index(fields=['performed_on', 'performed_by_email']),
+        ]
 
     def __str__(self):
         return f"{self.subject} ({self.status})"
@@ -289,6 +325,7 @@ class TicketEvent(models.Model):
         ('started',   'Work started'),
         ('closed',    'Closed'),
         ('cancelled', 'Cancelled'),
+        ('logged',    'Logged as done'),
     ]
 
     ticket      = models.ForeignKey(SupportTicket, on_delete=models.CASCADE,
