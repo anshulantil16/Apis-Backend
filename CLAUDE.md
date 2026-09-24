@@ -59,7 +59,18 @@ in use?" goes through `status.effective_end()`, which is what makes a release
 free the room both on the grid and for the next person trying to book that
 slot. Cancelling is the different case — the meeting never happened.
 
-## AdminPulse (`roompulse/`) — identity
+## Help Desk (`roompulse/`) — identity
+
+**The product is called Help Desk.** It was AdminPulse, and before that
+RoomPulse. Every string a user reads — including the OTP email — says Help
+Desk. The internal names deliberately do not: the Django app label
+`roompulse` and every table it owns, the `/api/roompulse/` routes, the
+`X-AdminPulse-Session` header, and `RoomPulseLoginView`. Renaming the app
+label would rewrite live QA and Live tables for no visible gain, so it stays.
+
+A user's access to the tool is granted by `accounts.AppKey.HELPDESK`
+(`'helpdesk'`), which the frontend checks by that exact string. It used to be
+`'roompulse'`; migration `accounts/0007` rewrote the existing grants.
 
 **An `email` in a request body is data about the request. It is never a claim
 about who is making it.**
