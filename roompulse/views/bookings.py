@@ -251,6 +251,10 @@ class RoomCalendarView(APIView):
     Admin can see pending requests alongside confirmed ones for that day."""
 
     def get(self, request, room_id):
+        # A day's bookings carry who booked the room and what for. This was
+        # readable by anyone who knew the URL.
+        if (err := require_signed_in(request)):
+            return err
         d = _parse_date(request.query_params.get('date')) or timezone.localdate()
         try:
             room = Room.objects.get(id=room_id)
