@@ -21,6 +21,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from ..models import AdminUser, SupportTicket
+from ..worktime import OFFICE_END, OFFICE_START, after_hours_minutes
 from .perms import require_role
 
 
@@ -63,6 +64,22 @@ class WorkReportView(APIView):
                      done.values('origin').annotate(n=Count('id'))}
         minutes = done.aggregate(m=Sum('time_spent_minutes'))['m'] or 0
 
+        # After-hours time is worked out per row from the window each job was
+        # done in, so it cannot be summed in SQL. Only the rows that recorded
+        # a window are read, which is a short list -- and a job with no window
+        # contributes nothing rather than being guessed at.
+        timed = list(done.exclude(worked_from__isnull=True)
+                     .values('performed_by_email', 'performed_on', 'worked_from', 'worked_to'))
+        after_by_person = {}
+        after_total = 0
+        for row in timed:
+            mins = after_hours_minutes(row['performed_on'], row['worked_from'], row['worked_to'])
+            if not mins:
+                continue
+            after_total += mins
+            email = (row['performed_by_email'] or '').lower()
+            after_by_person[email] = after_by_person.get(email, 0) + mins
+
         # Per person. Names live on AdminUser for staff, so the report can say
         # "Ravi" rather than an email address.
         names = {a.email.lower(): a.name for a in AdminUser.objects.all()}
@@ -74,6 +91,7 @@ class WorkReportView(APIView):
                 'email': email,
                 'name': names.get(email) or (email.split('@')[0] if email else 'Unattributed'),
                 'closed': 0, 'logged': 0, 'total': 0, 'minutes': 0,
+                'after_hours_minutes': after_by_person.get(email, 0),
             })
             key = 'logged' if row['origin'] == 'logged' else 'closed'
             p[key] += row['n']
@@ -95,6 +113,10 @@ class WorkReportView(APIView):
                     'how': 'Logged' if t.origin == 'logged' else 'From a ticket',
                     'for': t.logged_for or t.requested_by_name,
                     'minutes': t.time_spent_minutes,
+                    'worked_from': t.worked_from.strftime('%H:%M') if t.worked_from else None,
+                    'worked_to': t.worked_to.strftime('%H:%M') if t.worked_to else None,
+                    'after_hours_minutes': after_hours_minutes(
+                        t.performed_on, t.worked_from, t.worked_to),
                     'status': t.get_status_display(),
                 })
 
@@ -119,6 +141,8 @@ class WorkReportView(APIView):
             'from_tickets': by_origin.get('requested', 0),
             'logged_directly': by_origin.get('logged', 0),
             'minutes_recorded': minutes,
+            'after_hours_minutes': after_total,
+            'office_hours': f'{OFFICE_START:%H:%M}–{OFFICE_END:%H:%M}',
             'people': sorted(people.values(), key=lambda p: -p['total']),
             'by_category': by_category,
             'still_open': outstanding,

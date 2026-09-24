@@ -124,6 +124,13 @@ ticket is closed and when a job is logged. `performed_on` is the day the work
 happened, not the row's timestamp — closing a logged job must never move it,
 or a Friday job written up on Monday lands in the wrong month.
 
+`worktime.py` owns how long a job took and how much of it was outside office
+hours (09:30–18:30, and all of Saturday and Sunday). After-hours time is
+computed from the window worked, never claimed: "ninety minutes" reads the
+same whether it was a Tuesday afternoon or 23:00–00:30 bringing a server back.
+A job with no window recorded contributes nothing rather than counting as
+zero — silent is not the same as inside hours.
+
 Anything that counts tickets has to say which kind it means. Analytics counts
 demand, so it excludes `logged`; the work report counts output, so it includes
 both and reports the split.

@@ -270,6 +270,15 @@ class SupportTicket(models.Model):
     performed_on       = models.DateField(null=True, blank=True, db_index=True)
     time_spent_minutes = models.PositiveIntegerField(null=True, blank=True)
 
+    # The window actually worked. A duration alone cannot show WHEN: "ninety
+    # minutes" reads the same whether it was a Tuesday afternoon or from
+    # 23:00 to 00:30 bringing a server back. Someone who works late should be
+    # able to point at it, so the hours are recorded and the part of them
+    # falling outside office hours is worked out from these rather than
+    # claimed. Either end may be blank -- not every job is worth timing.
+    worked_from = models.TimeField(null=True, blank=True)
+    worked_to   = models.TimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

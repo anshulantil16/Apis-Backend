@@ -6,7 +6,7 @@ privileged endpoint took the caller's word for who they were, read from an
 ones that try to act as somebody else.
 """
 import io
-from datetime import timedelta
+from datetime import date, time, timedelta
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -15,6 +15,7 @@ from django.test.utils import override_settings as _os  # noqa: F401
 
 from .models import AdminUser, SupportTicket, TicketEvent, Employee, Room
 from .views.auth import issue_session, SUPER_ADMIN_EMAIL
+from .worktime import after_hours_minutes, duration_minutes, resolve_time
 
 API = '/api/roompulse'
 
@@ -492,3 +493,146 @@ class WhatTheMonthAddsUpTo(HelpdeskBase):
         self.assertEqual(d['tickets']['total'], 1)
         self.assertEqual(d['tickets']['logged_directly'], 1)
         self.assertEqual(d['totals']['tickets'], 2)
+
+
+class HowLongAndWhen(TestCase):
+    """The after-hours arithmetic on its own.
+
+    A duration cannot show WHEN: "ninety minutes" reads the same whether it
+    was a Tuesday afternoon or 23:00 to 00:30 bringing a server back. Someone
+    who works late should be able to point at it, so it is computed from the
+    window rather than claimed.
+    """
+
+    WED = date(2026, 9, 23)
+    SAT = date(2026, 9, 26)
+    FRI = date(2026, 9, 25)
+
+    def test_a_normal_span(self):
+        self.assertEqual(duration_minutes(time(10, 0), time(11, 30)), 90)
+
+    def test_past_midnight_is_not_a_negative_span(self):
+        """The case this exists to measure, so it is read as the next day
+        rather than as a mistake."""
+        self.assertEqual(duration_minutes(time(23, 0), time(0, 30)), 90)
+
+    def test_a_job_inside_the_working_day_is_not_after_hours(self):
+        self.assertEqual(after_hours_minutes(self.WED, time(11, 0), time(12, 0)), 0)
+
+    def test_the_part_before_the_office_opens(self):
+        self.assertEqual(after_hours_minutes(self.WED, time(8, 30), time(10, 30)), 60)
+
+    def test_the_part_after_it_closes(self):
+        self.assertEqual(after_hours_minutes(self.WED, time(18, 0), time(19, 30)), 60)
+
+    def test_a_late_night(self):
+        self.assertEqual(after_hours_minutes(self.WED, time(23, 0), time(0, 30)), 90)
+
+    def test_an_all_nighter_into_the_next_working_morning(self):
+        """22:00 to 10:30 is twelve and a half hours, of which only the hour
+        after 09:30 was inside office hours."""
+        self.assertEqual(after_hours_minutes(self.WED, time(22, 0), time(10, 30)), 690)
+
+    def test_a_saturday_is_entirely_after_hours(self):
+        self.assertEqual(after_hours_minutes(self.SAT, time(11, 0), time(13, 0)), 120)
+
+    def test_friday_night_rolling_into_saturday_stays_after_hours(self):
+        self.assertEqual(after_hours_minutes(self.FRI, time(23, 0), time(2, 0)), 180)
+
+    def test_no_window_means_no_figure_which_is_not_zero(self):
+        self.assertIsNone(after_hours_minutes(self.WED, None, None))
+
+    def test_minutes_are_derived_from_the_window(self):
+        self.assertEqual(resolve_time(self.WED, '22:00', '23:30', None)[0], 90)
+
+    def test_a_typed_duration_wins_but_the_window_still_dates_it(self):
+        """People round, and a job with a break in the middle is honestly two
+        hours of work inside a four-hour window."""
+        minutes, _, _, after = resolve_time(self.WED, '17:00', '21:00', 120)
+        self.assertEqual(minutes, 120)
+        self.assertEqual(after, 150)
+
+    def test_half_a_window_is_refused(self):
+        self.assertEqual(resolve_time(self.WED, '22:00', '', None),
+                         'Give both a start and an end time, or neither.')
+
+    def test_an_unreadable_time_is_refused(self):
+        self.assertIn('HH:MM', resolve_time(self.WED, '10 pm', '23:00', None))
+
+    def test_giving_nothing_is_fine(self):
+        self.assertIsNone(resolve_time(self.WED, '', '', None)[0])
+
+
+class TimeOnBothKindsOfWork(HelpdeskBase):
+    """Time is recorded when a ticket is closed as well as on a logged job.
+    Otherwise half the month's work carries no time and the two kinds cannot
+    be compared."""
+
+    def in_progress_ticket(self):
+        tid = self.raise_ticket().json()['id']
+        for action in ('approve', 'start'):
+            self.client.patch(f'{API}/tickets/{tid}/', {'action': action},
+                              content_type='application/json', **auth(IT_STAFF))
+        return tid
+
+    def test_closing_a_ticket_records_the_hours_worked(self):
+        tid = self.in_progress_ticket()
+        r = self.client.patch(f'{API}/tickets/{tid}/',
+                              {'action': 'close', 'worked_from': '18:00', 'worked_to': '19:30'},
+                              content_type='application/json', **auth(IT_STAFF))
+        self.assertEqual(r.status_code, 200)
+        t = SupportTicket.objects.get(id=tid)
+        self.assertEqual(t.time_spent_minutes, 90)
+        self.assertEqual(t.worked_from, time(18, 0))
+
+    def test_a_bad_time_refuses_the_close_and_changes_nothing(self):
+        """A request that is refused must leave the ticket where it was."""
+        tid = self.in_progress_ticket()
+        r = self.client.patch(f'{API}/tickets/{tid}/',
+                              {'action': 'close', 'worked_from': '9 am', 'worked_to': '10:00'},
+                              content_type='application/json', **auth(IT_STAFF))
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(SupportTicket.objects.get(id=tid).status, 'in_progress')
+
+    def test_closing_without_any_time_is_still_allowed(self):
+        """A time nobody has is worse than none — it would be a guess sitting
+        in a report."""
+        tid = self.in_progress_ticket()
+        r = self.client.patch(f'{API}/tickets/{tid}/', {'action': 'close'},
+                              content_type='application/json', **auth(IT_STAFF))
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(SupportTicket.objects.get(id=tid).time_spent_minutes)
+
+    def test_a_logged_job_takes_a_window_too(self):
+        r = self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Brought the server back up',
+            'description': 'Disk filled', 'category': 'server_storage',
+            'worked_from': '23:00', 'worked_to': '00:30',
+        }, content_type='application/json', **auth(IT_STAFF))
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()['ticket']['time_spent_minutes'], 90)
+        self.assertEqual(r.json()['ticket']['after_hours_minutes'], 90)
+
+    def test_the_month_separates_the_late_hours(self):
+        wednesday = date(2026, 9, 23)
+        for frm, to in (('23:00', '00:30'), ('14:00', '14:20')):
+            self.client.post(f'{API}/tickets/', {
+                'origin': 'logged', 'subject': f'Job {frm}', 'description': 'x',
+                'category': 'other', 'performed_on': wednesday.isoformat(),
+                'worked_from': frm, 'worked_to': to,
+            }, content_type='application/json', **auth(IT_STAFF))
+
+        d = self.client.get(f'{API}/work-report/?month=2026-09', **auth(IT_STAFF)).json()
+        self.assertEqual(d['minutes_recorded'], 110)
+        self.assertEqual(d['after_hours_minutes'], 90)
+        self.assertEqual(d['people'][0]['after_hours_minutes'], 90)
+
+    def test_a_job_with_no_window_contributes_no_late_hours(self):
+        """Not guessed at — a job nobody timed is silent, not zero-and-inside."""
+        self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Untimed', 'description': 'x',
+            'category': 'other', 'time_spent_minutes': 30,
+        }, content_type='application/json', **auth(IT_STAFF))
+        d = self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()
+        self.assertEqual(d['minutes_recorded'], 30)
+        self.assertEqual(d['after_hours_minutes'], 0)

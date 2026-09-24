@@ -13,6 +13,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import os
 
 from ..models import SupportTicket, TicketAttachment, TicketEvent
+from ..worktime import after_hours_minutes, resolve_time
 from .perms import actor_role, require_signed_in
 
 MAX_ATTACHMENTS = 10
@@ -79,6 +80,9 @@ def _brief(t, request=None):
         'performed_by_name': t.performed_by_name,
         'performed_on': t.performed_on.isoformat() if t.performed_on else None,
         'time_spent_minutes': t.time_spent_minutes,
+        'worked_from': t.worked_from.strftime('%H:%M') if t.worked_from else None,
+        'worked_to': t.worked_to.strftime('%H:%M') if t.worked_to else None,
+        'after_hours_minutes': after_hours_minutes(t.performed_on, t.worked_from, t.worked_to),
         'reviewed_by': t.reviewed_by,
         'reviewed_at': t.reviewed_at.isoformat() if t.reviewed_at else None,
         'admin_remarks': t.admin_remarks,
@@ -239,14 +243,11 @@ class TicketListView(APIView):
             return Response({'error': 'That date is over a year ago. Check the year.'},
                             status=400)
 
-        minutes = d.get('time_spent_minutes')
-        if minutes not in (None, ''):
-            try:
-                minutes = max(0, min(60 * 24, int(minutes)))
-            except (TypeError, ValueError):
-                return Response({'error': 'Time spent must be a number of minutes.'}, status=400)
-        else:
-            minutes = None
+        timing = resolve_time(performed_on, d.get('worked_from'), d.get('worked_to'),
+                              d.get('time_spent_minutes'))
+        if isinstance(timing, str):
+            return Response({'error': timing}, status=400)
+        minutes, worked_from, worked_to, _after = timing
 
         # 'closed' unless they say it is still running. Either way it is real
         # work and counts; the status only says whether it finished.
@@ -267,6 +268,7 @@ class TicketListView(APIView):
             status=done,
             performed_by_email=email, performed_by_name=actor_name[:200],
             performed_on=performed_on, time_spent_minutes=minutes,
+            worked_from=worked_from, worked_to=worked_to,
             reviewed_by=email, reviewed_at=timezone.now(),
         )
         for f in files:
@@ -340,6 +342,21 @@ class TicketActionView(APIView):
                 return Response({'error': 'Only IT Support can close a ticket.'}, status=403)
             if ticket.status != 'in_progress':
                 return Response({'error': 'Only a ticket In Progress can be closed.'}, status=400)
+            # How long it took, and when. Asked for here as well as on a
+            # logged job, or half the month's work would carry no time at all
+            # and the two kinds could not be compared.
+            timing = resolve_time(ticket.performed_on or timezone.localdate(),
+                                  request.data.get('worked_from'),
+                                  request.data.get('worked_to'),
+                                  request.data.get('time_spent_minutes'))
+            if isinstance(timing, str):
+                return Response({'error': timing}, status=400)
+            minutes, worked_from, worked_to, _after = timing
+            if minutes is not None:
+                ticket.time_spent_minutes = minutes
+            if worked_from:
+                ticket.worked_from, ticket.worked_to = worked_from, worked_to
+
             ticket.status = 'closed'
             # The two facts a monthly report needs, on the row it can group
             # by: who did this, and on what day. The history has said so all
