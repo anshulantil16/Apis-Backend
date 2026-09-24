@@ -188,6 +188,40 @@ period is indistinguishable from an empty system and the dashboard looks
 broken. It covers bookings, item requests **and** tickets — the helpdesk was
 missing from it at first, which is most of what people actually use.
 
+## Dashboard content goes through one gate
+
+Anything a person can put on the intranet home page — a vacancy, a wall photo,
+an announcement, a referral, a Daily News story — inherits
+`accounts.moderation.ModeratedContent` and **starts PENDING**. Nothing reaches
+the dashboard until a superadmin approves it, and every create, edit, approve,
+reject and delete is written to `ActivityLog`.
+
+Two rules when adding another kind:
+
+- Filter with the model's `published()` classmethod, never by hand. A view that
+  builds its own filter is how a pending row reaches the home page.
+- Add one line to `CONTENT_TYPES` in `accounts/views_moderation.py` and the
+  approval console picks it up — there is nothing else to wire.
+
+A superadmin's own submission is auto-approved: they are the approving
+authority, so queueing work for themselves adds a step without adding control.
+The activity log still records that they created it.
+
+## Daily News (`noticeboard.NewsItem`)
+
+The strip under Your Tools. Stories about the market APIS sells into — APIs,
+food APIs, nutraceuticals, honey — and about the company. Not the same thing as
+the frontend's `WHATS_NEW`, which is news about the intranet's own tools and
+ships with a build.
+
+- `published_on` is the day the story is *about*, not the day it was typed —
+  otherwise the strip claims a week-old piece broke this morning.
+- A picture is either an upload (ours, keeps working) or `image_url`
+  (someone else's, can rot). `_news()` resolves the two to one field and the
+  card falls back to a plain tile when the link dies.
+- `GET` returns the newest 12; `?scope=all` returns everything, which is what
+  "View all" and the console ask for.
+
 ## SalesIQ (`sales/`) — the two primary files
 
 `Primary sales data.xlsx` has two sheets that describe the same business

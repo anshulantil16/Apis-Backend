@@ -15,6 +15,9 @@ They are different in one way that decides how each is governed:
   nothing to queue and no ModeratedContent on it. What it does carry is the
   same audit trail: every edit is logged with who made it.
 """
+import os
+import uuid
+
 from django.db import models
 from django.utils import timezone
 
@@ -125,3 +128,93 @@ class Holiday(models.Model):
 
     def __str__(self):
         return f'{self.name} — {self.date} ({self.zone.key})'
+
+
+def news_image_path(instance, filename):
+    """Same reasoning as wall.models.photo_path — uploaded names are not to be
+    trusted, and two curators will eventually both upload 'news.jpg'."""
+    ext = os.path.splitext(filename or '')[1].lower()[:10] or '.jpg'
+    return f'news/{uuid.uuid4().hex}{ext}'
+
+
+class NewsItem(ModeratedContent):
+    """One story on the dashboard's Daily News strip.
+
+    This is news about the world the company sells into — APIs, food APIs,
+    nutraceuticals, honey — and about APIS itself. It is not news about the
+    intranet's own tools; that is the frontend's WHATS_NEW array, which is
+    developer-written and ships with a build.
+
+    Governed like an Announcement rather than like a Holiday: a holiday list
+    is a transcription only HR can make, but a useful article is most often
+    spotted by whoever happens to read the trade press. Anyone signed in may
+    put one forward, nothing appears until an administrator approves it, and
+    an administrator's own post is approved on the way in.
+
+    The failure mode of a news strip is not a wrong story, it is three-month-old
+    stories sitting under the words "latest updates". So the age of each item
+    is carried to the card and shown there, and `stale_after_days` gives the
+    console something to warn the curator with.
+    """
+
+    CATEGORY_CHOICES = [
+        ('company',        'Company'),
+        ('apis',           'APIs'),
+        ('food_apis',      'Food APIs'),
+        ('nutraceuticals', 'Nutraceuticals'),
+        ('industry',       'Industry'),
+        ('products',       'Products'),
+    ]
+
+    # A strip headed "latest updates" that has not moved in a fortnight is
+    # worse than no strip. This is what the console measures itself against.
+    STALE_AFTER_DAYS = 14
+
+    title    = models.CharField(max_length=200)
+    summary  = models.TextField(max_length=600)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='industry')
+
+    # Where it came from. Both optional: a company post has no outside source,
+    # and a curator may have the headline but not a link worth sending people to.
+    source_name = models.CharField(max_length=120, blank=True)
+    source_url  = models.URLField(max_length=500, blank=True)
+
+    # Either an uploaded file or somebody else's URL. Two fields rather than
+    # one because they fail differently: an upload is ours and keeps working,
+    # a remote URL can rot or be blocked at any time, and the card has to be
+    # able to fall back to no picture at all without looking broken.
+    image     = models.ImageField(upload_to=news_image_path, null=True, blank=True)
+    image_url = models.URLField(max_length=500, blank=True)
+
+    # The day the story is *about*. An article found late still belongs on its
+    # own date, or the strip claims a week-old piece broke this morning.
+    published_on = models.DateField(default=timezone.localdate)
+    expires_on   = models.DateField(null=True, blank=True)
+    pinned       = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-pinned', '-published_on', '-created_at']
+
+    def __str__(self):
+        return self.title
+
+    def moderation_label(self):
+        return self.title
+
+    def moderation_detail(self):
+        return {
+            'Category': self.get_category_display(),
+            'Says': self.summary[:200] + ('…' if len(self.summary) > 200 else ''),
+            'Source': self.source_name or (self.source_url or 'No source given'),
+            'Dated': self.published_on.strftime('%d %b %Y'),
+            'Pinned': 'Yes' if self.pinned else '',
+        }
+
+    @classmethod
+    def published(cls):
+        today = timezone.localdate()
+        return (cls.objects.filter(moderation_status=ModerationStatus.APPROVED)
+                .filter(models.Q(expires_on__isnull=True) | models.Q(expires_on__gte=today)))

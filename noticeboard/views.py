@@ -12,7 +12,9 @@ from rest_framework import status as http
 from accounts.auth import PortalScopedAPIView, optional_user, require_superadmin, require_user
 from accounts.moderation import ModerationStatus, log_activity
 
-from .models import Announcement, Holiday, HolidayZone
+from wall.views import _validate as validate_image
+
+from .models import Announcement, Holiday, HolidayZone, NewsItem
 
 
 def _announcement(a, viewer=None):
@@ -215,6 +217,175 @@ class HolidayDetailView(PortalScopedAPIView):
         log_activity(user, 'deleted', object_type='holiday', object_id=hid,
                      summary=f'Holiday: {label} ({zone})', request=request)
         return Response({'message': 'Holiday removed.'})
+
+
+# ── Daily News ──────────────────────────────────────────────
+def _news(n, request=None, viewer=None):
+    """One story, with its picture resolved to a single usable URL.
+
+    The card should not have to know whether a picture was uploaded here or
+    linked from elsewhere, so the choice is made once, on the way out: our own
+    file wins when there is one, because it cannot rot.
+    """
+    src = ''
+    if n.image:
+        src = n.image.url
+        if request is not None:
+            src = request.build_absolute_uri(src)
+    elif n.image_url:
+        src = n.image_url
+
+    return {
+        'id': n.id, 'title': n.title, 'summary': n.summary,
+        'category': n.category, 'categoryLabel': n.get_category_display(),
+        'sourceName': n.source_name or '', 'sourceUrl': n.source_url or '',
+        'image': src,
+        'publishedOn': n.published_on.isoformat(),
+        'expiresOn': n.expires_on.isoformat() if n.expires_on else None,
+        'pinned': n.pinned,
+        'createdAt': n.created_at.isoformat() if n.created_at else None,
+        'moderationStatus': n.moderation_status,
+        'submittedBy': n.submitted_by_name or '',
+        'reviewNote': n.review_note or '',
+        'isMine': bool(viewer and n.submitted_by_id == viewer.id),
+    }
+
+
+def _category(value):
+    allowed = {c[0] for c in NewsItem.CATEGORY_CHOICES}
+    return value if value in allowed else 'industry'
+
+
+def _read_news_fields(data):
+    """The fields a create and an edit share, validated the same way in both.
+
+    Returns (values, error). Kept together so an edit cannot quietly accept
+    something a create would have refused.
+    """
+    title = (data.get('title') or '').strip()
+    summary = (data.get('summary') or '').strip()
+    if not title or not summary:
+        return None, 'A story needs a headline and a line or two about it.'
+
+    url = (data.get('sourceUrl') or '').strip()
+    if url and not url.lower().startswith(('http://', 'https://')):
+        return None, 'The source link should start with http:// or https://'
+    image_url = (data.get('imageUrl') or '').strip()
+    if image_url and not image_url.lower().startswith(('http://', 'https://')):
+        return None, 'The image link should start with http:// or https://'
+
+    return {
+        'title': title[:200], 'summary': summary[:600],
+        'category': _category(data.get('category')),
+        'source_name': (data.get('sourceName') or '').strip()[:120],
+        'source_url': url[:500], 'image_url': image_url[:500],
+        'published_on': _date(data.get('publishedOn')) or timezone.localdate(),
+        'expires_on': _date(data.get('expiresOn')),
+    }, None
+
+
+class NewsListView(PortalScopedAPIView):
+    """GET — the strip. POST — put a story forward."""
+
+    def get(self, request):
+        viewer = optional_user(request)
+        if viewer and viewer.is_superadmin:
+            rows = NewsItem.objects.all()
+        elif viewer:
+            rows = (NewsItem.published() |
+                    NewsItem.objects.filter(submitted_by=viewer)).distinct()
+        else:
+            rows = NewsItem.published()
+
+        rows = rows.select_related('submitted_by')
+        if (request.query_params.get('scope') or '') != 'all':
+            # The dashboard strip wants the newest few; everything else is
+            # behind "View all", which asks for scope=all.
+            rows = rows[:12]
+        return Response([_news(n, request, viewer) for n in rows])
+
+    def post(self, request):
+        user, err = require_user(request)
+        if err:
+            return err
+
+        values, problem = _read_news_fields(request.data)
+        if problem:
+            return Response({'error': problem}, status=http.HTTP_400_BAD_REQUEST)
+
+        f = request.FILES.get('image')
+        if f is not None:
+            bad = validate_image(f)
+            if bad:
+                return Response({'error': bad}, status=http.HTTP_400_BAD_REQUEST)
+
+        n = NewsItem(**values)
+        if f is not None:
+            n.image = f
+        n.pinned = bool(request.data.get('pinned')) and user.is_superadmin
+        n.attribute_to(user)
+        if user.is_superadmin:
+            n.set_review(user, ModerationStatus.APPROVED, 'Posted by an administrator.')
+        n.save()
+
+        log_activity(user, 'created', n, summary='News: ' + n.title,
+                     detail={'auto_approved': user.is_superadmin,
+                             'category': n.category}, request=request)
+        return Response({
+            **_news(n, request, user),
+            'message': ('Story published.' if n.is_published else
+                        'Sent to the administrator for approval.'),
+        }, status=http.HTTP_201_CREATED)
+
+
+class NewsDetailView(PortalScopedAPIView):
+    """Superadmin edit and delete."""
+
+    def patch(self, request, pk):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        n = NewsItem.objects.filter(pk=pk).first()
+        if not n:
+            return Response({'error': 'That story is no longer here.'},
+                            status=http.HTTP_404_NOT_FOUND)
+
+        values, problem = _read_news_fields(request.data)
+        if problem:
+            return Response({'error': problem}, status=http.HTTP_400_BAD_REQUEST)
+
+        f = request.FILES.get('image')
+        if f is not None:
+            bad = validate_image(f)
+            if bad:
+                return Response({'error': bad}, status=http.HTTP_400_BAD_REQUEST)
+
+        changed = [k for k, v in values.items() if getattr(n, k) != v]
+        for k, v in values.items():
+            setattr(n, k, v)
+        if f is not None:
+            n.image = f
+            changed.append('image')
+        n.pinned = bool(request.data.get('pinned'))
+        n.save()
+
+        log_activity(user, 'edited', n, summary='News: ' + n.title,
+                     detail={'fields': ', '.join(changed) or 'no change'},
+                     request=request)
+        return Response(_news(n, request, user))
+
+    def delete(self, request, pk):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        n = NewsItem.objects.filter(pk=pk).first()
+        if not n:
+            return Response({'error': 'That story is no longer here.'},
+                            status=http.HTTP_404_NOT_FOUND)
+        title = n.title
+        log_activity(user, 'deleted', n, summary='News: ' + title, request=request)
+        n.delete()
+        return Response({'message': 'Story removed.'})
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────

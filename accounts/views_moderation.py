@@ -17,6 +17,7 @@ CONTENT_TYPES = {
     'vacancy':   {'model': ('vacancies', 'Vacancy'),  'label': 'Vacancies'},
     'wallphoto': {'model': ('wall', 'WallPhoto'),     'label': 'APIS Wall'},
     'announcement': {'model': ('noticeboard', 'Announcement'), 'label': 'Announcements'},
+    'news':      {'model': ('noticeboard', 'NewsItem'),   'label': 'Daily News'},
     'referral':  {'model': ('referrals', 'EmployeeReferral'), 'label': 'Referrals'},
 }
 
