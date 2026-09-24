@@ -9,6 +9,7 @@
     admins.py        Super Admin admin/IT-Support roster management
     analytics.py      utilisation stats for Admin/Super Admin
     work_report.py    what IT/Admin did in a month — tickets closed AND work logged
+    overview.py       Super Admin's one screen: what is waiting, what is live, what is wrong
     reset.py          Super Admin full database reset
 
 Re-exported here so urls.py sees one flat namespace.
@@ -22,6 +23,7 @@ from .employees import *         # noqa: F401,F403
 from .admins import *            # noqa: F401,F403
 from .analytics import *         # noqa: F401,F403
 from .work_report import *       # noqa: F401,F403
+from .overview import *          # noqa: F401,F403
 from .reset import *             # noqa: F401,F403
 
 from .auth import resolve_role, SUPER_ADMIN_EMAIL

@@ -13,8 +13,10 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from django.test.utils import override_settings as _os  # noqa: F401
 
+from accounts.models import PortalUser
+
 from .models import AdminUser, SupportTicket, TicketEvent, Employee, Room
-from .views.auth import issue_session, SUPER_ADMIN_EMAIL
+from .views.auth import issue_session, resolve_role, SUPER_ADMIN_EMAIL
 from .worktime import after_hours_minutes, duration_minutes, resolve_time
 
 API = '/api/roompulse'
@@ -636,3 +638,187 @@ class TimeOnBothKindsOfWork(HelpdeskBase):
         d = self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()
         self.assertEqual(d['minutes_recorded'], 30)
         self.assertEqual(d['after_hours_minutes'], 0)
+
+
+class TheEmployeeMaster(HelpdeskBase):
+    """The list comes from the company directory, not a spreadsheet uploaded
+    every time somebody joins or leaves."""
+
+    def setUp(self):
+        super().setUp()
+        PortalUser.objects.create(employee_code='E001', name='Priya Sharma',
+                                  email='priya.sharma@gmail.com', department='Accounts',
+                                  is_active=True)
+        PortalUser.objects.create(employee_code='E002', name='Ravi Kumar',
+                                  email='ravi@apisindia.com', department='IT', is_active=True)
+        PortalUser.objects.create(employee_code='E003', name='Left Already',
+                                  email='gone@gmail.com', is_active=False)
+        PortalUser.objects.create(employee_code='E004', name='No Address', email='')
+
+    def sync(self):
+        return self.client.post(f'{API}/employees/sync/', **auth(SUPER_ADMIN_EMAIL))
+
+    def test_only_the_super_admin_may_sync(self):
+        self.assertEqual(self.client.post(f'{API}/employees/sync/',
+                                          **auth(EMPLOYEE)).status_code, 403)
+
+    def test_it_brings_people_in(self):
+        d = self.sync().json()
+        self.assertEqual(d['created'], 3)
+        self.assertEqual(d['skipped_no_email'], 1)
+
+    def test_somebody_with_no_email_is_skipped_not_invented(self):
+        """Identity here IS the email address — a row without one could never
+        be matched to anybody signing in."""
+        self.sync()
+        self.assertFalse(Employee.objects.filter(name='No Address').exists())
+
+    def test_a_leaver_is_marked_not_deleted(self):
+        """Their name is on tickets they raised; a directory that forgets them
+        makes that history unreadable."""
+        self.sync()
+        self.assertFalse(Employee.objects.get(email='gone@gmail.com').is_active)
+
+    def test_running_it_twice_duplicates_nobody(self):
+        self.sync()
+        self.assertEqual(self.sync().json()['created'], 0)
+        self.assertEqual(Employee.objects.count(), 3)
+
+    def test_somebody_added_by_hand_survives_a_sync(self):
+        """They are here BECAUSE they are not in HRMS, so a sync can never
+        bring them back — taking them out would be unrecoverable."""
+        self.client.post(f'{API}/employees/add/',
+                         {'email': 'contractor@vendor.com', 'name': 'Contractor'},
+                         content_type='application/json', **auth(SUPER_ADMIN_EMAIL))
+        self.sync()
+        row = Employee.objects.get(email='contractor@vendor.com')
+        self.assertTrue(row.is_active)
+        self.assertEqual(row.source, 'manual')
+
+    def test_clearing_keeps_them_too(self):
+        self.sync()
+        self.client.post(f'{API}/employees/add/',
+                         {'email': 'contractor@vendor.com', 'name': 'Contractor'},
+                         content_type='application/json', **auth(SUPER_ADMIN_EMAIL))
+        self.client.delete(f'{API}/employees/', **auth(SUPER_ADMIN_EMAIL))
+        self.assertEqual(Employee.objects.count(), 1)
+        self.assertEqual(Employee.objects.first().source, 'manual')
+
+    def test_being_on_the_directory_is_what_makes_you_an_employee(self):
+        """The rule was "anything @apisindia.com", and only about a quarter of
+        the company has such an address."""
+        self.sync()
+        self.assertEqual(resolve_role('priya.sharma@gmail.com'), 'employee')
+
+    def test_somebody_who_has_left_cannot_sign_in(self):
+        self.sync()
+        self.assertIsNone(resolve_role('gone@gmail.com'))
+
+    def test_a_stranger_still_cannot(self):
+        self.sync()
+        self.assertIsNone(resolve_role('attacker@gmail.com'))
+
+    def test_a_company_address_still_works_as_a_fallback(self):
+        """So nobody who can sign in today is locked out by this."""
+        self.assertEqual(resolve_role('someone.new@apisindia.com'), 'employee')
+
+    def test_the_whole_staff_list_is_not_public(self):
+        """Every name, email and department — readable by anyone signed in,
+        which is most of the company."""
+        self.sync()
+        self.assertEqual(self.client.get(f'{API}/employees/', **auth(EMPLOYEE)).status_code, 403)
+
+
+class SayingWhoHandlesWhat(HelpdeskBase):
+    """One control per person, because from the screen it is one decision."""
+
+    def setUp(self):
+        super().setUp()
+        Employee.objects.create(email='ravi@apisindia.com', name='Ravi Kumar',
+                                source='directory', is_active=True)
+
+    def set_role(self, scope, email='ravi@apisindia.com', who=SUPER_ADMIN_EMAIL):
+        return self.client.post(f'{API}/admins/role/', {'email': email, 'scope': scope},
+                                content_type='application/json', **auth(who))
+
+    def test_making_somebody_it_support(self):
+        self.assertEqual(self.set_role('it_support').status_code, 201)
+        self.assertEqual(resolve_role('ravi@apisindia.com'), 'it_support')
+
+    def test_changing_their_role_in_one_call(self):
+        self.set_role('it_support')
+        self.assertEqual(self.set_role('admin').status_code, 200)
+        self.assertEqual(resolve_role('ravi@apisindia.com'), 'admin')
+        self.assertEqual(AdminUser.objects.filter(email='ravi@apisindia.com').count(), 1)
+
+    def test_taking_it_away_again(self):
+        self.set_role('admin')
+        self.set_role('employee')
+        self.assertEqual(resolve_role('ravi@apisindia.com'), 'employee')
+        self.assertFalse(AdminUser.objects.filter(email='ravi@apisindia.com').exists())
+
+    def test_the_directory_shows_the_change(self):
+        self.set_role('it_support')
+        self.assertEqual(Employee.objects.get(email='ravi@apisindia.com').role, 'it_support')
+
+    def test_an_employee_cannot_promote_themselves(self):
+        self.assertEqual(self.set_role('admin', email=EMPLOYEE, who=EMPLOYEE).status_code, 403)
+
+    def test_the_super_admin_cannot_be_demoted_here(self):
+        self.assertEqual(self.set_role('employee', email=SUPER_ADMIN_EMAIL).status_code, 400)
+
+    def test_an_invented_role_is_refused(self):
+        self.assertEqual(self.set_role('wizard').status_code, 400)
+
+    def test_a_directory_person_cannot_be_removed_by_hand(self):
+        """A removal here would last until the next sync — a confusing way to
+        lose work."""
+        row = Employee.objects.get(email='ravi@apisindia.com')
+        self.assertEqual(self.client.delete(f'{API}/employees/{row.id}/',
+                                            **auth(SUPER_ADMIN_EMAIL)).status_code, 400)
+
+
+class TheOverview(HelpdeskBase):
+    """The Super Admin's one screen. Everything on it was visible somewhere
+    already; the point is noticing, which does not happen across five tabs."""
+
+    def overview(self, who=SUPER_ADMIN_EMAIL):
+        return self.client.get(f'{API}/overview/', **auth(who))
+
+    def test_it_is_the_super_admins_alone(self):
+        self.assertEqual(self.overview(EMPLOYEE).status_code, 403)
+        self.assertEqual(self.overview(IT_STAFF).status_code, 403)
+        self.assertEqual(self.client.get(f'{API}/overview/').status_code, 401)
+
+    def test_it_says_when_nobody_is_assigned_to_a_queue(self):
+        """A helpdesk with no IT Support accepts tickets and never answers
+        them, and nothing on screen said so."""
+        AdminUser.objects.all().delete()
+        said = ' '.join(self.overview().json()['problems']).lower()
+        self.assertIn('it support', said)
+        self.assertIn('admin', said)
+
+    def test_a_forgotten_request_is_counted_as_forgotten(self):
+        t = SupportTicket.objects.create(requested_by_name='P', requested_by_email=EMPLOYEE,
+                                         subject='VPN down', status='pending')
+        SupportTicket.objects.filter(id=t.id).update(
+            created_at=timezone.now() - timedelta(days=9))
+        d = self.overview().json()
+        row = next(w for w in d['waiting'] if 'IT tickets' in w['what'])
+        self.assertEqual(row['oldest_days'], 9)
+        self.assertEqual(row['stale'], 1)
+        self.assertEqual(d['stale_total'], 1)
+
+    def test_logged_work_is_not_counted_as_a_waiting_request(self):
+        self.client.post(f'{API}/tickets/', {'origin': 'logged', 'subject': 'Restarted a server',
+                                             'description': 'x', 'category': 'server_storage'},
+                         content_type='application/json', **auth(IT_STAFF))
+        d = self.overview().json()
+        row = next(w for w in d['waiting'] if 'IT tickets' in w['what'])
+        self.assertEqual(row['count'], 0)
+        self.assertEqual(d['today']['jobs_done'], 1)
+
+    def test_an_out_of_date_directory_is_noticed(self):
+        Employee.objects.create(email='p@apisindia.com', name='P', source='directory',
+                                is_active=True, synced_at=timezone.now() - timedelta(days=45))
+        self.assertTrue(any('last synced' in p for p in self.overview().json()['problems']))

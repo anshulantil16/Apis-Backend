@@ -105,6 +105,17 @@ admin endpoints with `require_admin(request)`.
 there — no manager on file, an id naming nobody, someone who has left. Without
 it a sheet lands at a stage nobody can act at and only the admin can free it.
 
+## The Super Admin's overview
+
+`views/overview.py` is one call answering three questions: what is waiting on
+somebody (with how long the oldest has waited), what is happening right now,
+and whether the setup itself is broken — nobody assigned to a queue, no rooms,
+an empty or stale directory. All of it was visible somewhere already across
+five tabs, which is fine for doing a job and useless for noticing one.
+
+Anything actionable carries the number that makes it actionable: a queue's
+depth means little, `oldest_days` and `stale` are what someone acts on.
+
 ## The employee master comes from the directory
 
 `accounts.PortalUser` is the company directory, synced from HRMS. AdminPulse
