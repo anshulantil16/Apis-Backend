@@ -1,4 +1,6 @@
 from django.urls import path
+
+from .attachments import AttachmentView
 from .views import (
     RoomPulseLoginView, RoomListView, RoomDetailView,
     BookingListView, BookingActionView, RoomCalendarView,
@@ -11,6 +13,9 @@ from .views import (
 )
 
 urlpatterns = [
+    # Signed, expiring links to ticket attachments. Under /api/ so the
+    # proxy forwards it, unlike /media/.
+    path('attachments/<str:token>/', AttachmentView.as_view()),
     path('login/', RoomPulseLoginView.as_view()),
 
     path('rooms/', RoomListView.as_view()),

@@ -130,6 +130,12 @@ class ResourceRequestActionView(APIView):
     """
 
     def patch(self, request, request_id):
+        # Authentication before authorisation. Without this an expired
+        # session reaches the role check as role=None and is answered "you are
+        # not an admin", which is both wrong and unactionable -- and a 403
+        # does not make the client drop the dead session the way a 401 does.
+        if (err := require_signed_in(request)):
+            return err
         try:
             req = ResourceRequest.objects.get(id=request_id)
         except ResourceRequest.DoesNotExist:

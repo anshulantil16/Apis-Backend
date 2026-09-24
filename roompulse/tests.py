@@ -15,7 +15,8 @@ from django.test.utils import override_settings as _os  # noqa: F401
 
 from accounts.models import PortalUser
 
-from .models import AdminUser, SupportTicket, TicketEvent, Employee, Room
+from .models import (AdminUser, BookingRequest, SupportTicket, TicketEvent,
+                     Employee, Room)
 from .views.auth import issue_session, resolve_role, SUPER_ADMIN_EMAIL
 from .worktime import after_hours_minutes, duration_minutes, resolve_time
 
@@ -822,3 +823,88 @@ class TheOverview(HelpdeskBase):
         Employee.objects.create(email='p@apisindia.com', name='P', source='directory',
                                 is_active=True, synced_at=timezone.now() - timedelta(days=45))
         self.assertTrue(any('last synced' in p for p in self.overview().json()['problems']))
+
+
+class AnExpiredSessionSaysSo(HelpdeskBase):
+    """A session that has aged out must answer 401, not "you are not an admin".
+
+    actor_role gives (None, '') for an expired token -- the same shape as a
+    signed-in employee without the role. Handlers that checked the role first
+    told an admin looking at the approvals screen that only an admin could
+    approve, which is both wrong and unactionable.
+
+    It also left the app stuck: rpFetch signs out on a 401 and ignores a 403,
+    so the dead session survived until somebody reloaded by hand. That is why
+    the report said a hard refresh "fixed" it.
+    """
+
+    DEAD = {'HTTP_X_ADMINPULSE_SESSION': 'expired-or-forged-token'}
+
+    def test_approving_a_booking(self):
+        r = self.client.patch(f'{API}/bookings/1/', {'action': 'approve'},
+                              content_type='application/json', **self.DEAD)
+        self.assertEqual(r.status_code, 401, r.content[:120])
+
+    def test_approving_an_item_request(self):
+        r = self.client.patch(f'{API}/resource-requests/1/', {'action': 'approve'},
+                              content_type='application/json', **self.DEAD)
+        self.assertEqual(r.status_code, 401, r.content[:120])
+
+    def test_acting_on_a_ticket(self):
+        r = self.client.patch(f'{API}/tickets/1/', {'action': 'approve'},
+                              content_type='application/json', **self.DEAD)
+        self.assertEqual(r.status_code, 401, r.content[:120])
+
+    def test_the_message_does_not_blame_the_role(self):
+        """The old answer sent somebody hunting for a permissions problem that
+        was not there."""
+        r = self.client.patch(f'{API}/resource-requests/1/', {'action': 'approve'},
+                              content_type='application/json', **self.DEAD)
+        self.assertNotIn('admin', (r.json().get('error') or '').lower())
+
+    def test_a_real_admin_is_still_allowed(self):
+        """The guard must not have broken the case it sits in front of."""
+        AdminUser.objects.create(email='meena@apisindia.com', name='Meena', scope='admin')
+        r = self.client.patch(f'{API}/resource-requests/999999/', {'action': 'approve'},
+                              content_type='application/json',
+                              **auth('meena@apisindia.com'))
+        # 404 for the missing row, not 401/403: they got past both gates.
+        self.assertEqual(r.status_code, 404, r.content[:120])
+
+
+class TheRoomGridIsNotPublic(HelpdeskBase):
+    """It carries who is meeting where and until when."""
+
+    def test_an_unsigned_caller_is_refused(self):
+        self.assertEqual(self.client.get(f'{API}/rooms/').status_code, 401)
+
+    def test_any_signed_in_employee_still_sees_it(self):
+        self.assertEqual(self.client.get(f'{API}/rooms/', **auth(EMPLOYEE)).status_code, 200)
+
+
+class PendingBookingsAreVisible(HelpdeskBase):
+    """Booking a room and being told it went for approval, then seeing the room
+    say "nothing booked today", left no way to tell the request existed -- and
+    invited the next person to ask for the same slot."""
+
+    def test_a_pending_request_shows_on_the_room(self):
+        room = Room.objects.filter(is_active=True).first()
+        today = timezone.localdate()
+        BookingRequest.objects.create(
+            room=room, requested_by_name='Ravi', requested_by_email=IT_STAFF,
+            date=today, start_time=time(15, 0), end_time=time(16, 0),
+            purpose='internal_meeting', status='pending')
+        grid = self.client.get(f'{API}/rooms/', **auth(IT_STAFF)).json()['results']
+        mine = next(r for r in grid if r['id'] == room.id)
+        self.assertEqual(len(mine['pending']), 1)
+        self.assertEqual(mine['pending'][0]['requested_by_name'], 'Ravi')
+
+    def test_an_approved_one_is_not_listed_as_pending(self):
+        room = Room.objects.filter(is_active=True).first()
+        BookingRequest.objects.create(
+            room=room, requested_by_name='Ravi', requested_by_email=IT_STAFF,
+            date=timezone.localdate(), start_time=time(15, 0), end_time=time(16, 0),
+            purpose='internal_meeting', status='approved')
+        grid = self.client.get(f'{API}/rooms/', **auth(IT_STAFF)).json()['results']
+        mine = next(r for r in grid if r['id'] == room.id)
+        self.assertEqual(mine['pending'], [])

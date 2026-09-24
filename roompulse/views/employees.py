@@ -14,6 +14,10 @@ from .auth import SUPER_ADMIN_EMAIL
 
 class EmployeeTemplateView(APIView):
     def get(self, request):
+        # The template itself is blank, but it is an internal form and every
+        # other employee endpoint here is signed-in only.
+        if (err := require_role(request, 'admin', 'it_support', 'super_admin')):
+            return err
         buf = build_template()
         resp = HttpResponse(
             buf.read(),

@@ -12,6 +12,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 import os
 
+from ..attachments import url_for as attachment_url
 from ..models import SupportTicket, TicketAttachment, TicketEvent
 from ..worktime import after_hours_minutes, resolve_time
 from .perms import actor_role, require_signed_in
@@ -62,8 +63,10 @@ def _log(ticket, action, role, email, remarks='', from_status=''):
 
 def _brief(t, request=None):
     def _url(a):
-        u = a.file.url
-        return request.build_absolute_uri(u) if request else u
+        # A signed path under /api/, not /media/. See roompulse/attachments.py:
+        # the old link was unauthenticated and, behind the proxy, often pointed
+        # at a host the browser could not reach.
+        return attachment_url(a)
     return {
         'id': t.id, 'kind': 'ticket',
         'requested_by_name': t.requested_by_name, 'requested_by_email': t.requested_by_email,
@@ -294,6 +297,12 @@ class TicketActionView(APIView):
     """
 
     def patch(self, request, ticket_id):
+        # Authentication before authorisation. Without this an expired
+        # session reaches the role check as role=None and is answered "you are
+        # not an admin", which is both wrong and unactionable -- and a 403
+        # does not make the client drop the dead session the way a 401 does.
+        if (err := require_signed_in(request)):
+            return err
         try:
             ticket = SupportTicket.objects.get(id=ticket_id)
         except SupportTicket.DoesNotExist:

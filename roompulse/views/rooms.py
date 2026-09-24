@@ -5,16 +5,29 @@ from rest_framework.response import Response
 
 from ..models import Room, BookingRequest
 from ..status import room_status
-from .perms import require_role
+from .perms import require_role, require_signed_in
 
 
-def _serialize_room(room, bookings_by_room, now):
+def _serialize_room(room, bookings_by_room, now, pending_by_room=None):
     st = room_status(room, bookings_by_room.get(room.id, []), now=now)
+    waiting = (pending_by_room or {}).get(room.id, [])
     return {
         'id': room.id, 'name': room.name, 'label': room.label,
         'floor': room.floor, 'capacity': room.capacity,
         'amenities': room.amenities, 'color': room.color,
         'is_active': room.is_active,
+        # Requests for today that nobody has approved yet. The grid used to
+        # show approved bookings alone, so booking a room and being told it had
+        # gone for approval was followed by that room saying "nothing booked" --
+        # with no way to tell whether the request existed. It also invited two
+        # people to ask for the same slot in turn.
+        'pending': [{
+            'id': b.id,
+            'start_time': b.start_time.strftime('%H:%M'),
+            'end_time': b.end_time.strftime('%H:%M'),
+            'requested_by_name': b.requested_by_name,
+            'requested_by_email': b.requested_by_email,
+        } for b in waiting],
         **st,
     }
 
@@ -25,6 +38,12 @@ class RoomListView(APIView):
     POST: create a room (Super Admin only)."""
 
     def get(self, request):
+        # It said "any logged-in role" and meant "anybody at all". The grid
+        # carries who is meeting where and until when, which is not something
+        # to hand to an unauthenticated caller on a server reachable from the
+        # internet.
+        if (err := require_signed_in(request)):
+            return err
         # The project's clock, not the machine's. This was datetime.now(),
         # which reads the server's OS timezone -- on a UTC host that put the
         # whole live grid 5.5 hours away from the times people had typed in.
@@ -34,8 +53,17 @@ class RoomListView(APIView):
         by_room = {}
         for b in today_bookings:
             by_room.setdefault(b.room_id, []).append(b)
-        return Response({'results': [_serialize_room(r, by_room, now) for r in rooms],
-                         'count': len(rooms)})
+
+        pending_by_room = {}
+        for b in (BookingRequest.objects
+                  .filter(status='pending', date=now.date())
+                  .order_by('start_time')):
+            pending_by_room.setdefault(b.room_id, []).append(b)
+
+        return Response({
+            'results': [_serialize_room(r, by_room, now, pending_by_room) for r in rooms],
+            'count': len(rooms),
+        })
 
     def post(self, request):
         if (err := require_role(request, 'super_admin')):
