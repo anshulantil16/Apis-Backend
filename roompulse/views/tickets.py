@@ -5,6 +5,7 @@ done: 'start' (approved -> in_progress) and 'close' (in_progress -> closed).
 """
 from datetime import datetime
 
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -127,7 +128,14 @@ class TicketListView(APIView):
               .prefetch_related('attachments', 'events'))
         # An employee sees their own tickets. Only IT Support and the super
         # admin see everybody's.
-        if role not in ('it_support', 'super_admin'):
+        if role == 'admin':
+            # An admin is not IT triage, so they do not get everybody's
+            # tickets. But the work log is theirs as much as IT's -- they log
+            # into it, and the monthly report already shows them all of it.
+            # Excluding it here was why a job an admin had just logged
+            # appeared nowhere afterwards: saved, counted, and invisible.
+            qs = qs.filter(Q(origin='logged') | Q(requested_by_email=email))
+        elif role != 'it_support' and role != 'super_admin':
             # Their own tickets, and never the team's internal work log --
             # that is a record of what IT did, not correspondence with them.
             qs = qs.filter(requested_by_email=email).exclude(origin='logged')
@@ -174,8 +182,14 @@ class TicketListView(APIView):
         is_logged = str(d.get('origin') or '').strip() == 'logged'
         allowed = (SupportTicket.CATEGORY_CHOICES if is_logged
                    else SupportTicket.IT_CATEGORY_CHOICES)
-        category = str(d.get('category') or 'other').strip()
+        category = str(d.get('category') or '').strip()
         if category not in {c[0] for c in allowed}:
+            if is_logged:
+                # A logged job is a record, and a record filed under the wrong
+                # heading is worse than one that was refused: the monthly
+                # report groups by this, and nobody goes back to correct it.
+                return Response({'error': 'Pick the category this job belongs to.'},
+                                status=400)
             category = 'other'
         priority = str(d.get('priority') or 'medium').strip()
         if priority not in {c[0] for c in SupportTicket.PRIORITY_CHOICES}:
@@ -234,6 +248,21 @@ class TicketListView(APIView):
         for something done on Friday -- and it belongs to the day the work
         happened, not the day someone found time to type it in.
         """
+        # Everything on the form is required. A record with the hours or who
+        # it was for left blank cannot be reported on -- it counts as one job
+        # and answers nothing else -- and a field that is optional on a form
+        # people fill in daily is a field that is empty.
+        #
+        # The date is the exception: it is not in this list because leaving it
+        # out means today, which is the truth for most of what gets logged and
+        # is never a guess. The form fills it in regardless.
+        for field, complaint in (
+                ('logged_for',   'Say who or what this job was for.'),
+                ('worked_from',  'Give the time you started.'),
+                ('worked_to',    'Give the time you finished.')):
+            if not str(d.get(field) or '').strip():
+                return Response({'error': complaint}, status=400)
+
         today = timezone.localdate()
         raw_date = str(d.get('performed_on') or '').strip()
         if raw_date:
@@ -258,6 +287,9 @@ class TicketListView(APIView):
         if isinstance(timing, str):
             return Response({'error': timing}, status=400)
         minutes, worked_from, worked_to, _after = timing
+        if not minutes:
+            return Response({'error': 'How long did it take? Give the hours, or the minutes.'},
+                            status=400)
 
         # 'closed' unless they say it is still running. Either way it is real
         # work and counts; the status only says whether it finished.

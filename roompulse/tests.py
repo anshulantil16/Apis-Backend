@@ -346,6 +346,7 @@ class LoggingWorkNobodyAskedFor(HelpdeskBase):
         body = {'origin': 'logged', 'subject': 'Restarted the mail server',
                 'description': 'Queue was stuck; restarted it and cleared the backlog.',
                 'category': 'server_storage', 'time_spent_minutes': 45,
+                'worked_from': '10:00', 'worked_to': '10:45',
                 'logged_for': 'Whole office'}
         body.update(over)
         return self.client.post(f'{API}/tickets/', body,
@@ -411,6 +412,8 @@ class LoggingWorkNobodyAskedFor(HelpdeskBase):
     def test_a_logged_job_cannot_smuggle_a_dangerous_attachment(self):
         r = self.client.post(f'{API}/tickets/', {
             'origin': 'logged', 'subject': 's', 'description': 'd',
+            'category': 'other', 'logged_for': 'x',
+            'worked_from': '10:00', 'worked_to': '10:30',
             'attachments': SimpleUploadedFile('payload.html', b'<script>')}, **auth(IT_STAFF))
         self.assertEqual(r.status_code, 400)
 
@@ -433,7 +436,8 @@ class WhatTheMonthAddsUpTo(HelpdeskBase):
 
     def log_one(self, **over):
         body = {'origin': 'logged', 'subject': 'Rebuilt a laptop', 'description': 'Joiner setup',
-                'category': 'it_asset_request', 'time_spent_minutes': 30}
+                'category': 'it_asset_request', 'time_spent_minutes': 30,
+                'worked_from': '11:00', 'worked_to': '11:30', 'logged_for': 'A joiner'}
         body.update(over)
         return self.client.post(f'{API}/tickets/', body,
                                 content_type='application/json', **auth(IT_STAFF))
@@ -611,7 +615,7 @@ class TimeOnBothKindsOfWork(HelpdeskBase):
         r = self.client.post(f'{API}/tickets/', {
             'origin': 'logged', 'subject': 'Brought the server back up',
             'description': 'Disk filled', 'category': 'server_storage',
-            'worked_from': '23:00', 'worked_to': '00:30',
+            'logged_for': 'Whole office', 'worked_from': '23:00', 'worked_to': '00:30',
         }, content_type='application/json', **auth(IT_STAFF))
         self.assertEqual(r.status_code, 201)
         self.assertEqual(r.json()['ticket']['time_spent_minutes'], 90)
@@ -623,7 +627,7 @@ class TimeOnBothKindsOfWork(HelpdeskBase):
             self.client.post(f'{API}/tickets/', {
                 'origin': 'logged', 'subject': f'Job {frm}', 'description': 'x',
                 'category': 'other', 'performed_on': wednesday.isoformat(),
-                'worked_from': frm, 'worked_to': to,
+                'logged_for': 'Whole office', 'worked_from': frm, 'worked_to': to,
             }, content_type='application/json', **auth(IT_STAFF))
 
         d = self.client.get(f'{API}/work-report/?month=2026-09', **auth(IT_STAFF)).json()
@@ -632,10 +636,14 @@ class TimeOnBothKindsOfWork(HelpdeskBase):
         self.assertEqual(d['people'][0]['after_hours_minutes'], 90)
 
     def test_a_job_with_no_window_contributes_no_late_hours(self):
-        """Not guessed at — a job nobody timed is silent, not zero-and-inside."""
-        self.client.post(f'{API}/tickets/', {
-            'origin': 'logged', 'subject': 'Untimed', 'description': 'x',
-            'category': 'other', 'time_spent_minutes': 30,
+        """Not guessed at — a job nobody timed is silent, not zero-and-inside.
+
+        Logging now asks for the hours, so this comes in the other way: a
+        ticket closed with a duration but no window, which is still allowed
+        because a closer often knows how long it took and not when."""
+        tid = self.in_progress_ticket()
+        self.client.patch(f'{API}/tickets/{tid}/', {
+            'action': 'close', 'time_spent_minutes': 30,
         }, content_type='application/json', **auth(IT_STAFF))
         d = self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()
         self.assertEqual(d['minutes_recorded'], 30)
@@ -812,9 +820,11 @@ class TheOverview(HelpdeskBase):
         self.assertEqual(d['stale_total'], 1)
 
     def test_logged_work_is_not_counted_as_a_waiting_request(self):
-        self.client.post(f'{API}/tickets/', {'origin': 'logged', 'subject': 'Restarted a server',
-                                             'description': 'x', 'category': 'server_storage'},
-                         content_type='application/json', **auth(IT_STAFF))
+        self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Restarted a server', 'description': 'x',
+            'category': 'server_storage', 'logged_for': 'Whole office',
+            'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(IT_STAFF))
         d = self.overview().json()
         row = next(w for w in d['waiting'] if 'IT tickets' in w['what'])
         self.assertEqual(row['count'], 0)
@@ -928,6 +938,7 @@ class AnAdminsWorkIsAdminWork(HelpdeskBase):
             'origin': 'logged', 'subject': 'Got the pantry tap fixed',
             'description': 'Plumber came at 11.', 'category': category,
             'performed_by_name': 'Meena', 'time_spent_minutes': 45,
+            'logged_for': 'The pantry', 'worked_from': '11:00', 'worked_to': '11:45',
         }, content_type='application/json', **auth(email))
 
     def test_an_admin_can_file_a_job_under_an_admin_category(self):
@@ -1009,3 +1020,80 @@ class AnAdminsWorkIsAdminWork(HelpdeskBase):
         r = self.client.get(f'{API}/work-report/export/', **auth(ADMIN_STAFF))
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.content[:2] == b'PK', 'not a workbook')
+
+
+class ALoggedJobHasToBeWorthReportingOn(HelpdeskBase):
+    """Half-filled records are what make a monthly report unanswerable: it can
+    say a job happened and nothing else. Every field on the form is required,
+    and the server is where that is decided -- a form can be bypassed."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=ADMIN_STAFF, name='Meena', scope='admin')
+
+    def log(self, **over):
+        body = {'origin': 'logged', 'subject': 'Rebuilt a laptop',
+                'description': 'Joiner setup', 'category': 'it_asset_request',
+                'logged_for': 'A joiner', 'worked_from': '10:00', 'worked_to': '10:45'}
+        body.update(over)
+        return self.client.post(f'{API}/tickets/', body,
+                                content_type='application/json', **auth(IT_STAFF))
+
+    def test_a_complete_one_is_accepted(self):
+        self.assertEqual(self.log().status_code, 201)
+
+    def test_who_it_was_for_is_required(self):
+        r = self.log(logged_for='')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('who', r.json()['error'].lower())
+
+    def test_both_ends_of_the_window_are_required(self):
+        self.assertEqual(self.log(worked_from='').status_code, 400)
+        self.assertEqual(self.log(worked_to='').status_code, 400)
+
+    def test_a_category_must_be_chosen_not_defaulted(self):
+        """It used to fall back to 'Other' without saying so, which is how
+        'Other' became the biggest slice of an admin's report."""
+        r = self.log(category='')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('category', r.json()['error'].lower())
+
+    def test_a_category_from_the_wrong_side_is_refused_not_silently_changed(self):
+        r = self.log(category='not_a_real_category')
+        self.assertEqual(r.status_code, 400)
+
+    def test_a_job_that_took_no_time_is_refused(self):
+        self.assertEqual(self.log(worked_from='10:00', worked_to='10:00').status_code, 400)
+
+
+class AnAdminCanSeeWhatTheyLogged(HelpdeskBase):
+    """The list treated an admin as an ordinary employee and then excluded the
+    work log outright, so a job an admin had just logged was saved, counted,
+    and visible nowhere -- which reads exactly like it did not save."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=ADMIN_STAFF, name='Meena', scope='admin')
+        r = self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Got the pantry tap fixed',
+            'description': 'Plumber came at 11.', 'category': 'plumbing',
+            'logged_for': 'The pantry', 'worked_from': '11:00', 'worked_to': '11:45',
+        }, content_type='application/json', **auth(ADMIN_STAFF))
+        self.assertEqual(r.status_code, 201, r.content[:200])
+
+    def rows(self, email):
+        return self.client.get(f'{API}/tickets/?limit=500', **auth(email)).json()['results']
+
+    def test_the_admin_who_logged_it_can_see_it(self):
+        logged = [r for r in self.rows(ADMIN_STAFF) if r['origin'] == 'logged']
+        self.assertEqual(len(logged), 1)
+        self.assertEqual(logged[0]['subject'], 'Got the pantry tap fixed')
+
+    def test_an_employee_still_cannot(self):
+        self.assertTrue(all(r['origin'] != 'logged' for r in self.rows(EMPLOYEE)))
+
+    def test_an_admin_does_not_inherit_it_support_triage(self):
+        """Seeing the work log is not the same as seeing everybody's tickets."""
+        self.raise_ticket()          # an employee's IT ticket
+        subjects = [r['subject'] for r in self.rows(ADMIN_STAFF)]
+        self.assertNotIn('Laptop will not boot', subjects)
