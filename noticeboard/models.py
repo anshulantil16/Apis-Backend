@@ -192,6 +192,15 @@ class NewsItem(ModeratedContent):
     expires_on   = models.DateField(null=True, blank=True)
     pinned       = models.BooleanField(default=False)
 
+    # Where this came from. Null for a story somebody typed; set for one a
+    # scheduled fetch brought in, which is what makes "delete everything this
+    # feed ever produced" possible when a source turns out to be noise.
+    source_ref = models.ForeignKey('NewsSource', null=True, blank=True,
+                                   on_delete=models.SET_NULL, related_name='items')
+    # The feed's own id for the story. Feeds re-publish the same item with a
+    # changed link often enough that the link alone is not a safe key.
+    external_id = models.CharField(max_length=500, blank=True, db_index=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -200,6 +209,10 @@ class NewsItem(ModeratedContent):
 
     def __str__(self):
         return self.title
+
+    @property
+    def is_fetched(self):
+        return self.source_ref_id is not None
 
     def moderation_label(self):
         return self.title
@@ -218,3 +231,92 @@ class NewsItem(ModeratedContent):
         today = timezone.localdate()
         return (cls.objects.filter(moderation_status=ModerationStatus.APPROVED)
                 .filter(models.Q(expires_on__isnull=True) | models.Q(expires_on__gte=today)))
+
+
+class NewsSource(models.Model):
+    """A feed the Daily News strip pulls from on a schedule.
+
+    Deliberately RSS rather than a news API. Every paid news API here would
+    mean a key, a bill and a signup for a strip on an intranet; Google News
+    publishes a search as RSS with none of those, and a trade publication's
+    own feed is better still when one exists. Parsing is stdlib ElementTree,
+    so nothing new has to be installed on the server either.
+
+    Fetched stories land PENDING by default, like everything else that reaches
+    the dashboard. That is not ceremony: a search for the company's own name
+    will eventually return a lawsuit, a recall or a competitor's press release,
+    and none of those should put themselves on the company's home page at 6am.
+    `auto_publish` exists for a feed that has earned it, and is off until
+    somebody turns it on.
+    """
+
+    KIND_CHOICES = [
+        ('google_news', 'Google News search'),
+        ('rss',         'RSS / Atom feed'),
+    ]
+
+    name = models.CharField(max_length=120)
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES, default='google_news')
+
+    # For google_news: the search terms. For rss: left blank.
+    query = models.CharField(max_length=300, blank=True)
+    # For rss: the feed address. For google_news: built from `query`.
+    feed_url = models.URLField(max_length=500, blank=True)
+
+    # Everything this feed brings in is filed under one category, because the
+    # feed is chosen for a subject -- guessing a category per headline would be
+    # wrong often and invisibly.
+    category = models.CharField(max_length=20, choices=NewsItem.CATEGORY_CHOICES,
+                                default='industry')
+
+    # Off by default. See the class docstring.
+    auto_publish = models.BooleanField(default=False)
+    is_active    = models.BooleanField(default=True)
+    # A feed that returns forty items a day would bury everything else.
+    max_per_run  = models.PositiveSmallIntegerField(default=5)
+    # Google News answers a search with ~100 items going back weeks. Without a
+    # floor, a daily run takes five, and the next day takes the five *below*
+    # those -- so the job spends a fortnight walking backwards through the
+    # archive, filling a strip headed "latest updates" with month-old stories.
+    # Nothing older than this is considered at all.
+    max_age_days = models.PositiveSmallIntegerField(default=14)
+
+    # What happened last time, so a feed that has quietly stopped working is
+    # visible on the screen that manages it rather than only in a log file.
+    last_fetched_at = models.DateTimeField(null=True, blank=True)
+    last_status     = models.CharField(max_length=20, blank=True)
+    last_error      = models.CharField(max_length=300, blank=True)
+    last_found      = models.PositiveSmallIntegerField(default=0)
+    last_added      = models.PositiveSmallIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+    def resolved_url(self):
+        """The address actually fetched.
+
+        Google News takes a search as RSS. hl/gl/ceid pin it to Indian English
+        results; without them the same query answers differently depending on
+        where the server happens to be.
+
+        `when:Nd` matters more than it looks. Google ranks a search by
+        relevance, not date, so a narrow query answers with its best matches
+        going back years -- one real query here returned results from 2013 and
+        nothing newer than a fortnight. Asking upstream for a window is what
+        makes this a *news* feed; max_age_days is then only a backstop, and the
+        one that does the work for plain RSS sources, which have no such
+        operator.
+        """
+        if self.kind == 'google_news':
+            from urllib.parse import quote_plus
+            q = self.query
+            if 'when:' not in q.lower():
+                q = f'{q} when:{self.max_age_days}d'
+            return ('https://news.google.com/rss/search'
+                    f'?q={quote_plus(q)}&hl=en-IN&gl=IN&ceid=IN:en')
+        return self.feed_url

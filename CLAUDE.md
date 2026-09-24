@@ -222,6 +222,23 @@ ships with a build.
 - `GET` returns the newest 12; `?scope=all` returns everything, which is what
   "View all" and the console ask for.
 
+Feeds (`NewsSource`, `newsfeed.py`) fill it on a schedule, run by
+`manage.py fetch_news` from cron -- a management command, not Celery, for the
+reason spelled out in `accounts/management/commands/sync_hrms.py`.
+
+- **Fetched stories are PENDING.** Verified against live data: a search for the
+  company name returned a honey-trapping court report and an FSSAI story about
+  other food companies. `auto_publish` exists per source and is off by default;
+  leave it off unless someone has decided otherwise.
+- Google ranks by relevance, not date, so `resolved_url()` appends `when:Nd`
+  from `max_age_days`. Without it a narrow query answers with its best matches
+  going back years -- one real query returned results from 2013.
+- Dedupe keys are truncated *before* the lookup, not only on save. Google News
+  guids run past 500 characters, so comparing a full key to a stored truncated
+  one never matches and every run re-carries everything.
+- A source stops fetching at `BACKLOG_LIMIT` unreviewed stories and records
+  that as `paused`, not `failed` -- nothing is broken.
+
 ## SalesIQ (`sales/`) — the two primary files
 
 `Primary sales data.xlsx` has two sheets that describe the same business

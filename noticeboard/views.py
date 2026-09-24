@@ -14,7 +14,7 @@ from accounts.moderation import ModerationStatus, log_activity
 
 from wall.views import _validate as validate_image
 
-from .models import Announcement, Holiday, HolidayZone, NewsItem
+from .models import Announcement, Holiday, HolidayZone, NewsItem, NewsSource
 
 
 def _announcement(a, viewer=None):
@@ -386,6 +386,185 @@ class NewsDetailView(PortalScopedAPIView):
         log_activity(user, 'deleted', n, summary='News: ' + title, request=request)
         n.delete()
         return Response({'message': 'Story removed.'})
+
+
+# ── News sources ────────────────────────────────────────────
+def _source(x):
+    return {
+        'id': x.id, 'name': x.name, 'kind': x.kind,
+        'query': x.query, 'feedUrl': x.feed_url,
+        'category': x.category, 'categoryLabel': x.get_category_display(),
+        'autoPublish': x.auto_publish, 'isActive': x.is_active,
+        'maxPerRun': x.max_per_run,
+        'lastFetchedAt': x.last_fetched_at.isoformat() if x.last_fetched_at else None,
+        'lastStatus': x.last_status, 'lastError': x.last_error,
+        'lastFound': x.last_found, 'lastAdded': x.last_added,
+        'resolvedUrl': x.resolved_url(),
+    }
+
+
+def _read_source_fields(data):
+    name = (data.get('name') or '').strip()
+    if not name:
+        return None, 'Give the source a name you will recognise in a list.'
+
+    kind = data.get('kind') if data.get('kind') in {'google_news', 'rss'} else 'google_news'
+    query = (data.get('query') or '').strip()
+    feed_url = (data.get('feedUrl') or '').strip()
+
+    # Each kind needs its own one field, and neither is useful empty.
+    if kind == 'google_news' and not query:
+        return None, 'A Google News source needs something to search for.'
+    if kind == 'rss':
+        if not feed_url:
+            return None, 'An RSS source needs the address of the feed.'
+        if not feed_url.lower().startswith(('http://', 'https://')):
+            return None, 'The feed address should start with http:// or https://'
+
+    try:
+        per_run = int(data.get('maxPerRun') or 5)
+    except (TypeError, ValueError):
+        per_run = 5
+
+    return {
+        'name': name[:120], 'kind': kind,
+        'query': query[:300], 'feed_url': feed_url[:500],
+        'category': _category(data.get('category')),
+        'auto_publish': bool(data.get('autoPublish')),
+        'is_active': data.get('isActive') is not False,
+        'max_per_run': max(1, min(per_run, 20)),
+    }, None
+
+
+class NewsSourceListView(PortalScopedAPIView):
+    """The feeds the strip pulls from. Superadmin only — this is the list that
+    decides what the company home page can fill itself with."""
+
+    def get(self, request):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        return Response([_source(x) for x in NewsSource.objects.all()])
+
+    def post(self, request):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        values, problem = _read_source_fields(request.data)
+        if problem:
+            return Response({'error': problem}, status=http.HTTP_400_BAD_REQUEST)
+        x = NewsSource.objects.create(**values)
+        log_activity(user, 'created', x, summary='News source: ' + x.name,
+                     detail={'kind': x.kind, 'auto_publish': x.auto_publish},
+                     request=request)
+        return Response({**_source(x), 'message': 'Source added.'},
+                        status=http.HTTP_201_CREATED)
+
+
+class NewsSourceDetailView(PortalScopedAPIView):
+
+    def patch(self, request, pk):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        x = NewsSource.objects.filter(pk=pk).first()
+        if not x:
+            return Response({'error': 'That source is no longer here.'},
+                            status=http.HTTP_404_NOT_FOUND)
+        values, problem = _read_source_fields(request.data)
+        if problem:
+            return Response({'error': problem}, status=http.HTTP_400_BAD_REQUEST)
+        for k, v in values.items():
+            setattr(x, k, v)
+        x.save()
+        log_activity(user, 'edited', x, summary='News source: ' + x.name, request=request)
+        return Response(_source(x))
+
+    def delete(self, request, pk):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        x = NewsSource.objects.filter(pk=pk).first()
+        if not x:
+            return Response({'error': 'That source is no longer here.'},
+                            status=http.HTTP_404_NOT_FOUND)
+        name = x.name
+        # Stories already carried stay. They were reviewed on their own merits
+        # and some are on the dashboard right now; dropping a feed is a
+        # decision about what to fetch next, not a retraction of what it found.
+        log_activity(user, 'deleted', x, summary='News source: ' + name, request=request)
+        x.delete()
+        return Response({'message': 'Source removed. Stories it already found are kept.'})
+
+
+class NewsFetchView(PortalScopedAPIView):
+    """POST — run the feeds now, instead of waiting for the scheduled run."""
+
+    def post(self, request):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        if not NewsSource.objects.filter(is_active=True).exists():
+            return Response({'error': 'No active sources to fetch from yet.'},
+                            status=http.HTTP_400_BAD_REQUEST)
+
+        from .newsfeed import fetch_all
+        results = fetch_all()
+        added = sum(r['added'] for r in results)
+        failed = [r for r in results if r['error']]
+
+        log_activity(user, 'edited', None, summary='Fetched the news feeds',
+                     detail={'added': added, 'sources': len(results),
+                             'failed': len(failed)}, request=request)
+
+        if added:
+            note = f'{added} new stor{"y" if added == 1 else "ies"}.'
+        elif failed and len(failed) == len(results):
+            note = 'Could not reach any of the feeds.'
+        else:
+            note = 'Nothing new — every story in those feeds is already here.'
+
+        return Response({'results': results, 'added': added,
+                         'failed': len(failed), 'message': note})
+
+
+class NewsApproveView(PortalScopedAPIView):
+    """POST — approve or reject waiting stories, several at a time.
+
+    The queue exists so nothing publishes itself, but reviewing a morning's
+    headlines one modal at a time is how a queue stops being used. This takes
+    a list of ids.
+    """
+
+    def post(self, request):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+
+        ids = request.data.get('ids') or []
+        if not isinstance(ids, list) or not ids:
+            return Response({'error': 'Pick at least one story.'},
+                            status=http.HTTP_400_BAD_REQUEST)
+        decision = request.data.get('decision')
+        if decision not in {'approve', 'reject'}:
+            return Response({'error': 'Say whether to approve or reject them.'},
+                            status=http.HTTP_400_BAD_REQUEST)
+
+        status_value = (ModerationStatus.APPROVED if decision == 'approve'
+                        else ModerationStatus.REJECTED)
+        rows = list(NewsItem.objects.filter(pk__in=ids[:100]))
+        for n in rows:
+            n.set_review(user, status_value, (request.data.get('note') or '')[:500])
+            n.save()
+
+        action = 'approved' if decision == 'approve' else 'rejected'
+        log_activity(user, action, None,
+                     summary=f'{len(rows)} news stor'
+                             f'{"y" if len(rows) == 1 else "ies"} {action}',
+                     request=request)
+        word = 'published' if decision == 'approve' else 'rejected'
+        return Response({'changed': len(rows),
+                         'message': f'{len(rows)} stor{"y" if len(rows) == 1 else "ies"} {word}.'})
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────

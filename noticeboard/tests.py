@@ -5,13 +5,15 @@ that moving them into the database must not break — the circular has to
 survive verbatim, and nothing unapproved may reach the card.
 """
 from datetime import timedelta
+from unittest import mock
 
 from django.test import TestCase
 from django.utils import timezone
 
 from accounts.models import ActivityLog, PortalSession, PortalUser
 from accounts.moderation import ModerationStatus
-from noticeboard.models import Announcement, Holiday, HolidayZone, NewsItem
+from noticeboard.models import (Announcement, Holiday, HolidayZone, NewsItem,
+                                NewsSource)
 
 
 def a_user(email, name='Someone', superadmin=False):
@@ -352,3 +354,331 @@ class TheNewsStrip(Base):
                             **self.auth(self.admin_token)).json()
         keys = [t['key'] for t in d['types']]
         self.assertIn('news', keys)
+
+# ── Fetching the news ────────────────────────────────────
+RSS = """<?xml version="1.0"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <item>
+      <title>Honey exports rise sharply - The Tribune</title>
+      <description>&lt;a href="x"&gt;Volumes up on last year&lt;/a&gt; &amp;amp; rising</description>
+      <link>https://example.com/a</link>
+      <guid>tag:example.com,2026:a</guid>
+      <pubDate>{recent}</pubDate>
+      <source url="https://tribune.example">The Tribune</source>
+      <media:thumbnail url="https://example.com/a.jpg"/>
+    </item>
+    <item>
+      <title>Something from the archive</title>
+      <description>Old news.</description>
+      <link>https://example.com/old</link>
+      <guid>tag:example.com,2013:old</guid>
+      <pubDate>{old}</pubDate>
+    </item>
+  </channel>
+</rss>"""
+
+
+def rss_body(days_ago_recent=1, days_ago_old=400):
+    fmt = '%a, %d %b %Y %H:%M:%S +0000'
+    return RSS.format(
+        recent=(timezone.now() - timedelta(days=days_ago_recent)).strftime(fmt),
+        old=(timezone.now() - timedelta(days=days_ago_old)).strftime(fmt))
+
+
+class FakeResponse:
+    def __init__(self, text, status_code=200):
+        self.text, self.status_code = text, status_code
+
+
+class FetchingTheNews(TestCase):
+    """The strip fills itself from real feeds. What matters is that it cannot
+    publish itself, cannot carry the same story twice, and cannot quietly walk
+    backwards into an archive while claiming to be today's news."""
+
+    def setUp(self):
+        # The two seeded sources ship with the app; these tests are about fetch
+        # behaviour, so they run against their own feed alone.
+        NewsSource.objects.all().delete()
+        self.source = NewsSource.objects.create(
+            name='Trade press', kind='rss', feed_url='https://example.com/feed.xml',
+            category='industry', max_per_run=5, max_age_days=14)
+
+    def run_fetch(self, body=None, status=200):
+        from noticeboard import newsfeed
+        with mock.patch.object(newsfeed.requests, 'get',
+                               return_value=FakeResponse(body if body is not None
+                                                         else rss_body(), status)):
+            return newsfeed.fetch_source(self.source)
+
+    # ── what it brings in ──
+    def test_it_carries_a_story(self):
+        found, added, error = self.run_fetch()
+        self.assertEqual(error, '')
+        self.assertEqual(added, 1)
+        self.assertEqual(NewsItem.objects.count(), 1)
+
+    def test_nothing_it_fetches_publishes_itself(self):
+        """A search for the company name will eventually return a recall or a
+        lawsuit. None of that goes up at 6am because cron ran."""
+        self.run_fetch()
+        self.assertEqual(NewsItem.objects.first().moderation_status,
+                         ModerationStatus.PENDING)
+
+    def test_a_source_can_be_trusted_to_publish_on_its_own(self):
+        self.source.auto_publish = True
+        self.source.save()
+        self.run_fetch()
+        self.assertEqual(NewsItem.objects.first().moderation_status,
+                         ModerationStatus.APPROVED)
+
+    def test_html_does_not_reach_the_card(self):
+        """Feed descriptions are routinely a whole anchor tag."""
+        self.run_fetch()
+        n = NewsItem.objects.first()
+        self.assertNotIn('<', n.summary)
+        self.assertIn('Volumes up on last year', n.summary)
+
+    def test_entities_are_decoded_not_left_as_text(self):
+        self.run_fetch()
+        self.assertIn('&', NewsItem.objects.first().summary)
+        self.assertNotIn('&amp;', NewsItem.objects.first().summary)
+
+    def test_the_publisher_is_not_repeated_at_the_end_of_the_headline(self):
+        """Google News appends ' - The Publisher' to every headline, and the
+        card shows the publisher underneath already."""
+        self.run_fetch()
+        self.assertEqual(NewsItem.objects.first().title, 'Honey exports rise sharply')
+        self.assertEqual(NewsItem.objects.first().source_name, 'The Tribune')
+
+    def test_a_thumbnail_is_used_when_the_feed_offers_one(self):
+        self.run_fetch()
+        self.assertEqual(NewsItem.objects.first().image_url, 'https://example.com/a.jpg')
+
+    def test_the_story_is_filed_under_the_feeds_category(self):
+        self.run_fetch()
+        self.assertEqual(NewsItem.objects.first().category, 'industry')
+
+    def test_it_is_traceable_to_the_feed_that_found_it(self):
+        self.run_fetch()
+        self.assertEqual(NewsItem.objects.first().source_ref_id, self.source.id)
+
+    # ── what it refuses ──
+    def test_it_will_not_carry_the_archive(self):
+        """Google ranks by relevance, not date, so a narrow query answers with
+        its best matches going back years."""
+        self.run_fetch()
+        self.assertFalse(NewsItem.objects.filter(title='Something from the archive').exists())
+
+    def test_running_it_again_carries_nothing_twice(self):
+        """The keys are long enough to be truncated on the way in, so the
+        lookup has to be truncated too or every run re-carries everything."""
+        self.run_fetch()
+        self.run_fetch()
+        self.assertEqual(NewsItem.objects.count(), 1)
+
+    def test_a_story_whose_link_changed_is_still_recognised(self):
+        """Feeds re-publish with a new link and the same id."""
+        self.run_fetch()
+        moved = rss_body().replace('https://example.com/a<', 'https://example.com/a2<')
+        self.run_fetch(moved)
+        self.assertEqual(NewsItem.objects.count(), 1)
+
+    def test_a_very_long_key_does_not_defeat_the_dedupe(self):
+        long_id = 'tag:example.com,2026:' + ('x' * 900)
+        body = rss_body().replace('tag:example.com,2026:a', long_id)
+        self.run_fetch(body)
+        self.run_fetch(body)
+        self.assertEqual(NewsItem.objects.count(), 1)
+
+    def test_a_placeholder_title_is_not_made_into_a_card(self):
+        """One real government feed answers with a title of literally
+        'BlogDescription'."""
+        body = rss_body().replace('Honey exports rise sharply - The Tribune',
+                                  'BlogDescription')
+        found, added, error = self.run_fetch(body)
+        self.assertEqual(added, 0)
+
+    # ── when things go wrong ──
+    def test_a_feed_that_is_down_does_not_raise(self):
+        found, added, error = self.run_fetch(status=503)
+        self.assertNotEqual(error, '')
+        self.assertEqual(added, 0)
+
+    def test_and_the_failure_is_recorded_where_somebody_will_see_it(self):
+        self.run_fetch(status=503)
+        self.source.refresh_from_db()
+        self.assertEqual(self.source.last_status, 'failed')
+        self.assertTrue(self.source.last_error)
+
+    def test_a_page_of_html_instead_of_xml_is_survivable(self):
+        found, added, error = self.run_fetch('<html><body>Nope</body></html>')
+        self.assertEqual(added, 0)
+
+    def test_an_unreadable_date_does_not_send_a_story_to_1970(self):
+        body = rss_body().replace(
+            '<pubDate>', '<pubDate>not a date</pubDate><ignored>', 1)
+        self.run_fetch(body)
+        for n in NewsItem.objects.all():
+            self.assertGreaterEqual(n.published_on,
+                                    timezone.localdate() - timedelta(days=1))
+
+    def test_one_bad_feed_does_not_stop_the_others(self):
+        from noticeboard import newsfeed
+        NewsSource.objects.create(name='Another', kind='rss',
+                                  feed_url='https://example.com/two.xml',
+                                  category='company')
+        with mock.patch.object(newsfeed.requests, 'get',
+                               side_effect=[FakeResponse('', 500),
+                                            FakeResponse(rss_body())]):
+            results = newsfeed.fetch_all()
+        self.assertEqual(len(results), 2)
+        self.assertEqual(sum(r['added'] for r in results), 1)
+
+    # ── the backlog guard ──
+    def test_it_stops_adding_when_nobody_is_reviewing(self):
+        """Five a day into a queue nobody opens is how a review screen becomes
+        three hundred rows and stops being used."""
+        from noticeboard.newsfeed import BACKLOG_LIMIT
+        for i in range(BACKLOG_LIMIT):
+            NewsItem.objects.create(title=f'Waiting {i}', summary='x',
+                                    source_ref=self.source,
+                                    moderation_status=ModerationStatus.PENDING)
+        found, added, error = self.run_fetch()
+        self.assertEqual(added, 0)
+
+    def test_a_pause_is_not_reported_as_a_breakage(self):
+        """Nothing is broken, and calling it a failure sends somebody looking
+        for a fault that is not there."""
+        from noticeboard.newsfeed import BACKLOG_LIMIT
+        for i in range(BACKLOG_LIMIT):
+            NewsItem.objects.create(title=f'Waiting {i}', summary='x',
+                                    source_ref=self.source,
+                                    moderation_status=ModerationStatus.PENDING)
+        self.run_fetch()
+        self.source.refresh_from_db()
+        self.assertEqual(self.source.last_status, 'paused')
+
+    def test_clearing_the_queue_lets_it_resume(self):
+        from noticeboard.newsfeed import BACKLOG_LIMIT
+        for i in range(BACKLOG_LIMIT):
+            NewsItem.objects.create(title=f'Waiting {i}', summary='x',
+                                    source_ref=self.source,
+                                    moderation_status=ModerationStatus.PENDING)
+        self.run_fetch()
+        NewsItem.objects.filter(title__startswith='Waiting').update(
+            moderation_status=ModerationStatus.APPROVED)
+        found, added, error = self.run_fetch()
+        self.assertEqual(added, 1)
+
+
+class AskingGoogleForNews(TestCase):
+    """The search that gets sent. Google ranks by relevance, not date."""
+
+    def test_a_window_is_asked_for_upstream(self):
+        """Without this the feed answers with its best matches from any year:
+        one real query returned results from 2013 and nothing inside a
+        fortnight."""
+        s = NewsSource(kind='google_news', query='honey India', max_age_days=14)
+        self.assertIn('when%3A14d', s.resolved_url())
+
+    def test_the_window_follows_the_setting(self):
+        s = NewsSource(kind='google_news', query='honey India', max_age_days=30)
+        self.assertIn('when%3A30d', s.resolved_url())
+
+    def test_a_query_that_says_it_itself_is_left_alone(self):
+        s = NewsSource(kind='google_news', query='honey when:3d', max_age_days=14)
+        self.assertNotIn('when%3A14d', s.resolved_url())
+
+    def test_results_are_pinned_to_indian_english(self):
+        """The same query answers differently depending on where the server is."""
+        s = NewsSource(kind='google_news', query='honey', max_age_days=7)
+        self.assertIn('ceid=IN:en', s.resolved_url())
+
+    def test_an_rss_source_is_fetched_verbatim(self):
+        s = NewsSource(kind='rss', feed_url='https://example.com/f.xml')
+        self.assertEqual(s.resolved_url(), 'https://example.com/f.xml')
+
+
+class ManagingTheSources(Base):
+    """Which feeds the company home page may fill itself from."""
+
+    API = '/api/noticeboard/news/sources/'
+
+    def make(self, token, **over):
+        d = {'name': 'Trade press', 'kind': 'google_news', 'query': 'honey India',
+             'category': 'industry'}
+        d.update(over)
+        return self.client.post(self.API, d, content_type='application/json',
+                                **self.auth(token))
+
+    def test_only_an_administrator_may_see_them(self):
+        self.assertEqual(self.client.get(self.API, **self.auth(self.staff_token)).status_code, 403)
+
+    def test_only_an_administrator_may_add_one(self):
+        self.assertEqual(self.make(self.staff_token).status_code, 403)
+        self.assertEqual(self.make(self.admin_token).status_code, 201)
+
+    def test_a_google_source_needs_something_to_search_for(self):
+        self.assertEqual(self.make(self.admin_token, query='').status_code, 400)
+
+    def test_an_rss_source_needs_a_real_address(self):
+        self.assertEqual(
+            self.make(self.admin_token, kind='rss', feedUrl='example.com').status_code, 400)
+
+    def test_removing_a_source_keeps_the_stories_it_found(self):
+        """They were reviewed on their own merits and some are on the
+        dashboard right now."""
+        r = self.make(self.admin_token)
+        sid = r.json()['id']
+        NewsItem.objects.create(title='Carried', summary='x',
+                                source_ref_id=sid,
+                                moderation_status=ModerationStatus.APPROVED)
+        self.client.delete(f'{self.API}{sid}/', **self.auth(self.admin_token))
+        self.assertTrue(NewsItem.objects.filter(title='Carried').exists())
+
+    def test_approving_a_morning_of_headlines_at_once(self):
+        """A queue reviewed one modal at a time is a queue that stops being
+        used."""
+        ids = [NewsItem.objects.create(title=f'S{i}', summary='x').id for i in range(3)]
+        r = self.client.post('/api/noticeboard/news/approve/',
+                             {'ids': ids, 'decision': 'approve'},
+                             content_type='application/json', **self.auth(self.admin_token))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(NewsItem.published().count(), 3)
+
+    def test_a_colleague_cannot_approve_their_own_suggestions(self):
+        ids = [NewsItem.objects.create(title='Mine', summary='x').id]
+        r = self.client.post('/api/noticeboard/news/approve/',
+                             {'ids': ids, 'decision': 'approve'},
+                             content_type='application/json', **self.auth(self.staff_token))
+        self.assertEqual(r.status_code, 403)
+
+    def test_fetching_on_demand_is_an_administrators_button(self):
+        self.assertEqual(
+            self.client.post('/api/noticeboard/news/fetch/',
+                             **self.auth(self.staff_token)).status_code, 403)
+
+
+class WhatShipsConfigured(TestCase):
+    """Two feeds are seeded so the strip works the day this ships."""
+
+    def test_both_are_there(self):
+        self.assertEqual(NewsSource.objects.count(), 2)
+
+    def test_neither_publishes_without_being_read(self):
+        """Run against live data while building this, the company search
+        returned stories about other food companies under an FSSAI scanner
+        alongside the AGM notice."""
+        self.assertFalse(NewsSource.objects.filter(auto_publish=True).exists())
+
+    def test_the_company_feed_looks_wider_than_the_trade_one(self):
+        """One mid-cap company makes news rarely -- a fortnight's window is the
+        difference between a company feed and an empty one."""
+        company = NewsSource.objects.get(category='company')
+        trade = NewsSource.objects.get(category='industry')
+        self.assertGreater(company.max_age_days, trade.max_age_days)
+
+    def test_they_ask_google_for_recent_results_only(self):
+        for src in NewsSource.objects.all():
+            self.assertIn('when%3A', src.resolved_url())
