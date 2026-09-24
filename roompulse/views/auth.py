@@ -145,10 +145,10 @@ class RoomPulseLoginView(APIView):
             try:
                 from django.core.mail import send_mail
                 send_mail(
-                    subject='AdminPulse — Login Code',
-                    message=(f"Your AdminPulse login code is:\n\n    {code}\n\n"
+                    subject='APIS Help Desk — Login Code',
+                    message=(f"Your Help Desk login code is:\n\n    {code}\n\n"
                             f"Valid for 5 minutes. Do not share it with anyone.\n\n"
-                            f"— APIS AdminPulse"),
+                            f"— APIS Help Desk"),
                     from_email=(getattr(settings, 'OFFER_LETTER_EMAIL_HOST_USER', None)
                                or settings.EMAIL_HOST_USER or settings.DEFAULT_FROM_EMAIL),
                     recipient_list=[email],
