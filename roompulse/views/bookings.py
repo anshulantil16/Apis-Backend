@@ -6,7 +6,7 @@ from rest_framework.response import Response
 
 from ..models import Room, BookingRequest
 from ..people import apply_names
-from ..status import find_conflicts
+from ..status import expire_stale_bookings, find_conflicts
 from ..assignment import admin_queue_for, raised_by, resolve as resolve_assignee
 from .perms import require_role, actor_role, require_signed_in
 
@@ -57,6 +57,8 @@ class BookingListView(APIView):
         # read -- the same shape of hole the ticket queue had.
         if (err := require_signed_in(request)):
             return err
+        # A request whose slot has come and gone is not waiting on anybody.
+        expire_stale_bookings()
         role, email = actor_role(request)
         qs = BookingRequest.objects.select_related('room').all()
         # Who sees what: roompulse/assignment.py.
@@ -198,6 +200,17 @@ class BookingActionView(APIView):
             if role not in ('admin', 'super_admin'):
                 return Response({'error': 'Only an admin can approve or reject bookings.'},
                                 status=403)
+            # Approving a slot that has already passed grants nothing, and
+            # leaves an "approved" booking for a meeting that did not happen
+            # sitting in the room's history. Rejecting it is no better -- the
+            # person was not turned down, they were not answered.
+            if booking.status == 'pending':
+                expire_stale_bookings()
+                booking.refresh_from_db()
+            if booking.status == 'expired':
+                return Response({
+                    'error': 'That slot has already passed, so there is nothing '
+                             'left to approve. Ask them to book again.'}, status=400)
             if booking.status != 'pending':
                 return Response({'error': f'This booking is already {booking.status}.'}, status=400)
 

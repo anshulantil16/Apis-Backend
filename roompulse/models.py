@@ -41,6 +41,12 @@ class BookingRequest(models.Model):
         ('approved',  'Approved'),
         ('rejected',  'Rejected'),
         ('cancelled', 'Cancelled'),
+        # A request nobody answered before the slot came and went. Not the
+        # same as rejected -- nobody turned it down, the meeting time simply
+        # passed -- and it cannot stay 'pending', because "waiting for
+        # approval" is false once there is nothing left to approve: granting
+        # a room for 11:00 at half past two grants nothing.
+        ('expired',   'Expired'),
     ]
     PURPOSE_CHOICES = [
         ('client_meeting',   'Client Meeting'),

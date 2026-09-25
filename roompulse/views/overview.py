@@ -19,7 +19,7 @@ from rest_framework.response import Response
 
 from ..models import (AdminUser, BookingRequest, Employee, ResourceRequest,
                       Room, SupportTicket, TicketEvent)
-from ..status import room_status
+from ..status import expire_stale_bookings, room_status
 from .perms import require_role
 
 # A request nobody has answered for this long is not "in the queue", it is
@@ -47,6 +47,8 @@ class OverviewView(APIView):
         stale_before = timezone.now() - timedelta(days=STALE_DAYS)
 
         # ── waiting on somebody ──────────────────────────────────────────
+        # Nothing is waiting on anybody once its slot has passed.
+        expire_stale_bookings()
         tickets = SupportTicket.objects.filter(status='pending').exclude(origin='logged')
         bookings = BookingRequest.objects.filter(status='pending')
         items = ResourceRequest.objects.filter(status='pending')

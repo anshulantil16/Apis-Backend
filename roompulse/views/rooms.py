@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from ..models import Room, BookingRequest
-from ..status import room_status
+from ..status import expire_stale_bookings, room_status
 from .perms import require_role, require_signed_in
 
 
@@ -44,6 +44,9 @@ class RoomListView(APIView):
         # internet.
         if (err := require_signed_in(request)):
             return err
+        # A request whose slot has come and gone is not waiting on anybody,
+        # so it must not sit on the room card saying it is.
+        expire_stale_bookings()
         # The project's clock, not the machine's. This was datetime.now(),
         # which reads the server's OS timezone -- on a UTC host that put the
         # whole live grid 5.5 hours away from the times people had typed in.

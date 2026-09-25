@@ -1592,3 +1592,84 @@ class TheBrowsersCopyOfYourNameGetsCorrected(HelpdeskBase):
     def test_somebody_hrms_does_not_know_still_gets_an_answer(self):
         d = self.client.get(f'{API}/me/', **auth('new.joiner@apisindia.com')).json()
         self.assertTrue(d['name'])
+
+
+class ASlotThatHasPassedIsNotWaiting(HelpdeskBase):
+    """A request for 11:00-12:00 still reading "waiting for approval" at half
+    past two tells the person something untrue: nobody is going to approve
+    it, and approving it would grant a room for a meeting that has already
+    not happened."""
+
+    def setUp(self):
+        super().setUp()
+        self.room = Room.objects.filter(is_active=True).first()
+
+    def booking(self, day, start, end, status='pending'):
+        return BookingRequest.objects.create(
+            room=self.room, requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            date=day, start_time=start, end_time=end,
+            purpose='internal_meeting', status=status,
+            assigned_to_email=ADMIN_STAFF)
+
+    def test_yesterdays_unanswered_request_expires(self):
+        b = self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        self.client.get(f'{API}/bookings/', **auth(ADMIN_STAFF))
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'expired')
+
+    def test_one_earlier_today_expires_too(self):
+        now = timezone.localtime()
+        if now.hour < 2:                 # nothing has passed yet today
+            return
+        b = self.booking(now.date(), time(0, 30), time(1, 0))
+        self.client.get(f'{API}/bookings/', **auth(ADMIN_STAFF))
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'expired')
+
+    def test_one_still_to_come_is_left_alone(self):
+        b = self.booking(timezone.localdate() + timedelta(days=1), time(11, 0), time(12, 0))
+        self.client.get(f'{API}/bookings/', **auth(ADMIN_STAFF))
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'pending')
+
+    def test_a_meeting_happening_right_now_is_left_alone(self):
+        """Its end time has not passed, so it is still answerable."""
+        now = timezone.localtime()
+        b = self.booking(now.date(), time(0, 0), time(23, 59))
+        self.client.get(f'{API}/bookings/', **auth(ADMIN_STAFF))
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'pending')
+
+    def test_an_approved_one_is_never_touched(self):
+        """It happened. Expiring it would rewrite the room's history."""
+        b = self.booking(timezone.localdate() - timedelta(days=3),
+                         time(11, 0), time(12, 0), status='approved')
+        self.client.get(f'{API}/bookings/', **auth(ADMIN_STAFF))
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'approved')
+
+    def test_it_cannot_be_approved_afterwards(self):
+        b = self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        r = self.client.patch(f'{API}/bookings/{b.id}/', {'action': 'approve'},
+                              content_type='application/json', **auth(ADMIN_STAFF))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('passed', r.json()['error'])
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'expired')
+
+    def test_it_drops_off_the_room_card(self):
+        self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        grid = self.client.get(f'{API}/rooms/', **auth(ADMIN_STAFF)).json()['results']
+        mine = next(r for r in grid if r['id'] == self.room.id)
+        self.assertEqual(mine['pending'], [])
+
+    def test_it_stops_counting_as_something_waiting(self):
+        self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        d = self.client.get(f'{API}/overview/', **auth(SUPER_ADMIN_EMAIL)).json()
+        row = next((w for w in d['waiting'] if 'oom' in w['what']), None)
+        self.assertTrue(row is None or row['count'] == 0, row)
+
+    def test_the_sweep_writes_nothing_when_there_is_nothing_to_write(self):
+        from roompulse.status import expire_stale_bookings
+        self.booking(timezone.localdate() + timedelta(days=1), time(11, 0), time(12, 0))
+        self.assertEqual(expire_stale_bookings(), 0)
