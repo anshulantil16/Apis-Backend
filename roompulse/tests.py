@@ -1572,3 +1572,23 @@ class SigningInGivesYourRealName(HelpdeskBase):
         r = self.sign_in('new.joiner@apisindia.com')
         self.assertEqual(r.status_code, 200, r.content[:160])
         self.assertTrue(r.json()['name'])
+
+
+class TheBrowsersCopyOfYourNameGetsCorrected(HelpdeskBase):
+    """The name is saved into the browser at sign-in and read back on every
+    later visit, so a session minted before names were resolved properly
+    keeps the old one until that person happens to sign out -- weeks, maybe."""
+
+    def test_it_answers_with_the_name_hrms_has(self):
+        PortalUser.objects.create(employee_code='E7', email=IT_STAFF, name='Kanchan Sharma')
+        d = self.client.get(f'{API}/me/', **auth(IT_STAFF)).json()
+        self.assertEqual(d['name'], 'Kanchan Sharma')
+        self.assertEqual(d['email'], IT_STAFF)
+        self.assertEqual(d['role'], 'it_support')
+
+    def test_it_is_not_public(self):
+        self.assertEqual(self.client.get(f'{API}/me/').status_code, 401)
+
+    def test_somebody_hrms_does_not_know_still_gets_an_answer(self):
+        d = self.client.get(f'{API}/me/', **auth('new.joiner@apisindia.com')).json()
+        self.assertTrue(d['name'])

@@ -9,8 +9,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from ..assignment import DESK_SCOPE, staff_for
-from ..people import name_map
-from .perms import require_signed_in
+from ..people import name_for, name_map
+from .perms import actor_role, require_signed_in
 
 
 class DeskStaffView(APIView):
@@ -32,3 +32,20 @@ class DeskStaffView(APIView):
              'name': proper.get(a.email.lower()) or a.name or a.email.split('@')[0]}
             for a in people
         ]})
+
+
+class WhoAmIView(APIView):
+    """GET -> who the session belongs to, freshly resolved.
+
+    The name is saved into the browser when somebody signs in and read back
+    from there on every later visit, so a session minted before the name was
+    being resolved properly keeps the old one until that person happens to
+    sign out -- which could be weeks. This lets the page correct itself on
+    load instead, and also picks up a name changed in HRMS since.
+    """
+
+    def get(self, request):
+        if (err := require_signed_in(request)):
+            return err
+        role, email = actor_role(request)
+        return Response({'email': email, 'role': role, 'name': name_for(email)})
