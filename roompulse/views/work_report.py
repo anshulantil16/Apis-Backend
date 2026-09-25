@@ -44,6 +44,19 @@ def _desk_for(request):
 DESK_LABEL = {'it': 'IT', 'admin': 'Admin', None: 'IT and Admin'}
 
 
+def _only_me(request):
+    """Whose month this is.
+
+    Each person's report is their own. Two or three people share a desk, and
+    "what did I do this month" is not "what did the desk do" -- shown the
+    whole desk's figures, nobody can point at their own. The super admin
+    oversees both desks, so theirs is everybody's, with a person to drill
+    into.
+    """
+    role, email = actor_role(request)
+    return None if role == 'super_admin' else (email or '').lower()
+
+
 def _month_bounds(raw, today):
     """-> (first, last, label) for a 'YYYY-MM' string, or this month."""
     year, month = today.year, today.month
@@ -83,6 +96,9 @@ class WorkReportView(APIView):
         # they approved, the same way IT's counts the tickets they closed.
         desk = _desk_for(request)
         rows = collect(first, last, desk)
+        me = _only_me(request)
+        if me:
+            rows = [r for r in rows if r['email'] == me]
 
         names = {a.email.lower(): a.name for a in AdminUser.objects.all()}
 
@@ -139,6 +155,9 @@ class WorkReportView(APIView):
             'label': label,
             'desk': desk or '',
             'desk_label': DESK_LABEL[desk],
+            # Whose figures these are. The screen says "your work" rather
+            # than "the desk's" when it is one person's.
+            'scope': 'me' if me else 'everyone',
             'from': first.isoformat(),
             'to': last.isoformat(),
             'total': len(rows),
@@ -185,6 +204,9 @@ class WorkReportExportView(APIView):
         first, last, label = _month_bounds(request.query_params.get('month'),
                                            timezone.localdate())
         rows = collect(first, last, _desk_for(request))
+        me = _only_me(request)
+        if me:
+            rows = [r for r in rows if r['email'] == me]
         rows.reverse()      # oldest first reads better down a spreadsheet
 
         # The same numbers the screen shows, built the same way -- a file that

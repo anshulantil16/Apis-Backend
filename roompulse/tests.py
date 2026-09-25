@@ -470,7 +470,10 @@ class WhatTheMonthAddsUpTo(HelpdeskBase):
         """Not to whoever picked it up -- the row has one slot and closing
         is the fact the report is about."""
         self.close_a_raised_ticket(closer=OTHER_IT)
-        people = {p['email']: p for p in self.report().json()['people']}
+        # Read as the super admin: everybody else's report is now their own,
+        # and this is a question about which of two people got the credit.
+        people = {p['email']: p
+                  for p in self.report(SUPER_ADMIN_EMAIL).json()['people']}
         self.assertEqual(people[OTHER_IT]['closed'], 1)
         self.assertNotIn(IT_STAFF, people)
 
@@ -1428,3 +1431,51 @@ class EverybodySeesTheRightThings(HelpdeskBase):
         d = self.client.get(f'{API}/my-tasks/', **auth(IT_STAFF)).json()
         self.assertEqual(d['by_kind']['ticket'], 2)
         self.assertEqual(d['unassigned'], 1)
+
+
+class YourMonthIsYours(HelpdeskBase):
+    """Two or three people share a desk, so "what did I do this month" is not
+    "what did the desk do". Shown the desk's figures, nobody can point at
+    their own -- which is the whole reason for tracking it per person."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=OTHER_IT, name='Sana', scope='it_support')
+
+    def log(self, who, subject):
+        return self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': subject, 'description': 'x',
+            'category': 'server_storage', 'logged_for': 'The office',
+            'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(who))
+
+    def test_the_report_is_only_your_own_work(self):
+        self.log(IT_STAFF, 'Mine')
+        self.log(OTHER_IT, 'Hers')
+        d = self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()
+        self.assertEqual(d['total'], 1)
+        self.assertEqual([p['email'] for p in d['people']], [IT_STAFF])
+        self.assertEqual(d['scope'], 'me')
+
+    def test_the_super_admin_still_sees_everybody(self):
+        self.log(IT_STAFF, 'Mine')
+        self.log(OTHER_IT, 'Hers')
+        d = self.client.get(f'{API}/work-report/', **auth(SUPER_ADMIN_EMAIL)).json()
+        self.assertEqual(d['total'], 2)
+        self.assertEqual(len(d['people']), 2)
+        self.assertEqual(d['scope'], 'everyone')
+
+    def test_the_work_log_can_be_narrowed_to_one_person(self):
+        self.log(IT_STAFF, 'Mine')
+        self.log(OTHER_IT, 'Hers')
+        rows = self.client.get(
+            f'{API}/tickets/?origin=logged&performed_by={IT_STAFF}',
+            **auth(IT_STAFF)).json()['results']
+        self.assertEqual([r['subject'] for r in rows], ['Mine'])
+
+    def test_the_spreadsheet_is_scoped_the_same_way(self):
+        self.log(IT_STAFF, 'Mine')
+        self.log(OTHER_IT, 'Hers')
+        r = self.client.get(f'{API}/work-report/export/', **auth(IT_STAFF))
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.content[:2] == b'PK')

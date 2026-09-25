@@ -160,6 +160,12 @@ class TicketListView(APIView):
         desk = request.query_params.get('desk')
         if desk in dict(SupportTicket.DESK_CHOICES):
             qs = qs.filter(desk=desk)
+        # Who DID the work, as opposed to who it is assigned to. The work
+        # log is per person: two admins share a desk, and "what did I do this
+        # month" is not "what did the desk do".
+        performed_by = request.query_params.get('performed_by')
+        if performed_by:
+            qs = qs.filter(performed_by_email__iexact=performed_by.strip().lower())
         origin = request.query_params.get('origin')
         if origin in dict(SupportTicket.ORIGIN_CHOICES):
             qs = qs.filter(origin=origin)
