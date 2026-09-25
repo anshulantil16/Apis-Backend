@@ -78,6 +78,15 @@ class BookingRequest(models.Model):
     reviewed_at    = models.DateTimeField(null=True, blank=True)
     admin_remarks  = models.CharField(max_length=300, blank=True)
 
+    # Whose request this is. Chosen when it is raised, from the roster the
+    # super admin keeps -- two or three people share a desk, and a shared
+    # pile could not say who had handled what.
+    #
+    # The name is stored beside the email rather than looked up: if somebody
+    # leaves the roster, the record of who dealt with this still reads.
+    assigned_to_email = models.EmailField(blank=True, db_index=True)
+    assigned_to_name  = models.CharField(max_length=200, blank=True)
+
     # A meeting that finished before its booked end. The room is free from
     # this moment, but the booking stays approved and keeps the times it was
     # booked for -- it did happen, and shortening end_time would quietly
@@ -168,6 +177,15 @@ class ResourceRequest(models.Model):
     reviewed_at    = models.DateTimeField(null=True, blank=True)
     admin_remarks  = models.CharField(max_length=300, blank=True)
     fulfilled_by   = models.CharField(max_length=200, blank=True)
+    # Whose request this is. Chosen when it is raised, from the roster the
+    # super admin keeps -- two or three people share a desk, and a shared
+    # pile could not say who had handled what.
+    #
+    # The name is stored beside the email rather than looked up: if somebody
+    # leaves the roster, the record of who dealt with this still reads.
+    assigned_to_email = models.EmailField(blank=True, db_index=True)
+    assigned_to_name  = models.CharField(max_length=200, blank=True)
+
     fulfilled_at   = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -259,6 +277,15 @@ class SupportTicket(models.Model):
     reviewed_by    = models.CharField(max_length=200, blank=True)
     reviewed_at    = models.DateTimeField(null=True, blank=True)
     admin_remarks  = models.CharField(max_length=300, blank=True)
+
+    # Whose request this is. Chosen when it is raised, from the roster the
+    # super admin keeps -- two or three people share a desk, and a shared
+    # pile could not say who had handled what.
+    #
+    # The name is stored beside the email rather than looked up: if somebody
+    # leaves the roster, the record of who dealt with this still reads.
+    assigned_to_email = models.EmailField(blank=True, db_index=True)
+    assigned_to_name  = models.CharField(max_length=200, blank=True)
 
     # Where the work came from.
     #

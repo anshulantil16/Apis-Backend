@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from ..models import ResourceRequest
+from ..assignment import resolve as resolve_assignee, visible_to
 from .perms import actor_role, require_signed_in
 
 
@@ -31,6 +32,8 @@ def _brief(r):
         'urgency': r.urgency, 'urgency_label': r.get_urgency_display(),
         'reason': r.reason, 'needed_by': r.needed_by.isoformat() if r.needed_by else None,
         'status': r.status, 'reviewed_by': r.reviewed_by,
+        'assigned_to_email': r.assigned_to_email,
+        'assigned_to_name': r.assigned_to_name,
         'reviewed_at': r.reviewed_at.isoformat() if r.reviewed_at else None,
         'admin_remarks': r.admin_remarks,
         'fulfilled_by': r.fulfilled_by,
@@ -55,7 +58,10 @@ class ResourceRequestListView(APIView):
             return err
         role, email = actor_role(request)
         qs = ResourceRequest.objects.all()
-        if role not in ('admin', 'it_support', 'super_admin'):
+        if role == 'admin':
+            # Their own assignments only -- see roompulse/assignment.py.
+            qs = visible_to(qs, role, email)
+        elif role not in ('it_support', 'super_admin'):
             qs = qs.filter(requested_by_email=email)
         category = request.query_params.get('category')
         if category:
@@ -101,7 +107,15 @@ class ResourceRequestListView(APIView):
             quantity = 1
 
         auto_approve = role in ('admin', 'super_admin')
+        # Addressed to somebody on the desk, from the roster, before
+        # anything is written. A request nobody owns is what this replaces.
+        chosen = resolve_assignee('admin', d.get('assigned_to_email'))
+        if isinstance(chosen, str):
+            return Response({'error': chosen}, status=400)
+        assigned_email, assigned_name = chosen
+
         req = ResourceRequest.objects.create(
+            assigned_to_email=assigned_email, assigned_to_name=assigned_name,
             requested_by_name=name[:200], requested_by_email=email,
             department=str(d.get('department') or '').strip()[:150],
             category=category, item_name=item_name[:200], quantity=quantity,

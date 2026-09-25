@@ -27,6 +27,7 @@ EMPLOYEE = 'priya.sharma@apisindia.com'
 IT_STAFF = 'it.desk@apisindia.com'
 OUTSIDER = 'attacker@gmail.com'
 OTHER_IT = 'sana.it@apisindia.com'
+ADMIN_STAFF = 'meena.admin@apisindia.com'
 
 
 def auth(email):
@@ -36,11 +37,15 @@ def auth(email):
 
 class HelpdeskBase(TestCase):
     def setUp(self):
+        # Both desks are staffed in every test, because every request now has
+        # to be addressed to somebody on the right one.
         AdminUser.objects.create(email=IT_STAFF, name='IT Desk', scope='it_support')
+        AdminUser.objects.create(email=ADMIN_STAFF, name='Meena', scope='admin')
 
     def raise_ticket(self, email=EMPLOYEE, **over):
         body = {'subject': 'Laptop will not boot', 'description': 'Blue screen on startup',
-                'category': 'other', 'priority': 'high'}
+                'category': 'other', 'priority': 'high',
+                'assigned_to_email': IT_STAFF}
         body.update(over)
         return self.client.post(f'{API}/tickets/', body, **auth(email))
 
@@ -275,6 +280,7 @@ class WhatMayBeAttached(HelpdeskBase):
 
     def test_a_screenshot_is_kept_and_linked(self):
         r = self.client.post(f'{API}/tickets/', {
+            'assigned_to_email': IT_STAFF,
             'subject': 'Printer jam', 'description': 'See photo',
             'attachments': self._file('error.png', b'PNG'),
         }, **auth(EMPLOYEE))
@@ -289,6 +295,7 @@ class WhatMayBeAttached(HelpdeskBase):
         by IT Support — an .html or .svg is a script on our own origin."""
         for bad in ('payload.html', 'logo.svg', 'setup.exe', 'run.sh'):
             r = self.client.post(f'{API}/tickets/', {
+            'assigned_to_email': IT_STAFF,
                 'subject': 'x', 'description': 'y', 'attachments': self._file(bad),
             }, **auth(EMPLOYEE))
             self.assertEqual(r.status_code, 400, f'{bad} was accepted')
@@ -296,6 +303,7 @@ class WhatMayBeAttached(HelpdeskBase):
     def test_an_oversized_file_is_refused(self):
         big = SimpleUploadedFile('huge.png', b'x' * (5 * 1024 * 1024 + 10))
         r = self.client.post(f'{API}/tickets/', {
+            'assigned_to_email': IT_STAFF,
             'subject': 'x', 'description': 'y', 'attachments': big,
         }, **auth(EMPLOYEE))
         self.assertEqual(r.status_code, 400)
@@ -303,6 +311,7 @@ class WhatMayBeAttached(HelpdeskBase):
 
     def test_nothing_is_stored_when_a_file_is_refused(self):
         self.client.post(f'{API}/tickets/', {
+            'assigned_to_email': IT_STAFF,
             'subject': 'x', 'description': 'y', 'attachments': self._file('bad.exe'),
         }, **auth(EMPLOYEE))
         self.assertEqual(SupportTicket.objects.count(), 0,
@@ -921,8 +930,6 @@ class PendingBookingsAreVisible(HelpdeskBase):
         self.assertEqual(mine['pending'], [])
 
 
-ADMIN_STAFF = 'meena.admin@apisindia.com'
-
 
 class AnAdminsWorkIsAdminWork(HelpdeskBase):
     """Two halves of the same complaint: an Admin logging a job had only IT's
@@ -931,7 +938,6 @@ class AnAdminsWorkIsAdminWork(HelpdeskBase):
 
     def setUp(self):
         super().setUp()
-        AdminUser.objects.create(email=ADMIN_STAFF, name='Meena', scope='admin')
 
     def log(self, email, category):
         return self.client.post(f'{API}/tickets/', {
@@ -1029,7 +1035,6 @@ class ALoggedJobHasToBeWorthReportingOn(HelpdeskBase):
 
     def setUp(self):
         super().setUp()
-        AdminUser.objects.create(email=ADMIN_STAFF, name='Meena', scope='admin')
 
     def log(self, **over):
         body = {'origin': 'logged', 'subject': 'Rebuilt a laptop',
@@ -1073,7 +1078,6 @@ class AnAdminCanSeeWhatTheyLogged(HelpdeskBase):
 
     def setUp(self):
         super().setUp()
-        AdminUser.objects.create(email=ADMIN_STAFF, name='Meena', scope='admin')
         r = self.client.post(f'{API}/tickets/', {
             'origin': 'logged', 'subject': 'Got the pantry tap fixed',
             'description': 'Plumber came at 11.', 'category': 'plumbing',
@@ -1107,7 +1111,6 @@ class TheTwoDesksAreKeptApart(HelpdeskBase):
 
     def setUp(self):
         super().setUp()
-        AdminUser.objects.create(email=ADMIN_STAFF, name='Meena', scope='admin')
 
     def log(self, email, category, subject='A job'):
         return self.client.post(f'{API}/tickets/', {
@@ -1183,3 +1186,129 @@ class TheTwoDesksAreKeptApart(HelpdeskBase):
         one = self.client.get(f'{API}/work-report/?desk=admin',
                               **auth(SUPER_ADMIN_EMAIL)).json()
         self.assertEqual(one['total'], 1)
+
+
+class EveryRequestIsAddressedToSomebody(HelpdeskBase):
+    """Two or three people share each desk. Everything used to land in one
+    pile all of them saw, so nothing could say which of them had handled what
+    -- and the monthly report could only count whoever pressed the button."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=OTHER_IT, name='Sana', scope='it_support')
+
+    def ticket_to(self, who, email=EMPLOYEE):
+        return self.client.post(f'{API}/tickets/', {
+            'subject': 'VPN will not connect', 'description': 'Times out.',
+            'category': 'vpn_access', 'priority': 'high',
+            'assigned_to_email': who,
+        }, content_type='application/json', **auth(email))
+
+    def test_the_picker_offers_the_right_desk(self):
+        it = self.client.get(f'{API}/desk-staff/?desk=it', **auth(EMPLOYEE)).json()['results']
+        self.assertEqual({p['email'] for p in it}, {IT_STAFF, OTHER_IT})
+        admin = self.client.get(f'{API}/desk-staff/?desk=admin', **auth(EMPLOYEE)).json()['results']
+        self.assertEqual({p['email'] for p in admin}, {ADMIN_STAFF})
+
+    def test_the_roster_is_not_public(self):
+        self.assertEqual(self.client.get(f'{API}/desk-staff/?desk=it').status_code, 401)
+
+    def test_a_ticket_must_name_somebody(self):
+        r = self.client.post(f'{API}/tickets/', {
+            'subject': 'x', 'description': 'y', 'category': 'vpn_access',
+        }, content_type='application/json', **auth(EMPLOYEE))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('who', r.json()['error'].lower())
+
+    def test_it_must_be_somebody_on_that_desk(self):
+        """Otherwise the field is free text, and 'assigned to whoever the
+        browser said' is not an assignment."""
+        for who in (ADMIN_STAFF, EMPLOYEE, 'nobody@apisindia.com'):
+            self.assertEqual(self.ticket_to(who).status_code, 400, who)
+
+    def test_it_is_recorded_with_the_name_beside_the_address(self):
+        t = self.ticket_to(OTHER_IT).json()['ticket']
+        self.assertEqual(t['assigned_to_email'], OTHER_IT)
+        self.assertEqual(t['assigned_to_name'], 'Sana')
+
+    def test_each_person_sees_only_their_own(self):
+        self.ticket_to(IT_STAFF)
+        self.ticket_to(OTHER_IT)
+        mine = self.client.get(f'{API}/tickets/', **auth(IT_STAFF)).json()['results']
+        self.assertEqual([t['assigned_to_email'] for t in mine], [IT_STAFF])
+
+    def test_the_super_admin_sees_everybodys(self):
+        self.ticket_to(IT_STAFF)
+        self.ticket_to(OTHER_IT)
+        rows = self.client.get(f'{API}/tickets/', **auth(SUPER_ADMIN_EMAIL)).json()['results']
+        self.assertEqual(len(rows), 2)
+
+    def test_an_item_request_must_name_an_admin(self):
+        body = {'item_name': 'A4 paper', 'quantity': 5, 'requested_by_name': 'Priya',
+                'category': 'stationery_office_supplies'}
+        self.assertEqual(self.client.post(f'{API}/resource-requests/', body,
+                                          content_type='application/json',
+                                          **auth(EMPLOYEE)).status_code, 400)
+        body['assigned_to_email'] = ADMIN_STAFF
+        self.assertEqual(self.client.post(f'{API}/resource-requests/', body,
+                                          content_type='application/json',
+                                          **auth(EMPLOYEE)).status_code, 201)
+
+    def test_a_room_booking_must_name_an_admin(self):
+        room = Room.objects.filter(is_active=True).first()
+        body = {'room_id': room.id, 'date': timezone.localdate().isoformat(),
+                'start_time': '15:00', 'end_time': '16:00',
+                'purpose': 'internal_meeting', 'requested_by_name': 'Priya'}
+        r = self.client.post(f'{API}/bookings/', body,
+                             content_type='application/json', **auth(EMPLOYEE))
+        self.assertEqual(r.status_code, 400)
+        body['assigned_to_email'] = ADMIN_STAFF
+        r = self.client.post(f'{API}/bookings/', body,
+                             content_type='application/json', **auth(EMPLOYEE))
+        self.assertIn(r.status_code, (200, 201), r.content[:160])
+
+
+class WhatIsOnMyDesk(HelpdeskBase):
+    """The other half of "My Requests": not what I asked for, what I was
+    given. This is the screen a person on a desk works from."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=OTHER_IT, name='Sana', scope='it_support')
+        self.client.post(f'{API}/tickets/', {
+            'subject': 'VPN will not connect', 'description': 'Times out.',
+            'category': 'vpn_access', 'assigned_to_email': IT_STAFF,
+        }, content_type='application/json', **auth(EMPLOYEE))
+        self.client.post(f'{API}/resource-requests/', {
+            'item_name': 'A4 paper', 'quantity': 5, 'requested_by_name': 'Priya',
+            'category': 'stationery_office_supplies', 'assigned_to_email': ADMIN_STAFF,
+        }, content_type='application/json', **auth(EMPLOYEE))
+
+    def tasks(self, email):
+        return self.client.get(f'{API}/my-tasks/', **auth(email)).json()
+
+    def test_it_shows_what_was_given_to_me(self):
+        d = self.tasks(IT_STAFF)
+        self.assertEqual(d['waiting'], 1)
+        self.assertEqual(d['by_kind']['ticket'], 1)
+        self.assertEqual(d['results'][0]['what'], 'VPN will not connect')
+
+    def test_it_does_not_show_somebody_elses(self):
+        self.assertEqual(self.tasks(OTHER_IT)['waiting'], 0)
+
+    def test_each_desk_gets_its_own_kind_of_work(self):
+        self.assertEqual(self.tasks(ADMIN_STAFF)['by_kind']['item'], 1)
+        self.assertEqual(self.tasks(ADMIN_STAFF)['by_kind']['ticket'], 0)
+
+    def test_an_employee_has_no_desk(self):
+        self.assertIn(self.client.get(f'{API}/my-tasks/', **auth(EMPLOYEE)).status_code,
+                      (401, 403))
+
+    def test_a_logged_job_is_not_a_task(self):
+        """It has already happened. Nobody is waiting on it."""
+        self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Restarted the mail server',
+            'description': 'x', 'category': 'server_storage',
+            'logged_for': 'Whole office', 'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(IT_STAFF))
+        self.assertEqual(self.tasks(IT_STAFF)['waiting'], 1)

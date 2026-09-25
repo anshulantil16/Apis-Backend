@@ -6,6 +6,7 @@ from rest_framework.response import Response
 
 from ..models import Room, BookingRequest
 from ..status import find_conflicts
+from ..assignment import resolve as resolve_assignee, visible_to
 from .perms import require_role, actor_role, require_signed_in
 
 
@@ -32,6 +33,8 @@ def _brief(b):
         'purpose': b.purpose, 'purpose_label': b.get_purpose_display(),
         'purpose_detail': b.purpose_detail, 'attendees': b.attendees,
         'status': b.status, 'reviewed_by': b.reviewed_by,
+        'assigned_to_email': b.assigned_to_email,
+        'assigned_to_name': b.assigned_to_name,
         'reviewed_at': b.reviewed_at.isoformat() if b.reviewed_at else None,
         'admin_remarks': b.admin_remarks, 'created_at': b.created_at.isoformat(),
         'released_at': b.released_at.isoformat() if b.released_at else None,
@@ -55,7 +58,10 @@ class BookingListView(APIView):
             return err
         role, email = actor_role(request)
         qs = BookingRequest.objects.select_related('room').all()
-        if role not in ('admin', 'it_support', 'super_admin'):
+        if role == 'admin':
+            # Their own assignments only -- see roompulse/assignment.py.
+            qs = visible_to(qs, role, email)
+        elif role not in ('it_support', 'super_admin'):
             qs = qs.filter(requested_by_email=email)
         room_id = request.query_params.get('room')
         if room_id:
@@ -132,7 +138,15 @@ class BookingListView(APIView):
                     'conflict': _brief(c),
                 }, status=409)
 
+        # Addressed to somebody on the desk, from the roster, before
+        # anything is written. A request nobody owns is what this replaces.
+        chosen = resolve_assignee('admin', d.get('assigned_to_email'))
+        if isinstance(chosen, str):
+            return Response({'error': chosen}, status=400)
+        assigned_email, assigned_name = chosen
+
         booking = BookingRequest.objects.create(
+            assigned_to_email=assigned_email, assigned_to_name=assigned_name,
             room=room, requested_by_name=name[:200], requested_by_email=email,
             department=str(d.get('department') or '').strip()[:150],
             date=booking_date, start_time=start_time, end_time=end_time,

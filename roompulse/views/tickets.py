@@ -17,6 +17,7 @@ from ..attachments import url_for as attachment_url
 from ..models import (ResourceRequest, SupportTicket, TicketAttachment,
                       TicketEvent)
 from ..worktime import after_hours_minutes, resolve_time
+from ..assignment import resolve as resolve_assignee, visible_to
 from .perms import actor_role, require_signed_in
 
 MAX_ATTACHMENTS = 10
@@ -98,6 +99,8 @@ def _brief(t, request=None):
         'status': t.status, 'status_label': t.get_status_display(),
         'origin': t.origin, 'origin_label': t.get_origin_display(),
         'desk': t.desk, 'desk_label': t.get_desk_display(),
+        'assigned_to_email': t.assigned_to_email,
+        'assigned_to_name': t.assigned_to_name,
         'logged_for': t.logged_for,
         'performed_by_email': t.performed_by_email,
         'performed_by_name': t.performed_by_name,
@@ -147,7 +150,11 @@ class TicketListView(APIView):
               .prefetch_related('attachments', 'events'))
         # An employee sees their own tickets. Only IT Support and the super
         # admin see everybody's.
-        if role == 'admin':
+        if role == 'it_support':
+            # Their own assignments only. Two or three people share this
+            # desk; one shared pile could not say who had handled what.
+            qs = visible_to(qs, role, email)
+        elif role == 'admin':
             # An admin is not IT triage, so they do not get everybody's
             # tickets. But Admin's own work log is theirs -- they log into it,
             # and the monthly report already shows them all of it. Excluding
@@ -242,8 +249,16 @@ class TicketListView(APIView):
             return self._log_work(request, d, role, email, subject, description,
                                   category, priority, files)
 
+        # Addressed to somebody, from the roster, before anything else is
+        # written. A request nobody owns is the thing this replaces.
+        chosen = resolve_assignee('it', d.get('assigned_to_email'))
+        if isinstance(chosen, str):
+            return Response({'error': chosen}, status=400)
+        assigned_email, assigned_name = chosen
+
         auto_approve = role in ('it_support', 'super_admin')
         ticket = SupportTicket.objects.create(
+            assigned_to_email=assigned_email, assigned_to_name=assigned_name,
             requested_by_name=str(d.get('requested_by_name') or d.get('name') or '').strip()[:200],
             requested_by_email=email,
             department=str(d.get('department') or '').strip()[:150],
