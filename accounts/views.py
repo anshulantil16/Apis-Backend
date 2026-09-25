@@ -240,6 +240,71 @@ class MeView(PortalAPIView):
         return Response({'user': serialize_user(s.user)})
 
 
+class MyProfileView(PortalAPIView):
+    """Everything the company records about the person asking -- and only
+    about them.
+
+    The HRMS feed carries far more than the portal was keeping, and the
+    natural place for the useful part of it is the one screen where showing
+    it raises no question at all: your own. Nobody can read anybody else's
+    through here; the session decides whose row is returned, and there is no
+    parameter that could say otherwise.
+
+    Deliberately left out:
+
+    - the birth YEAR. Day and month are what a birthday needs, and the model
+      says so already -- see PortalUser.date_of_birth.
+    - the grade code ("O2", "M3"). It is theirs, so this is a judgement not a
+      rule, but a bare cadre letter with no explanation beside it reads as a
+      ranking and starts conversations HR has to finish. Say the word and it
+      goes in.
+    - anything from the wider record: PAN, Aadhaar, bank, PF and ESI numbers
+      are in the upstream feed and are no business of an intranet.
+    """
+
+    def get(self, request):
+        s = current_session(request)
+        if not s:
+            return Response({'error': 'Not signed in.'}, status=401)
+        s.touch()
+        u = s.user
+
+        served = None
+        if u.date_of_joining:
+            days = (timezone.localdate() - u.date_of_joining).days
+            years, months = divmod(max(days, 0) // 30, 12)
+            served = (f'{years} yr {months} mo' if years else f'{months} mo')
+
+        # The reporting line is empty on this tenant today, so this resolves
+        # to nothing rather than showing a code nobody recognises. It starts
+        # working by itself the day HR fills it in.
+        manager = ''
+        if u.reporting_manager_code:
+            manager = (PortalUser.objects
+                       .filter(employee_code=u.reporting_manager_code)
+                       .values_list('name', flat=True).first() or '')
+
+        return Response({'profile': {
+            'name': u.name,
+            'employee_code': u.employee_code,
+            'email': u.email,
+            'designation': u.designation,
+            'department': u.department,
+            'category': u.category,
+            'location': u.location,
+            'office_mobile': u.office_mobile,
+            'manager': manager,
+            'date_of_joining': (u.date_of_joining.strftime('%d %b %Y')
+                                if u.date_of_joining else ''),
+            'served': served,
+            # Day and month only, on purpose.
+            'birthday': u.date_of_birth.strftime('%d %b') if u.date_of_birth else '',
+            'is_superadmin': u.is_superadmin,
+            'from_hrms': u.from_hrms,
+            'last_synced_at': local_str(u.last_synced_at, '%d-%m-%Y %H:%M'),
+        }})
+
+
 class LogoutView(PortalAPIView):
     def post(self, request):
         s = current_session(request)

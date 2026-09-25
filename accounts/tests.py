@@ -833,3 +833,60 @@ class SyncHrmsCommand(TestCase):
                                                          message='ok')
             call_command('sync_hrms')
         self.assertIsNone(m.call_args.kwargs['modified_since'])
+
+
+class YourOwnProfile(TestCase):
+    """The HRMS feed carries far more than the portal was keeping, and the one
+    screen where showing it raises no question at all is your own."""
+
+    def setUp(self):
+        self.me = PortalUser.objects.create(
+            employee_code='SL02930', email='suresh@apisindia.com',
+            name='A. Suresh Goud', designation='Sales Representative',
+            department='General Trade', category='Sales', grade='O2',
+            location='Hyderabad', office_mobile='9000000001',
+            date_of_joining=date(2025, 1, 1), date_of_birth=date(1988, 3, 6),
+            reporting_manager_code='SL00001', from_hrms=True)
+        PortalUser.objects.create(employee_code='SL00001', email='mgr@apisindia.com',
+                                  name='Ravi Manager', from_hrms=True)
+        self.other = PortalUser.objects.create(
+            employee_code='SL09999', email='other@apisindia.com', name='Somebody Else')
+
+    def profile(self, user):
+        token = PortalSession.start(user)
+        return self.client.get('/api/accounts/portal/profile/',
+                               HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def test_it_returns_your_own_record(self):
+        d = self.profile(self.me).json()['profile']
+        self.assertEqual(d['name'], 'A. Suresh Goud')
+        self.assertEqual(d['employee_code'], 'SL02930')
+        self.assertEqual(d['designation'], 'Sales Representative')
+        self.assertEqual(d['category'], 'Sales')
+        self.assertEqual(d['office_mobile'], '9000000001')
+
+    def test_it_resolves_the_reporting_line_to_a_name(self):
+        self.assertEqual(self.profile(self.me).json()['profile']['manager'], 'Ravi Manager')
+
+    def test_it_says_how_long_they_have_been_here(self):
+        self.assertTrue(self.profile(self.me).json()['profile']['served'])
+
+    def test_it_never_carries_the_birth_year(self):
+        """Day and month are what a birthday needs."""
+        d = self.profile(self.me).json()['profile']
+        self.assertEqual(d['birthday'], '06 Mar')
+        self.assertNotIn('1988', str(d))
+
+    def test_it_leaves_out_the_grade(self):
+        self.assertNotIn('O2', str(self.profile(self.me).json()['profile']))
+
+    def test_there_is_no_way_to_ask_for_somebody_else(self):
+        token = PortalSession.start(self.me)
+        r = self.client.get(
+            f'/api/accounts/portal/profile/?user_id={self.other.id}'
+            f'&employee_code={self.other.employee_code}',
+            HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(r.json()['profile']['name'], 'A. Suresh Goud')
+
+    def test_it_is_not_public(self):
+        self.assertEqual(self.client.get('/api/accounts/portal/profile/').status_code, 401)

@@ -916,10 +916,18 @@ class PendingBookingsAreVisible(HelpdeskBase):
 
     def test_a_pending_request_shows_on_the_room(self):
         room = Room.objects.filter(is_active=True).first()
-        today = timezone.localdate()
+        # A slot still to come TODAY, worked out from the clock rather than
+        # written down: this used to book 15:00-16:00, which was fine until
+        # requests whose time has passed started expiring, and then the test
+        # passed every morning and failed every afternoon.
+        now = timezone.localtime()
+        start = (now + timedelta(minutes=5)).time().replace(second=0, microsecond=0)
+        end = time(23, 59)
+        if start >= end:                  # the last minutes of the day
+            return
         BookingRequest.objects.create(
             room=room, requested_by_name='Ravi', requested_by_email=IT_STAFF,
-            date=today, start_time=time(15, 0), end_time=time(16, 0),
+            date=now.date(), start_time=start, end_time=end,
             purpose='internal_meeting', status='pending')
         grid = self.client.get(f'{API}/rooms/', **auth(IT_STAFF)).json()['results']
         mine = next(r for r in grid if r['id'] == room.id)
