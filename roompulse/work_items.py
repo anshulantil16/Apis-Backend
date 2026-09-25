@@ -67,8 +67,13 @@ def _item(**kw):
     return kw
 
 
-def collect(first, last):
+def collect(first, last, desk=None):
     """-> a flat list of every job finished between two dates, oldest last.
+
+    `desk` narrows it to one team: 'it' is IT's own logged work and the
+    tickets they closed; 'admin' is Admin's logged work plus the requests
+    they fulfilled and the rooms they approved, which are Admin's queues and
+    nobody else's. None is both, which only the super admin sees.
 
     One dict per job, whichever queue it came from:
       date, email, name, subject, category, category_label, for, status,
@@ -83,7 +88,10 @@ def collect(first, last):
     span = (_aware(first, time.min), _aware(last, time.max))
     out = []
 
-    for t in SupportTicket.objects.filter(performed_on__range=(first, last)):
+    tickets = SupportTicket.objects.filter(performed_on__range=(first, last))
+    if desk:
+        tickets = tickets.filter(desk=desk)
+    for t in tickets:
         out.append(_item(
             id=f'ticket-{t.id}', source='ticket', origin=t.origin,
             date=t.performed_on,
@@ -98,6 +106,13 @@ def collect(first, last):
             after_hours_minutes=after_hours_minutes(
                 t.performed_on, t.worked_from, t.worked_to),
         ))
+
+    # Admin's two queues. IT does not work them, so under desk='it' they are
+    # not IT's month -- and counting them there would put an admin's work in
+    # an IT engineer's total.
+    if desk == 'it':
+        out.sort(key=lambda i: (i['date'] or first), reverse=True)
+        return out
 
     # Handed over, not merely agreed to.
     items = (ResourceRequest.objects
@@ -143,10 +158,13 @@ def collect(first, last):
     return out
 
 
-def still_open():
-    """Everything waiting on somebody, across all three queues."""
-    return (SupportTicket.objects.filter(
-                status__in=('pending', 'approved', 'in_progress')).count()
-            + ResourceRequest.objects.filter(
-                status__in=('pending', 'approved')).count()
-            + BookingRequest.objects.filter(status='pending').count())
+def still_open(desk=None):
+    """Waiting on somebody, in the queues this desk actually works."""
+    tickets = SupportTicket.objects.filter(
+        status__in=('pending', 'approved', 'in_progress')).count()
+    if desk == 'it':
+        return tickets
+    admin_side = (ResourceRequest.objects.filter(
+                      status__in=('pending', 'approved')).count()
+                  + BookingRequest.objects.filter(status='pending').count())
+    return admin_side if desk == 'admin' else tickets + admin_side

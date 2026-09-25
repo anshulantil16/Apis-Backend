@@ -24,7 +24,24 @@ from rest_framework.response import Response
 from ..models import AdminUser
 from ..work_items import collect, still_open
 from ..worktime import OFFICE_END, OFFICE_START
-from .perms import require_role
+from .perms import actor_role, require_role
+
+
+# Which team's month a caller is looking at. IT and Admin are different
+# people doing different work, so each gets their own report rather than one
+# merged figure neither of them recognises. The super admin oversees both and
+# can ask for either, or for everything.
+def _desk_for(request):
+    role, _ = actor_role(request)
+    if role == 'admin':
+        return 'admin'
+    if role == 'it_support':
+        return 'it'
+    asked = (request.query_params.get('desk') or '').strip().lower()
+    return asked if asked in ('it', 'admin') else None
+
+
+DESK_LABEL = {'it': 'IT', 'admin': 'Admin', None: 'IT and Admin'}
 
 
 def _month_bounds(raw, today):
@@ -64,7 +81,8 @@ class WorkReportView(APIView):
         # Collected across all three queues (see work_items.collect), so an
         # Admin's month counts the requests they fulfilled and the bookings
         # they approved, the same way IT's counts the tickets they closed.
-        rows = collect(first, last)
+        desk = _desk_for(request)
+        rows = collect(first, last, desk)
 
         names = {a.email.lower(): a.name for a in AdminUser.objects.all()}
 
@@ -119,6 +137,8 @@ class WorkReportView(APIView):
         return Response({
             'month': f'{first:%Y-%m}',
             'label': label,
+            'desk': desk or '',
+            'desk_label': DESK_LABEL[desk],
             'from': first.isoformat(),
             'to': last.isoformat(),
             'total': len(rows),
@@ -139,7 +159,7 @@ class WorkReportView(APIView):
             # Still waiting on somebody at the end of the month: not output,
             # but the other half of the picture, and the number a manager
             # asks about next.
-            'still_open': still_open(),
+            'still_open': still_open(desk),
             'person': person,
             'items': items,
         })
@@ -164,7 +184,7 @@ class WorkReportExportView(APIView):
 
         first, last, label = _month_bounds(request.query_params.get('month'),
                                            timezone.localdate())
-        rows = collect(first, last)
+        rows = collect(first, last, _desk_for(request))
         rows.reverse()      # oldest first reads better down a spreadsheet
 
         # The same numbers the screen shows, built the same way -- a file that

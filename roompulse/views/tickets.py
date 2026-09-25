@@ -14,7 +14,8 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import os
 
 from ..attachments import url_for as attachment_url
-from ..models import SupportTicket, TicketAttachment, TicketEvent
+from ..models import (ResourceRequest, SupportTicket, TicketAttachment,
+                      TicketEvent)
 from ..worktime import after_hours_minutes, resolve_time
 from .perms import actor_role, require_signed_in
 
@@ -62,6 +63,23 @@ def _log(ticket, action, role, email, remarks='', from_status=''):
     )
 
 
+def desk_for(role, category):
+    """Whose work a logged job is.
+
+    From the role, because that is what the person actually is -- an admin
+    logging something under 'Other' is still Admin's work, and the category
+    cannot say so. The super admin is neither, so for them the category
+    decides, which it can: the two lists only overlap on 'other'.
+    """
+    if role == 'admin':
+        return 'admin'
+    if role == 'it_support':
+        return 'it'
+    admin_only = {c[0] for c in ResourceRequest.CATEGORY_CHOICES} - {
+        c[0] for c in SupportTicket.IT_CATEGORY_CHOICES}
+    return 'admin' if category in admin_only else 'it'
+
+
 def _brief(t, request=None):
     def _url(a):
         # A signed path under /api/, not /media/. See roompulse/attachments.py:
@@ -79,6 +97,7 @@ def _brief(t, request=None):
                         for a in t.attachments.all()],
         'status': t.status, 'status_label': t.get_status_display(),
         'origin': t.origin, 'origin_label': t.get_origin_display(),
+        'desk': t.desk, 'desk_label': t.get_desk_display(),
         'logged_for': t.logged_for,
         'performed_by_email': t.performed_by_email,
         'performed_by_name': t.performed_by_name,
@@ -130,11 +149,12 @@ class TicketListView(APIView):
         # admin see everybody's.
         if role == 'admin':
             # An admin is not IT triage, so they do not get everybody's
-            # tickets. But the work log is theirs as much as IT's -- they log
-            # into it, and the monthly report already shows them all of it.
-            # Excluding it here was why a job an admin had just logged
-            # appeared nowhere afterwards: saved, counted, and invisible.
-            qs = qs.filter(Q(origin='logged') | Q(requested_by_email=email))
+            # tickets. But Admin's own work log is theirs -- they log into it,
+            # and the monthly report already shows them all of it. Excluding
+            # it here was why a job an admin had just logged appeared nowhere
+            # afterwards: saved, counted, and invisible.
+            qs = qs.filter(Q(origin='logged', desk='admin')
+                           | Q(requested_by_email=email))
         elif role != 'it_support' and role != 'super_admin':
             # Their own tickets, and never the team's internal work log --
             # that is a record of what IT did, not correspondence with them.
@@ -142,6 +162,9 @@ class TicketListView(APIView):
         category = request.query_params.get('category')
         if category:
             qs = qs.filter(category=category)
+        desk = request.query_params.get('desk')
+        if desk in dict(SupportTicket.DESK_CHOICES):
+            qs = qs.filter(desk=desk)
         origin = request.query_params.get('origin')
         if origin in dict(SupportTicket.ORIGIN_CHOICES):
             qs = qs.filter(origin=origin)
@@ -152,7 +175,13 @@ class TicketListView(APIView):
         # already restricted to their own above, so it cannot widen anything.
         mine = request.query_params.get('mine')
         if mine:
-            qs = qs.filter(requested_by_email=mine.strip().lower())
+            # "My Requests" means things this person ASKED FOR. A job they
+            # logged is not a request -- nobody is waiting on it, there is
+            # nothing to approve, it has already happened -- and it was
+            # turning up on that screen labelled as an IT ticket, which is
+            # two kinds of wrong at once for an admin's own admin work.
+            qs = qs.filter(requested_by_email=mine.strip().lower()).exclude(
+                origin='logged')
         try:
             limit = max(1, min(500, int(request.query_params.get('limit', 200))))
         except (TypeError, ValueError):
@@ -299,7 +328,7 @@ class TicketListView(APIView):
 
         actor_name = str(d.get('performed_by_name') or d.get('requested_by_name') or '').strip()
         ticket = SupportTicket.objects.create(
-            origin='logged',
+            origin='logged', desk=desk_for(role, category),
             requested_by_name=actor_name[:200],
             requested_by_email=email,          # the person who did and logged it
             logged_for=str(d.get('logged_for') or '').strip()[:200],

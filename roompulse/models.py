@@ -279,6 +279,17 @@ class SupportTicket(models.Model):
     ]
     origin = models.CharField(max_length=20, choices=ORIGIN_CHOICES,
                               default='requested', db_index=True)
+
+    # Whose work this is. IT and Admin are two teams doing two different
+    # jobs, and both log into this one table; without this the only thing
+    # telling them apart was the category, which 'Other' does not.
+    #
+    # A ticket somebody raises is always IT's -- Admin's requests are
+    # BookingRequest and ResourceRequest, which are their own tables. So this
+    # only really varies on logged work.
+    DESK_CHOICES = [('it', 'IT'), ('admin', 'Admin')]
+    desk = models.CharField(max_length=10, choices=DESK_CHOICES,
+                            default='it', db_index=True)
     # Who the logged job was for -- a person, a department, "the server room".
     # Free text on purpose: much of this work is for nobody in particular.
     logged_for = models.CharField(max_length=200, blank=True)

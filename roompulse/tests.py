@@ -1097,3 +1097,89 @@ class AnAdminCanSeeWhatTheyLogged(HelpdeskBase):
         self.raise_ticket()          # an employee's IT ticket
         subjects = [r['subject'] for r in self.rows(ADMIN_STAFF)]
         self.assertNotIn('Laptop will not boot', subjects)
+
+
+class TheTwoDesksAreKeptApart(HelpdeskBase):
+    """IT and Admin are different people doing different work. Logged jobs all
+    live in one table, so without a desk on the row an admin's own work came
+    back looking like an IT ticket -- which is how it was labelled on the
+    screen that reported this."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=ADMIN_STAFF, name='Meena', scope='admin')
+
+    def log(self, email, category, subject='A job'):
+        return self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': subject, 'description': 'x',
+            'category': category, 'logged_for': 'The office',
+            'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(email))
+
+    def test_an_admins_job_is_admin_work(self):
+        r = self.log(ADMIN_STAFF, 'plumbing')
+        self.assertEqual(r.status_code, 201, r.content[:200])
+        self.assertEqual(SupportTicket.objects.get(pk=r.json()['id']).desk, 'admin')
+
+    def test_an_admins_job_under_other_is_still_admin_work(self):
+        """'Other' is on both lists, so the category cannot say whose it is --
+        the person can."""
+        r = self.log(ADMIN_STAFF, 'other')
+        self.assertEqual(SupportTicket.objects.get(pk=r.json()['id']).desk, 'admin')
+
+    def test_an_it_job_is_it_work(self):
+        r = self.log(IT_STAFF, 'server_storage')
+        self.assertEqual(SupportTicket.objects.get(pk=r.json()['id']).desk, 'it')
+
+    def test_my_requests_never_shows_logged_work(self):
+        """A job you logged is not something you asked for. It was appearing
+        on the requests screen badged 'IT Ticket' -- wrong twice over for an
+        admin's own admin work."""
+        self.log(ADMIN_STAFF, 'plumbing', subject='Got the pantry tap fixed')
+        rows = self.client.get(f'{API}/tickets/?mine={ADMIN_STAFF}',
+                               **auth(ADMIN_STAFF)).json()['results']
+        self.assertEqual([r for r in rows if r['origin'] == 'logged'], [])
+
+    def test_each_desk_sees_its_own_log(self):
+        self.log(ADMIN_STAFF, 'plumbing', subject='Pantry tap')
+        self.log(IT_STAFF, 'server_storage', subject='Mail server')
+        seen = [r['subject'] for r in self.client.get(
+            f'{API}/tickets/?origin=logged', **auth(ADMIN_STAFF)).json()['results']]
+        self.assertIn('Pantry tap', seen)
+        self.assertNotIn('Mail server', seen)
+
+    def test_the_reports_are_separate(self):
+        self.log(ADMIN_STAFF, 'plumbing', subject='Pantry tap')
+        self.log(IT_STAFF, 'server_storage', subject='Mail server')
+
+        admin_side = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(admin_side['desk_label'], 'Admin')
+        self.assertEqual(admin_side['total'], 1)
+        self.assertEqual([p['email'] for p in admin_side['people']], [ADMIN_STAFF])
+
+        it_side = self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()
+        self.assertEqual(it_side['desk_label'], 'IT')
+        self.assertEqual(it_side['total'], 1)
+        self.assertEqual([p['email'] for p in it_side['people']], [IT_STAFF])
+
+    def test_admin_queue_work_is_not_in_its_report(self):
+        """Fulfilling an item request is Admin's job, so it must not land in
+        an IT engineer's month."""
+        ResourceRequest.objects.create(
+            requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            category='stationery_office_supplies', item_name='A4 paper',
+            status='fulfilled', fulfilled_by=ADMIN_STAFF, fulfilled_at=timezone.now())
+        self.assertEqual(
+            self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()['total'], 0)
+        self.assertEqual(
+            self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()['total'], 1)
+
+    def test_the_super_admin_sees_both_and_can_ask_for_either(self):
+        self.log(ADMIN_STAFF, 'plumbing')
+        self.log(IT_STAFF, 'server_storage')
+        both = self.client.get(f'{API}/work-report/', **auth(SUPER_ADMIN_EMAIL)).json()
+        self.assertEqual(both['total'], 2)
+        self.assertEqual(both['desk_label'], 'IT and Admin')
+        one = self.client.get(f'{API}/work-report/?desk=admin',
+                              **auth(SUPER_ADMIN_EMAIL)).json()
+        self.assertEqual(one['total'], 1)
