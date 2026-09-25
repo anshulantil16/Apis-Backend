@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from ..models import ResourceRequest
+from ..people import apply_names
 from ..assignment import admin_queue_for, raised_by, resolve as resolve_assignee
 from .perms import actor_role, require_signed_in
 
@@ -76,7 +77,10 @@ class ResourceRequestListView(APIView):
             limit = max(1, min(500, int(request.query_params.get('limit', 200))))
         except (TypeError, ValueError):
             limit = 200
-        return Response({'results': [_brief(r) for r in qs[:limit]], 'count': qs.count()})
+        rows = apply_names([_brief(r) for r in qs[:limit]],
+                           ('requested_by_email', 'requested_by_name'),
+                           ('assigned_to_email', 'assigned_to_name'))
+        return Response({'results': rows, 'count': qs.count()})
 
     def post(self, request):
         # Identity from the session, never the body: otherwise anyone can

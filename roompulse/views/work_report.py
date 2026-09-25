@@ -21,7 +21,6 @@ from datetime import date
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from ..models import AdminUser
 from ..work_items import collect, still_open
 from ..worktime import OFFICE_END, OFFICE_START
 from .perms import actor_role, require_role
@@ -100,10 +99,10 @@ class WorkReportView(APIView):
         if me:
             rows = [r for r in rows if r['email'] == me]
 
-        names = {a.email.lower(): a.name for a in AdminUser.objects.all()}
-
+        # work_items.collect has already resolved these against HRMS; this
+        # is the fallback for a row whose person is in none of the tables.
         def who(r):
-            return (names.get(r['email']) or r['name']
+            return (r['name']
                     or (r['email'].split('@')[0] if r['email'] else 'Unattributed'))
 
         people, by_category, by_origin, by_source = {}, {}, {}, {}

@@ -329,11 +329,15 @@ class TheQueueStaysCheapToLoad(HelpdeskBase):
         headers = auth(IT_STAFF)          # minting the token is not the request
 
         def count_queries(n_tickets):
-            with self.assertNumQueries(6):
+            with self.assertNumQueries(9):
                 r = self.client.get(f'{API}/tickets/', **headers)
             return r
 
-        # 6 = session lookup, roster lookup, tickets, attachments, events, count.
+        # 9 = session lookup, roster lookup, tickets, attachments, events,
+        # count, and up to three to turn the addresses on the page into
+        # people's real names (HRMS, then the directory, then the roster --
+        # it stops at the first that knows everybody, so a list of staff
+        # costs three and a list of employees costs one).
         count_queries(12)
 
         # The point of the test: twice the tickets, same number of queries.
@@ -1479,3 +1483,92 @@ class YourMonthIsYours(HelpdeskBase):
         r = self.client.get(f'{API}/work-report/export/', **auth(IT_STAFF))
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.content[:2] == b'PK')
+
+
+class PeopleAreCalledWhatTheyAreCalled(HelpdeskBase):
+    """The screens read "Anshulantil01", "2022Bth005" and "Rainy222004" --
+    sign-in handles, taken from the session or from whatever the browser sent
+    when a request was raised. The company's record of who people are is
+    accounts.PortalUser, synced from HRMS, and that is what a report a manager
+    reads has to say."""
+
+    def setUp(self):
+        super().setUp()
+        PortalUser.objects.create(
+            employee_code='E1001', email=IT_STAFF, name='Kanchan Sharma')
+        PortalUser.objects.create(
+            employee_code='E1002', email=EMPLOYEE, name='Priya Nair')
+
+    def test_a_raised_ticket_shows_the_real_name(self):
+        self.client.post(f'{API}/tickets/', {
+            'subject': 'VPN down', 'description': 'x', 'category': 'vpn_access',
+            'requested_by_name': '2022Bth005',          # the sign-in handle
+            'assigned_to_email': IT_STAFF,
+        }, content_type='application/json', **auth(EMPLOYEE))
+        rows = self.client.get(f'{API}/tickets/', **auth(IT_STAFF)).json()['results']
+        self.assertEqual(rows[0]['requested_by_name'], 'Priya Nair')
+        self.assertEqual(rows[0]['assigned_to_name'], 'Kanchan Sharma')
+
+    def test_the_month_names_the_person_who_did_the_work(self):
+        self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Restarted the mail server',
+            'description': 'x', 'category': 'server_storage',
+            'performed_by_name': 'Anshulantil01',
+            'logged_for': 'The office', 'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(IT_STAFF))
+        d = self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()
+        self.assertEqual(d['people'][0]['name'], 'Kanchan Sharma')
+
+    def test_it_is_named_on_both_desks_reports(self):
+        """collect() has two exits and the first version named people in only
+        one of them, so IT's month came back reading 'it.desk'."""
+        self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Restarted the mail server',
+            'description': 'x', 'category': 'server_storage',
+            'logged_for': 'The office', 'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(IT_STAFF))
+        for who in (IT_STAFF, SUPER_ADMIN_EMAIL):
+            d = self.client.get(f'{API}/work-report/?desk=it', **auth(who)).json()
+            self.assertEqual(d['people'][0]['name'], 'Kanchan Sharma', who)
+
+    def test_the_picker_lists_real_names(self):
+        d = self.client.get(f'{API}/desk-staff/?desk=it', **auth(EMPLOYEE)).json()
+        self.assertEqual([p['name'] for p in d['results']], ['Kanchan Sharma'])
+
+    def test_somebody_hrms_does_not_know_keeps_the_name_on_the_row(self):
+        """A contractor, or a joiner not yet in the feed. Better their typed
+        name than an email prefix."""
+        self.client.post(f'{API}/resource-requests/', {
+            'item_name': 'A4 paper', 'quantity': 1, 'requested_by_name': 'Ravi Contractor',
+            'category': 'stationery_office_supplies', 'assigned_to_email': ADMIN_STAFF,
+        }, content_type='application/json', **auth('ravi.contractor@apisindia.com'))
+        rows = self.client.get(f'{API}/resource-requests/', **auth(ADMIN_STAFF)).json()['results']
+        self.assertEqual(rows[0]['requested_by_name'], 'Ravi Contractor')
+
+
+class SigningInGivesYourRealName(HelpdeskBase):
+    """The session's name is carried onto everything the person then does, so
+    a handle here spreads: it was a prettied-up email prefix, which is how
+    "Anshulantil01" got onto other people's screens."""
+
+    def sign_in(self, email):
+        from django.core.cache import cache
+        self.client.post(f'{API}/login/',
+                         {'action': 'send_otp', 'email': email},
+                         content_type='application/json')
+        saved = cache.get(f'roompulse_otp_{email}') or {}
+        return self.client.post(
+            f'{API}/login/',
+            {'action': 'verify_otp', 'email': email, 'otp': saved.get('code')},
+            content_type='application/json')
+
+    def test_it_is_the_name_hrms_has(self):
+        PortalUser.objects.create(employee_code='E9', email=EMPLOYEE, name='Priya Nair')
+        r = self.sign_in(EMPLOYEE)
+        self.assertEqual(r.status_code, 200, r.content[:160])
+        self.assertEqual(r.json()['name'], 'Priya Nair')
+
+    def test_without_hrms_it_falls_back_rather_than_failing(self):
+        r = self.sign_in('new.joiner@apisindia.com')
+        self.assertEqual(r.status_code, 200, r.content[:160])
+        self.assertTrue(r.json()['name'])

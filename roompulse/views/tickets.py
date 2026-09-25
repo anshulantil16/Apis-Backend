@@ -14,6 +14,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import os
 
 from ..attachments import url_for as attachment_url
+from ..people import apply_names
 from ..models import (ResourceRequest, SupportTicket, TicketAttachment,
                       TicketEvent)
 from ..worktime import after_hours_minutes, resolve_time
@@ -192,7 +193,12 @@ class TicketListView(APIView):
             limit = max(1, min(500, int(request.query_params.get('limit', 200))))
         except (TypeError, ValueError):
             limit = 200
-        return Response({'results': [_brief(t, request) for t in qs[:limit]], 'count': qs.count()})
+        rows = apply_names(
+            [_brief(t, request) for t in qs[:limit]],
+            ('requested_by_email', 'requested_by_name'),
+            ('performed_by_email', 'performed_by_name'),
+            ('assigned_to_email', 'assigned_to_name'))
+        return Response({'results': rows, 'count': qs.count()})
 
     def post(self, request):
         # Identity from the session, never from the body — otherwise anyone

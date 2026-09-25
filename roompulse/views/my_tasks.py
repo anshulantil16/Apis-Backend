@@ -15,6 +15,7 @@ from django.db.models import Q
 
 from ..assignment import desk_of
 from ..models import BookingRequest, ResourceRequest, SupportTicket
+from ..people import name_map
 from .perms import actor_role, require_role
 
 OPEN_TICKET = ('pending', 'approved', 'in_progress')
@@ -71,6 +72,7 @@ class MyTasksView(APIView):
                 'id': t.id, 'kind': 'ticket', 'what': t.subject,
                 'mine': bool(t.assigned_to_email),
                 'detail': t.get_category_display(),
+                'from_email': t.requested_by_email,
                 'from': t.requested_by_name or t.requested_by_email,
                 'status': t.status, 'status_label': t.get_status_display(),
                 'urgency': t.get_priority_display(),
@@ -82,6 +84,7 @@ class MyTasksView(APIView):
                 'mine': bool(r.assigned_to_email),
                 'what': f'{r.item_name} ×{r.quantity}' if r.quantity != 1 else r.item_name,
                 'detail': r.get_category_display(),
+                'from_email': r.requested_by_email,
                 'from': r.requested_by_name or r.requested_by_email,
                 'status': r.status, 'status_label': r.get_status_display(),
                 'urgency': r.get_urgency_display(),
@@ -94,6 +97,7 @@ class MyTasksView(APIView):
                 'what': f'{b.room} — {b.date:%d %b}, '
                         f'{b.start_time:%H:%M}–{b.end_time:%H:%M}',
                 'detail': b.get_purpose_display(),
+                'from_email': b.requested_by_email,
                 'from': b.requested_by_name or b.requested_by_email,
                 'status': b.status, 'status_label': b.get_status_display(),
                 'urgency': '',
@@ -102,6 +106,11 @@ class MyTasksView(APIView):
 
         # Oldest first: the one that has been waiting longest is the one to
         # do next, which is the opposite of how a feed is usually sorted.
+        # Whoever asked, by the name the company knows them by.
+        proper = name_map([r['from_email'] for r in rows])
+        for r in rows:
+            r['from'] = proper.get((r['from_email'] or '').lower()) or r['from']
+
         rows.sort(key=lambda r: r['raised_at'])
         return Response({
             'person': who,

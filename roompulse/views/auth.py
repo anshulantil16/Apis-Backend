@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from ..models import AdminUser
+from ..people import name_for
 
 # Hard-coded, not an env default — matches the SalesIQ precedent of keeping
 # the super-admin identity a deliberate code change, not a stray env var.
@@ -174,8 +175,12 @@ class RoomPulseLoginView(APIView):
             if code and secrets.compare_digest(str(saved.get('code')), code):
                 cache.delete(key)
                 role = resolve_role(email)
+                # The name the company knows them by, not a prettied-up
+                # email prefix -- that is where "Anshulantil01" and
+                # "2022Bth005" were coming from, and the session name is
+                # carried onto everything this person then does.
                 return Response({'success': True, 'email': email, 'role': role,
-                                 'name': email.split('@')[0].replace('.', ' ').title(),
+                                 'name': name_for(email),
                                  'token': issue_session(email),
                                  'expires_in': _SESSION_TTL})
             saved['attempts'] = saved.get('attempts', 0) + 1

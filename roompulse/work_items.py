@@ -31,6 +31,7 @@ from datetime import date, datetime, time
 from django.utils import timezone
 
 from .models import BookingRequest, ResourceRequest, SupportTicket
+from .people import name_map
 from .worktime import after_hours_minutes
 
 
@@ -65,6 +66,22 @@ def _item(**kw):
     kw.setdefault('worked_to', None)
     kw.setdefault('after_hours_minutes', 0)
     return kw
+
+
+def _finish(out, first):
+    """The one exit from collect: name everybody, newest first.
+
+    A function rather than two copies, because there are two returns and the
+    first version named people in only one of them -- so IT's month came back
+    reading "it.desk" while Admin's read "Meena".
+    """
+    # By the name the company knows them by, not the sign-in handle that came
+    # in on the request.
+    proper = name_map([i['email'] for i in out])
+    for i in out:
+        i['name'] = proper.get(i['email']) or i['name']
+    out.sort(key=lambda i: (i['date'] or first), reverse=True)
+    return out
 
 
 def collect(first, last, desk=None):
@@ -111,8 +128,7 @@ def collect(first, last, desk=None):
     # not IT's month -- and counting them there would put an admin's work in
     # an IT engineer's total.
     if desk == 'it':
-        out.sort(key=lambda i: (i['date'] or first), reverse=True)
-        return out
+        return _finish(out, first)
 
     # Handed over, not merely agreed to.
     items = (ResourceRequest.objects
@@ -154,8 +170,7 @@ def collect(first, last, desk=None):
             status='Approved',
         ))
 
-    out.sort(key=lambda i: (i['date'] or first), reverse=True)
-    return out
+    return _finish(out, first)
 
 
 def still_open(desk=None):
