@@ -871,11 +871,16 @@ class YourOwnProfile(TestCase):
     def test_it_says_how_long_they_have_been_here(self):
         self.assertTrue(self.profile(self.me).json()['profile']['served'])
 
-    def test_it_never_carries_the_birth_year(self):
-        """Day and month are what a birthday needs."""
-        d = self.profile(self.me).json()['profile']
-        self.assertEqual(d['birthday'], '06 Mar')
-        self.assertNotIn('1988', str(d))
+    def test_the_birthday_is_a_whole_date(self):
+        """On your own record. The rule about hiding the year is about the
+        celebrations feed, which shows everybody's to everybody."""
+        self.assertEqual(self.profile(self.me).json()['profile']['birthday'],
+                         '06 Mar 1988')
+
+    def test_tenure_counts_calendar_months(self):
+        self.me.date_of_joining = timezone.localdate().replace(year=timezone.localdate().year - 2)
+        self.me.save()
+        self.assertEqual(self.profile(self.me).json()['profile']['served'], '2 years')
 
     def test_it_leaves_out_the_grade(self):
         self.assertNotIn('O2', str(self.profile(self.me).json()['profile']))

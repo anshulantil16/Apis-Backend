@@ -271,9 +271,17 @@ class MyProfileView(PortalAPIView):
 
         served = None
         if u.date_of_joining:
-            days = (timezone.localdate() - u.date_of_joining).days
-            years, months = divmod(max(days, 0) // 30, 12)
-            served = (f'{years} yr {months} mo' if years else f'{months} mo')
+            today, start = timezone.localdate(), u.date_of_joining
+            months = (today.year - start.year) * 12 + today.month - start.month
+            if today.day < start.day:        # the month is not complete yet
+                months -= 1
+            months = max(months, 0)
+            years, rest = divmod(months, 12)
+            served = ', '.join(
+                part for part in (
+                    f'{years} year{"s" if years != 1 else ""}' if years else '',
+                    f'{rest} month{"s" if rest != 1 else ""}' if rest else '',
+                ) if part) or 'Joined this month'
 
         # The reporting line is empty on this tenant today, so this resolves
         # to nothing rather than showing a code nobody recognises. It starts
@@ -297,8 +305,11 @@ class MyProfileView(PortalAPIView):
             'date_of_joining': (u.date_of_joining.strftime('%d %b %Y')
                                 if u.date_of_joining else ''),
             'served': served,
-            # Day and month only, on purpose.
-            'birthday': u.date_of_birth.strftime('%d %b') if u.date_of_birth else '',
+            # In full here. The rule about never rendering the birth year is
+            # about the celebrations feed, which shows everybody's birthday to
+            # everybody; your own record is a different question, and a date
+            # missing its year reads as broken.
+            'birthday': u.date_of_birth.strftime('%d %b %Y') if u.date_of_birth else '',
             'is_superadmin': u.is_superadmin,
             'from_hrms': u.from_hrms,
             'last_synced_at': local_str(u.last_synced_at, '%d-%m-%Y %H:%M'),
