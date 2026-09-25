@@ -17,7 +17,7 @@ from ..attachments import url_for as attachment_url
 from ..models import (ResourceRequest, SupportTicket, TicketAttachment,
                       TicketEvent)
 from ..worktime import after_hours_minutes, resolve_time
-from ..assignment import resolve as resolve_assignee, visible_to
+from ..assignment import raised_by, resolve as resolve_assignee, tickets_for
 from .perms import actor_role, require_signed_in
 
 MAX_ATTACHMENTS = 10
@@ -148,24 +148,12 @@ class TicketListView(APIView):
         # without this a 200-ticket page ran 400 extra queries.
         qs = (SupportTicket.objects.all()
               .prefetch_related('attachments', 'events'))
-        # An employee sees their own tickets. Only IT Support and the super
-        # admin see everybody's.
-        if role == 'it_support':
-            # Their own assignments only. Two or three people share this
-            # desk; one shared pile could not say who had handled what.
-            qs = visible_to(qs, role, email)
-        elif role == 'admin':
-            # An admin is not IT triage, so they do not get everybody's
-            # tickets. But Admin's own work log is theirs -- they log into it,
-            # and the monthly report already shows them all of it. Excluding
-            # it here was why a job an admin had just logged appeared nowhere
-            # afterwards: saved, counted, and invisible.
-            qs = qs.filter(Q(origin='logged', desk='admin')
-                           | Q(requested_by_email=email))
-        elif role != 'it_support' and role != 'super_admin':
-            # Their own tickets, and never the team's internal work log --
-            # that is a record of what IT did, not correspondence with them.
-            qs = qs.filter(requested_by_email=email).exclude(origin='logged')
+        # Who sees what lives in roompulse/assignment.py, one function per
+        # queue. It was four branches here, patched one at a time, and every
+        # patch broke a case nobody re-read -- most recently IT's own logged
+        # work, which the assignment filter removed because a job you logged
+        # is not a job anybody assigned you.
+        qs = tickets_for(qs, role, email)
         category = request.query_params.get('category')
         if category:
             qs = qs.filter(category=category)
@@ -180,15 +168,20 @@ class TicketListView(APIView):
             qs = qs.filter(status=status)
         # `mine` is now a narrowing convenience for IT staff; an employee is
         # already restricted to their own above, so it cannot widen anything.
+        # "My Requests": what this person ASKED FOR. It replaces the filter
+        # above rather than narrowing it -- see raised_by. A job they logged
+        # is not a request; nobody is waiting on it and there is nothing to
+        # approve, because it has already happened.
         mine = request.query_params.get('mine')
         if mine:
-            # "My Requests" means things this person ASKED FOR. A job they
-            # logged is not a request -- nobody is waiting on it, there is
-            # nothing to approve, it has already happened -- and it was
-            # turning up on that screen labelled as an IT ticket, which is
-            # two kinds of wrong at once for an admin's own admin work.
-            qs = qs.filter(requested_by_email=mine.strip().lower()).exclude(
-                origin='logged')
+            who = mine.strip().lower()
+            if who == (email or '').lower() or role == 'super_admin':
+                qs = raised_by(
+                    SupportTicket.objects.all().prefetch_related('attachments', 'events'),
+                    who).exclude(origin='logged')
+            else:
+                # Asking for somebody else's: answer within what they may see.
+                qs = raised_by(qs, who).exclude(origin='logged')
         try:
             limit = max(1, min(500, int(request.query_params.get('limit', 200))))
         except (TypeError, ValueError):

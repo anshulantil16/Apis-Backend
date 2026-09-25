@@ -1312,3 +1312,119 @@ class WhatIsOnMyDesk(HelpdeskBase):
             'logged_for': 'Whole office', 'worked_from': '10:00', 'worked_to': '10:30',
         }, content_type='application/json', **auth(IT_STAFF))
         self.assertEqual(self.tasks(IT_STAFF)['waiting'], 1)
+
+
+class EverybodySeesTheRightThings(HelpdeskBase):
+    """One class covering every role against every list, because fixing these
+    one branch at a time is what broke them one branch at a time.
+
+    Two rules carry most of it. A logged job is assigned to nobody -- it had
+    already happened when it was written down -- so an assignment filter must
+    leave it alone; that is why IT's own work log vanished from IT's screen.
+    And unassigned work belongs to nobody, so it is shown to the whole desk
+    rather than to no one."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=OTHER_IT, name='Sana', scope='it_support')
+        self.room = Room.objects.filter(is_active=True).first()
+
+    def ticket(self, by, to, subject):
+        return self.client.post(f'{API}/tickets/', {
+            'subject': subject, 'description': 'x', 'category': 'vpn_access',
+            'assigned_to_email': to,
+        }, content_type='application/json', **auth(by))
+
+    def log(self, by, category, subject):
+        return self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': subject, 'description': 'x',
+            'category': category, 'logged_for': 'The office',
+            'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(by))
+
+    def subjects(self, who, q=''):
+        r = self.client.get(f'{API}/tickets/{q}', **auth(who)).json()
+        return sorted(t['subject'] for t in r['results'])
+
+    # ── the work log ────────────────────────────────────────────────────
+    def test_it_sees_its_own_log(self):
+        """This is the bug: a job IT logged is assigned to nobody, so the
+        assignment filter removed it from the screen of the person who had
+        just written it."""
+        self.log(IT_STAFF, 'server_storage', 'Restarted mail')
+        self.assertEqual(self.subjects(IT_STAFF, '?origin=logged&desk=it'),
+                         ['Restarted mail'])
+
+    def test_admin_sees_its_own_log(self):
+        self.log(ADMIN_STAFF, 'plumbing', 'Pantry tap')
+        self.assertEqual(self.subjects(ADMIN_STAFF, '?origin=logged&desk=admin'),
+                         ['Pantry tap'])
+
+    def test_neither_desk_sees_the_others_log(self):
+        self.log(IT_STAFF, 'server_storage', 'Restarted mail')
+        self.log(ADMIN_STAFF, 'plumbing', 'Pantry tap')
+        self.assertEqual(self.subjects(IT_STAFF, '?origin=logged&desk=admin'), [])
+        self.assertEqual(self.subjects(ADMIN_STAFF, '?origin=logged&desk=it'), [])
+
+    def test_an_employee_sees_neither(self):
+        self.log(IT_STAFF, 'server_storage', 'Restarted mail')
+        self.log(ADMIN_STAFF, 'plumbing', 'Pantry tap')
+        self.assertEqual(self.subjects(EMPLOYEE, '?origin=logged'), [])
+
+    # ── my requests ─────────────────────────────────────────────────────
+    def test_a_request_you_sent_to_a_colleague_is_still_yours(self):
+        """The commonest case there is, and it answered "nothing": the list
+        was narrowed to what you were ASSIGNED before being asked for what
+        you RAISED, and the two do not overlap."""
+        self.ticket(IT_STAFF, OTHER_IT, 'My own laptop')
+        self.assertEqual(self.subjects(IT_STAFF, f'?mine={IT_STAFF}'), ['My own laptop'])
+
+    def test_my_requests_leaves_out_work_you_logged(self):
+        self.log(IT_STAFF, 'server_storage', 'Restarted mail')
+        self.assertEqual(self.subjects(IT_STAFF, f'?mine={IT_STAFF}'), [])
+
+    def test_an_admins_own_booking_is_in_their_requests(self):
+        self.client.post(f'{API}/bookings/', {
+            'room_id': self.room.id, 'date': timezone.localdate().isoformat(),
+            'start_time': '15:00', 'end_time': '16:00', 'purpose': 'internal_meeting',
+            'requested_by_name': 'Meena', 'assigned_to_email': ADMIN_STAFF,
+        }, content_type='application/json', **auth(ADMIN_STAFF))
+        d = self.client.get(f'{API}/bookings/?mine={ADMIN_STAFF}', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(len(d['results']), 1)
+
+    def test_you_cannot_read_somebody_elses_requests(self):
+        self.ticket(EMPLOYEE, IT_STAFF, 'VPN down')
+        rows = self.client.get(f'{API}/tickets/?mine={EMPLOYEE}', **auth(OUTSIDER)).json()
+        self.assertEqual(rows.get('results', []), [])
+
+    # ── the queue each desk works ───────────────────────────────────────
+    def test_each_it_person_gets_their_own_tickets(self):
+        self.ticket(EMPLOYEE, IT_STAFF, 'VPN down')
+        self.ticket(EMPLOYEE, OTHER_IT, 'Printer jam')
+        self.assertEqual(self.subjects(IT_STAFF), ['VPN down'])
+        self.assertEqual(self.subjects(OTHER_IT), ['Printer jam'])
+
+    def test_work_nobody_has_been_given_shows_on_the_whole_desk(self):
+        """Raised before assignment existed, so it belongs to nobody -- and a
+        row belonging to nobody otherwise appears on no screen at all."""
+        SupportTicket.objects.create(
+            requested_by_name='Old', requested_by_email='old@apisindia.com',
+            subject='Ancient ticket', description='x', category='other',
+            status='pending', desk='it')
+        self.assertIn('Ancient ticket', self.subjects(IT_STAFF))
+        self.assertIn('Ancient ticket', self.subjects(OTHER_IT))
+        self.assertNotIn('Ancient ticket', self.subjects(ADMIN_STAFF))
+
+    def test_an_admin_does_not_get_the_ticket_queue(self):
+        self.ticket(EMPLOYEE, IT_STAFF, 'VPN down')
+        self.assertEqual(self.subjects(ADMIN_STAFF), [])
+
+    def test_my_tasks_counts_the_unclaimed_separately(self):
+        SupportTicket.objects.create(
+            requested_by_name='Old', requested_by_email='old@apisindia.com',
+            subject='Ancient ticket', description='x', category='other',
+            status='pending', desk='it')
+        self.ticket(EMPLOYEE, IT_STAFF, 'VPN down')
+        d = self.client.get(f'{API}/my-tasks/', **auth(IT_STAFF)).json()
+        self.assertEqual(d['by_kind']['ticket'], 2)
+        self.assertEqual(d['unassigned'], 1)

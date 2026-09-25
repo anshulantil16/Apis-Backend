@@ -6,7 +6,7 @@ from rest_framework.response import Response
 
 from ..models import Room, BookingRequest
 from ..status import find_conflicts
-from ..assignment import resolve as resolve_assignee, visible_to
+from ..assignment import admin_queue_for, raised_by, resolve as resolve_assignee
 from .perms import require_role, actor_role, require_signed_in
 
 
@@ -58,11 +58,8 @@ class BookingListView(APIView):
             return err
         role, email = actor_role(request)
         qs = BookingRequest.objects.select_related('room').all()
-        if role == 'admin':
-            # Their own assignments only -- see roompulse/assignment.py.
-            qs = visible_to(qs, role, email)
-        elif role not in ('it_support', 'super_admin'):
-            qs = qs.filter(requested_by_email=email)
+        # Who sees what: roompulse/assignment.py.
+        qs = admin_queue_for(qs, role, email)
         room_id = request.query_params.get('room')
         if room_id:
             qs = qs.filter(room_id=room_id)
@@ -74,7 +71,10 @@ class BookingListView(APIView):
             qs = qs.filter(status=status)
         mine = request.query_params.get('mine')
         if mine:
-            qs = qs.filter(requested_by_email=mine.strip().lower())
+            who = mine.strip().lower()
+            qs = (raised_by(BookingRequest.objects.select_related('room'), who)
+                  if who == (email or '').lower() or role == 'super_admin'
+                  else raised_by(qs, who))
         try:
             limit = max(1, min(500, int(request.query_params.get('limit', 200))))
         except (TypeError, ValueError):

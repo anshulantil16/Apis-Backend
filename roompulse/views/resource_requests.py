@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from ..models import ResourceRequest
-from ..assignment import resolve as resolve_assignee, visible_to
+from ..assignment import admin_queue_for, raised_by, resolve as resolve_assignee
 from .perms import actor_role, require_signed_in
 
 
@@ -58,11 +58,8 @@ class ResourceRequestListView(APIView):
             return err
         role, email = actor_role(request)
         qs = ResourceRequest.objects.all()
-        if role == 'admin':
-            # Their own assignments only -- see roompulse/assignment.py.
-            qs = visible_to(qs, role, email)
-        elif role not in ('it_support', 'super_admin'):
-            qs = qs.filter(requested_by_email=email)
+        # Who sees what: roompulse/assignment.py.
+        qs = admin_queue_for(qs, role, email)
         category = request.query_params.get('category')
         if category:
             qs = qs.filter(category=category)
@@ -71,7 +68,10 @@ class ResourceRequestListView(APIView):
             qs = qs.filter(status=status)
         mine = request.query_params.get('mine')
         if mine:
-            qs = qs.filter(requested_by_email=mine.strip().lower())
+            who = mine.strip().lower()
+            qs = (raised_by(ResourceRequest.objects.all(), who)
+                  if who == (email or '').lower() or role == 'super_admin'
+                  else raised_by(qs, who))
         try:
             limit = max(1, min(500, int(request.query_params.get('limit', 200))))
         except (TypeError, ValueError):
