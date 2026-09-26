@@ -16,6 +16,7 @@ from django.db.models import Q
 from ..assignment import desk_of
 from ..models import BookingRequest, ResourceRequest, SupportTicket
 from ..people import name_map
+from ..status import expire_stale_bookings
 from .perms import actor_role, require_role
 
 OPEN_TICKET = ('pending', 'approved', 'in_progress')
@@ -32,6 +33,12 @@ class MyTasksView(APIView):
     def get(self, request):
         if (err := require_role(request, 'admin', 'it_support', 'super_admin')):
             return err
+        # A booking whose slot has come and gone is not waiting on anybody,
+        # and this is the screen that says how much is. Every other view that
+        # counts pending bookings expires them first; this one did not, so an
+        # admin who let a request go unanswered saw it on their desk for ever
+        # -- the phantom work the expiry was added to get rid of.
+        expire_stale_bookings()
         role, email = actor_role(request)
         # The super admin has no desk of their own; asking for "mine" as
         # them would silently answer with somebody else's roster address.

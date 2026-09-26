@@ -112,6 +112,14 @@ class BookingListView(APIView):
             return Response({'error': 'End time must be after start time.'}, status=400)
         if booking_date < timezone.localdate():
             return Response({'error': 'Cannot book a room in the past.'}, status=400)
+        # And not a slot earlier TODAY. The date check alone let somebody book
+        # 09:00-10:00 at three in the afternoon: as an employee the request
+        # was accepted and then expired by the next screen that loaded, which
+        # reads as the system losing it; as an admin it was auto-approved, and
+        # the room's history gained a confirmed meeting that never happened.
+        if booking_date == timezone.localdate() and end_time <= timezone.localtime().time():
+            return Response({'error': 'That slot has already finished. '
+                                      'Pick a time still to come.'}, status=400)
 
         name = str(d.get('requested_by_name') or d.get('name') or '').strip()
         if not name:
@@ -297,10 +305,19 @@ class RoomCalendarView(APIView):
             room = Room.objects.get(id=room_id)
         except Room.DoesNotExist:
             return Response({'error': 'Room not found.'}, status=404)
+        # A request nobody answered before its slot passed did not occupy the
+        # room, so it does not belong on the room's day either -- same reason
+        # a cancelled one does not. Expire first, or a slot that passed since
+        # the last screen load is still sitting here as 'pending'.
+        expire_stale_bookings()
         bookings = (BookingRequest.objects.filter(room=room, date=d)
-                   .exclude(status='cancelled').order_by('start_time'))
+                   .exclude(status__in=('cancelled', 'expired')).order_by('start_time'))
         return Response({
             'room': {'id': room.id, 'name': str(room), 'capacity': room.capacity},
             'date': d.isoformat(),
-            'bookings': [_brief(b) for b in bookings],
+            # By the name the company knows them by, like every other list.
+            # This one was left reading whatever was typed into the form.
+            'bookings': apply_names([_brief(b) for b in bookings],
+                                    ('requested_by_email', 'requested_by_name'),
+                                    ('assigned_to_email', 'assigned_to_name')),
         })

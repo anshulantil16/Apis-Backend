@@ -179,6 +179,12 @@ def still_open(desk=None):
         status__in=('pending', 'approved', 'in_progress')).count()
     if desk == 'it':
         return tickets
+    # Nothing is waiting on anybody once its slot has passed. Imported here
+    # rather than at the top because status.py is about live room state and
+    # this module is about a finished month -- the only thing the two share
+    # is this one sentence.
+    from .status import expire_stale_bookings
+    expire_stale_bookings()
     admin_side = (ResourceRequest.objects.filter(
                       status__in=('pending', 'approved')).count()
                   + BookingRequest.objects.filter(status='pending').count())

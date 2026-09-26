@@ -1681,3 +1681,70 @@ class ASlotThatHasPassedIsNotWaiting(HelpdeskBase):
         from roompulse.status import expire_stale_bookings
         self.booking(timezone.localdate() + timedelta(days=1), time(11, 0), time(12, 0))
         self.assertEqual(expire_stale_bookings(), 0)
+
+    # The four screens that were still counting a dead slot. Each one of
+    # these was found by asking "where else does a pending booking get
+    # counted?", which is the question the first fix did not ask.
+
+    def test_it_is_not_on_the_admins_desk(self):
+        """"3 waiting on you" including a slot from last Tuesday is an admin
+        being shown work that cannot be done."""
+        self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        d = self.client.get(f'{API}/my-tasks/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['by_kind']['room'], 0)
+        self.assertEqual(d['waiting'], 0)
+
+    def test_it_is_not_still_open_in_the_month(self):
+        self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['still_open'], 0)
+
+    def test_it_is_off_the_rooms_own_day(self):
+        """The room was free. A request nobody answered did not occupy it, so
+        it does not belong on the timeline any more than a cancelled one."""
+        day = timezone.localdate() - timedelta(days=1)
+        self.booking(day, time(11, 0), time(12, 0))
+        d = self.client.get(f'{API}/rooms/{self.room.id}/calendar/?date={day}',
+                            **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['bookings'], [])
+
+    def test_a_slot_that_has_already_finished_cannot_be_booked(self):
+        """It would be created and then immediately expired, which reads as
+        the system having lost it -- or, booked by an admin, auto-approved
+        into the room's history as a meeting that never happened."""
+        now = timezone.localtime()
+        if now.hour < 2:
+            return
+        r = self.client.post(f'{API}/bookings/', {
+            'room_id': self.room.id, 'date': timezone.localdate().isoformat(),
+            'start_time': '00:30', 'end_time': '01:00',
+            'name': 'Priya', 'purpose': 'internal_meeting', 'attendees': 2,
+            'assigned_to_email': ADMIN_STAFF,
+        }, **auth(EMPLOYEE))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('already finished', r.json()['error'])
+
+    def test_a_slot_still_running_can_still_be_booked(self):
+        """The guard is on the END time: somebody booking the room for the
+        meeting they are walking into must not be turned away."""
+        now = timezone.localtime()
+        r = self.client.post(f'{API}/bookings/', {
+            'room_id': self.room.id, 'date': timezone.localdate().isoformat(),
+            'start_time': '00:00', 'end_time': '23:59',
+            'name': 'Priya', 'purpose': 'internal_meeting', 'attendees': 2,
+            'assigned_to_email': ADMIN_STAFF,
+        }, **auth(EMPLOYEE))
+        self.assertEqual(r.status_code, 201, r.json())
+
+    def test_the_rooms_day_uses_the_name_the_company_knows(self):
+        """Every other list resolves this; the calendar was left reading
+        whatever was typed into the booking form."""
+        day = timezone.localdate() + timedelta(days=1)
+        PortalUser.objects.update_or_create(
+            email=EMPLOYEE, defaults={'name': 'Priya Sharma'})
+        b = self.booking(day, time(11, 0), time(12, 0))
+        b.requested_by_name = 'priya'
+        b.save(update_fields=['requested_by_name'])
+        d = self.client.get(f'{API}/rooms/{self.room.id}/calendar/?date={day}',
+                            **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['bookings'][0]['requested_by_name'], 'Priya Sharma')
