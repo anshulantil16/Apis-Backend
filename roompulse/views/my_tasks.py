@@ -55,7 +55,12 @@ class MyTasksView(APIView):
         # stopped being anyone's job. Unassigned work is nobody's, so showing
         # it to the whole desk takes nothing from anybody, and whoever picks
         # it up makes it theirs.
-        desk = desk_of(who) or 'it'
+        # The super admin is on neither roster, so desk_of finds nothing for
+        # them. Defaulting that to 'it' silently made their strip an IT strip:
+        # "4 waiting on you" while eleven room bookings and item requests went
+        # uncounted, on the one screen that exists to say how much is waiting.
+        # They oversee both desks, so for them it is both.
+        desk = None if role == 'super_admin' else (desk_of(who) or 'it')
         mine_or_loose = Q(assigned_to_email__iexact=who) | Q(assigned_to_email='')
 
         tickets = SupportTicket.objects.filter(mine_or_loose).exclude(origin='logged')
@@ -66,7 +71,7 @@ class MyTasksView(APIView):
         # would see each other's loose work.
         if desk == 'admin':
             tickets = tickets.none()
-        else:
+        elif desk == 'it':
             items, rooms = items.none(), rooms.none()
         if not everything:
             tickets = tickets.filter(status__in=OPEN_TICKET)
@@ -121,7 +126,9 @@ class MyTasksView(APIView):
         rows.sort(key=lambda r: r['raised_at'])
         return Response({
             'person': who,
-            'desk': desk,
+            # '' rather than null for the super admin, so the client can read
+            # it as "neither desk in particular" without a type check.
+            'desk': desk or '',
             'waiting': len(rows),
             # Called out separately so "nobody has picked this up" reads as
             # what it is rather than as more of your own work.

@@ -1736,6 +1736,31 @@ class ASlotThatHasPassedIsNotWaiting(HelpdeskBase):
         }, **auth(EMPLOYEE))
         self.assertEqual(r.status_code, 201, r.json())
 
+    def test_the_super_admin_sees_both_desks_on_their_strip(self):
+        """They are on neither roster, so the desk lookup found nothing and
+        defaulted to IT -- making the one screen that says how much is
+        waiting count IT's half of it."""
+        # Unassigned, which is what a super admin's strip shows them: work
+        # nobody has picked up. One addressed to Meena is Meena's.
+        b = self.booking(timezone.localdate() + timedelta(days=1), time(11, 0), time(12, 0))
+        b.assigned_to_email = ''
+        b.save(update_fields=['assigned_to_email'])
+        ResourceRequest.objects.create(
+            requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            category='stationery_office_supplies', item_name='Notebooks',
+            quantity=2, status='pending')
+        d = self.client.get(f'{API}/my-tasks/', **auth(SUPER_ADMIN_EMAIL)).json()
+        self.assertEqual(d['desk'], '')
+        self.assertEqual(d['by_kind']['room'], 1, d)
+        self.assertEqual(d['by_kind']['item'], 1, d)
+
+    def test_a_desk_still_sees_only_its_own_queues(self):
+        """The fix above must not merge the two desks."""
+        self.booking(timezone.localdate() + timedelta(days=1), time(11, 0), time(12, 0))
+        d = self.client.get(f'{API}/my-tasks/', **auth(IT_STAFF)).json()
+        self.assertEqual(d['desk'], 'it')
+        self.assertEqual(d['by_kind']['room'], 0, d)
+
     def test_the_rooms_day_uses_the_name_the_company_knows(self):
         """Every other list resolves this; the calendar was left reading
         whatever was typed into the booking form."""
