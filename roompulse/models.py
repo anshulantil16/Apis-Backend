@@ -394,13 +394,14 @@ class TicketEvent(models.Model):
     """
 
     ACTIONS = [
-        ('created',   'Created'),
-        ('approved',  'Approved'),
-        ('rejected',  'Rejected'),
-        ('started',   'Work started'),
-        ('closed',    'Closed'),
-        ('cancelled', 'Cancelled'),
-        ('logged',    'Logged as done'),
+        ('created',     'Created'),
+        ('approved',    'Approved'),
+        ('rejected',    'Rejected'),
+        ('started',     'Work started'),
+        ('closed',      'Closed'),
+        ('cancelled',   'Cancelled'),
+        ('logged',      'Logged as done'),
+        ('transferred', 'Passed to somebody else'),
     ]
 
     ticket      = models.ForeignKey(SupportTicket, on_delete=models.CASCADE,
@@ -421,6 +422,59 @@ class TicketEvent(models.Model):
 
     def __str__(self):
         return f'{self.action} by {self.actor_email or "system"}'
+
+
+class Handover(models.Model):
+    """Who passed a piece of work to somebody else, and why.
+
+    A request is addressed to one person when it is raised, by whoever raised
+    it -- who is guessing. They pick the name they know, or the first in the
+    list, and a good deal of work lands on the wrong desk-mate: somebody on
+    leave, or the person who does not look after that system. Until now the
+    only ways out were to answer it anyway or to leave it sitting, and a
+    request sitting with the wrong person looks exactly like one nobody has
+    got to yet.
+
+    So work can be passed on. The trail is a table rather than a field
+    because the interesting cases have two or three hops in them -- raised to
+    A, passed to B who was away, passed to C -- and a field would keep only
+    the last one, which is the hop that explains least.
+
+    Not a GenericForeignKey: the contenttypes indirection buys nothing here
+    (three kinds, named once) and costs a join on every read. `kind` plus
+    `object_id` is the same information, legible in a shell.
+
+    Append-only by intent, like TicketEvent: written by handover.transfer()
+    and never updated or deleted.
+    """
+
+    KIND_CHOICES = [('ticket', 'IT ticket'), ('item', 'Item request'),
+                    ('room', 'Room booking')]
+
+    kind       = models.CharField(max_length=10, choices=KIND_CHOICES)
+    object_id  = models.PositiveIntegerField()
+
+    # Snapshotted, not foreign keys: who handed what to whom stays readable
+    # after somebody leaves and their roster row goes.
+    from_email = models.EmailField(blank=True)
+    from_name  = models.CharField(max_length=200, blank=True)
+    to_email   = models.EmailField()
+    to_name    = models.CharField(max_length=200, blank=True)
+    by_email   = models.EmailField(blank=True)
+    by_role    = models.CharField(max_length=20, blank=True)
+
+    # Required where this is written from. "Passed to Sana" answers nothing;
+    # "Sana looks after the VPN" is the whole value of the record, and the
+    # person receiving it is owed the sentence.
+    reason     = models.CharField(max_length=300)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [models.Index(fields=['kind', 'object_id', 'created_at'])]
+
+    def __str__(self):
+        return f'{self.kind} #{self.object_id} -> {self.to_email}'
 
 
 class Employee(models.Model):

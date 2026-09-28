@@ -19,6 +19,7 @@ from ..models import (ResourceRequest, SupportTicket, TicketAttachment,
                       TicketEvent)
 from ..worktime import after_hours_minutes, resolve_time
 from ..assignment import raised_by, resolve as resolve_assignee, tickets_for
+from ..handover import transfer as handover, trail_for
 from .perms import actor_role, require_signed_in
 
 MAX_ATTACHMENTS = 10
@@ -82,7 +83,10 @@ def desk_for(role, category):
     return 'admin' if category in admin_only else 'it'
 
 
-def _brief(t, request=None):
+def _brief(t, request=None, trails=None):
+    """`trails` is the whole page's handover trail, from trail_for(), so a
+    200-row list costs one query for it rather than 200. Left out for a
+    single-ticket response, where one lookup is the whole cost."""
     def _url(a):
         # A signed path under /api/, not /media/. See roompulse/attachments.py:
         # the old link was unauthenticated and, behind the proxy, often pointed
@@ -102,6 +106,10 @@ def _brief(t, request=None):
         'desk': t.desk, 'desk_label': t.get_desk_display(),
         'assigned_to_email': t.assigned_to_email,
         'assigned_to_name': t.assigned_to_name,
+        # Who has had this before now. Read from the card so the person
+        # holding it can see it was passed to them and why.
+        'transfers': (trails if trails is not None
+                      else trail_for('ticket', [t.id])).get(t.id, []),
         'logged_for': t.logged_for,
         'performed_by_email': t.performed_by_email,
         'performed_by_name': t.performed_by_name,
@@ -193,8 +201,10 @@ class TicketListView(APIView):
             limit = max(1, min(500, int(request.query_params.get('limit', 200))))
         except (TypeError, ValueError):
             limit = 200
+        page = list(qs[:limit])
+        trails = trail_for('ticket', [t.id for t in page])
         rows = apply_names(
-            [_brief(t, request) for t in qs[:limit]],
+            [_brief(t, request, trails) for t in page],
             ('requested_by_email', 'requested_by_name'),
             ('performed_by_email', 'performed_by_name'),
             ('assigned_to_email', 'assigned_to_name'))
@@ -470,6 +480,34 @@ class TicketActionView(APIView):
             ticket.save()
             _log(ticket, 'closed', role, email, remarks, was)
             return Response({'message': 'Ticket closed.', 'ticket': _brief(ticket, request)})
+
+        if action == 'transfer':
+            # Pass it on. The status does not move: this is the same request
+            # at the same stage, on somebody else's desk. A ticket raised to
+            # the wrong person is the commonest way a queue stalls, because
+            # the employee raising it is guessing which of two or three
+            # people looks after the thing that broke.
+            if not is_it_staff:
+                return Response({'error': 'Only IT Support can pass a ticket on.'},
+                                status=403)
+            # Anything still to be dealt with. A closed, rejected or
+            # cancelled ticket is finished -- handing it over would give
+            # somebody work that no longer exists.
+            if ticket.status not in ('pending', 'approved', 'in_progress'):
+                return Response({'error': f'This ticket is already {ticket.status}, '
+                                          f'so there is nothing to pass on.'}, status=400)
+            moved = handover('ticket', ticket, 'it',
+                             request.data.get('to_email'), email, role, remarks)
+            if isinstance(moved, str):
+                return Response({'error': moved}, status=400)
+            # On the ticket's own history too, which is the trail people
+            # actually read on the card.
+            _log(ticket, 'transferred', role, email,
+                 f'To {moved.to_name or moved.to_email} — {moved.reason}', was)
+            return Response({
+                'message': f'Passed to {moved.to_name or moved.to_email}.',
+                'ticket': _brief(ticket, request),
+            })
 
         if action == 'cancel':
             is_owner = email == ticket.requested_by_email.lower()

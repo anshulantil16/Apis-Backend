@@ -329,15 +329,19 @@ class TheQueueStaysCheapToLoad(HelpdeskBase):
         headers = auth(IT_STAFF)          # minting the token is not the request
 
         def count_queries(n_tickets):
-            with self.assertNumQueries(9):
+            with self.assertNumQueries(10):
                 r = self.client.get(f'{API}/tickets/', **headers)
             return r
 
-        # 9 = session lookup, roster lookup, tickets, attachments, events,
-        # count, and up to three to turn the addresses on the page into
-        # people's real names (HRMS, then the directory, then the roster --
-        # it stops at the first that knows everybody, so a list of staff
-        # costs three and a list of employees costs one).
+        # 10 = session lookup, roster lookup, tickets, attachments, events,
+        # the handover trail, count, and up to three to turn the addresses on
+        # the page into people's real names (HRMS, then the directory, then
+        # the roster -- it stops at the first that knows everybody, so a list
+        # of staff costs three and a list of employees costs one).
+        #
+        # The trail is ONE query for the page, not one per ticket: _brief()
+        # takes the whole page's trail from trail_for() rather than looking
+        # its own up, which is the difference this test exists to hold.
         count_queries(12)
 
         # The point of the test: twice the tickets, same number of queries.
@@ -1773,3 +1777,224 @@ class ASlotThatHasPassedIsNotWaiting(HelpdeskBase):
         d = self.client.get(f'{API}/rooms/{self.room.id}/calendar/?date={day}',
                             **auth(ADMIN_STAFF)).json()
         self.assertEqual(d['bookings'][0]['requested_by_name'], 'Priya Sharma')
+
+
+# ── passing work to the right person ─────────────────────────────────────
+class WorkCanBePassedOn(HelpdeskBase):
+    """Whoever raises a request picks one name off a list, and they are
+    guessing: they choose the person they know, or the first in the list. A
+    good deal of work lands on somebody who is on leave or does not look after
+    the thing that broke, and until now the choices were to answer it anyway
+    or leave it sitting -- and a request sitting with the wrong person is
+    indistinguishable from one nobody has got to yet."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=OTHER_IT, name='Sana', scope='it_support')
+        self.room = Room.objects.filter(is_active=True).first()
+
+    def patch(self, path, body, who):
+        return self.client.patch(f'{API}{path}', body,
+                                 content_type='application/json', **auth(who))
+
+    def item(self, **over):
+        body = {'name': 'Priya', 'item_name': 'Notebooks', 'quantity': 2,
+                'category': 'stationery_office_supplies',
+                'assigned_to_email': ADMIN_STAFF}
+        body.update(over)
+        return self.client.post(f'{API}/resource-requests/', body, **auth(EMPLOYEE))
+
+    # ── the thing itself ─────────────────────────────────────────────────
+
+    def test_a_ticket_moves_to_the_person_it_is_passed_to(self):
+        t = self.raise_ticket().json()['id']
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': OTHER_IT,
+                        'remarks': 'Sana looks after the VPN'}, IT_STAFF)
+        self.assertEqual(r.status_code, 200, r.json())
+        self.assertEqual(SupportTicket.objects.get(id=t).assigned_to_email, OTHER_IT)
+
+    def test_it_lands_on_the_new_persons_desk_and_leaves_the_old_one(self):
+        """The whole point: it is now their work, and no longer the other
+        person's."""
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/',
+                   {'action': 'transfer', 'to_email': OTHER_IT,
+                    'remarks': 'not mine'}, IT_STAFF)
+        mine = self.client.get(f'{API}/my-tasks/', **auth(OTHER_IT)).json()
+        self.assertEqual([x['id'] for x in mine['results']], [t])
+        theirs = self.client.get(f'{API}/my-tasks/', **auth(IT_STAFF)).json()
+        self.assertNotIn(t, [x['id'] for x in theirs['results']])
+
+    def test_the_status_does_not_move(self):
+        """A transfer is not a decision. It was pending before and it is
+        pending now -- somebody else is going to answer it."""
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': OTHER_IT,
+                                      'remarks': 'away this week'}, IT_STAFF)
+        self.assertEqual(SupportTicket.objects.get(id=t).status, 'pending')
+
+    def test_the_new_person_can_then_approve_it(self):
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': OTHER_IT,
+                                      'remarks': 'yours'}, IT_STAFF)
+        r = self.patch(f'/tickets/{t}/', {'action': 'approve'}, OTHER_IT)
+        self.assertEqual(r.status_code, 200, r.json())
+        self.assertEqual(SupportTicket.objects.get(id=t).status, 'approved')
+
+    def test_an_item_request_can_be_passed_to_another_admin(self):
+        AdminUser.objects.create(email='second.admin@apisindia.com',
+                                 name='Ravi', scope='admin')
+        i = self.item().json()['id']
+        r = self.patch(f'/resource-requests/{i}/',
+                       {'action': 'transfer', 'to_email': 'second.admin@apisindia.com',
+                        'remarks': 'Ravi keeps the stationery'}, ADMIN_STAFF)
+        self.assertEqual(r.status_code, 200, r.json())
+        req = ResourceRequest.objects.get(id=i)
+        self.assertEqual(req.assigned_to_email, 'second.admin@apisindia.com')
+        self.assertEqual(req.assigned_to_name, 'Ravi')
+        self.assertEqual(req.status, 'pending')
+
+    def test_a_booking_can_be_passed_to_another_admin(self):
+        AdminUser.objects.create(email='second.admin@apisindia.com',
+                                 name='Ravi', scope='admin')
+        b = BookingRequest.objects.create(
+            room=self.room, requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            date=timezone.localdate() + timedelta(days=1),
+            start_time=time(11, 0), end_time=time(12, 0),
+            purpose='internal_meeting', status='pending',
+            assigned_to_email=ADMIN_STAFF)
+        r = self.patch(f'/bookings/{b.id}/',
+                       {'action': 'transfer', 'to_email': 'second.admin@apisindia.com',
+                        'remarks': 'Ravi handles the board room'}, ADMIN_STAFF)
+        self.assertEqual(r.status_code, 200, r.json())
+        b.refresh_from_db()
+        self.assertEqual(b.assigned_to_email, 'second.admin@apisindia.com')
+        self.assertEqual(b.status, 'pending')
+
+    # ── the trail ────────────────────────────────────────────────────────
+
+    def test_every_hop_is_kept_not_just_the_last(self):
+        """Raised to A, passed to B who was away, passed to C. A field would
+        keep only the last hop, which is the one that explains least."""
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': OTHER_IT,
+                                      'remarks': 'VPN is Sana'}, IT_STAFF)
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': IT_STAFF,
+                                      'remarks': 'on leave, back to you'}, OTHER_IT)
+        d = self.client.get(f'{API}/tickets/', **auth(IT_STAFF)).json()
+        hops = next(x for x in d['results'] if x['id'] == t)['transfers']
+        self.assertEqual([h['reason'] for h in hops],
+                         ['VPN is Sana', 'on leave, back to you'])
+        self.assertEqual([h['to_email'] for h in hops], [OTHER_IT, IT_STAFF])
+
+    def test_it_shows_on_the_tickets_own_history(self):
+        """Which is the trail people actually read on the card."""
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': OTHER_IT,
+                                      'remarks': 'Sana looks after the VPN'}, IT_STAFF)
+        # Read as Sana, not as the person who passed it on: it is off their
+        # queue now, which is the transfer working.
+        d = self.client.get(f'{API}/tickets/', **auth(OTHER_IT)).json()
+        hist = next(x for x in d['results'] if x['id'] == t)['history']
+        moved = [e for e in hist if e['action'] == 'transferred']
+        self.assertEqual(len(moved), 1, hist)
+        self.assertIn('Sana', moved[0]['remarks'])
+
+    def test_the_trail_names_people_properly(self):
+        PortalUser.objects.update_or_create(
+            email=OTHER_IT, defaults={'name': 'Sana Qureshi'})
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': OTHER_IT,
+                                      'remarks': 'hers'}, IT_STAFF)
+        d = self.client.get(f'{API}/tickets/', **auth(OTHER_IT)).json()
+        hops = next(x for x in d['results'] if x['id'] == t)['transfers']
+        self.assertEqual(hops[0]['to'], 'Sana Qureshi')
+
+    # ── what it refuses ──────────────────────────────────────────────────
+
+    def test_a_reason_is_required(self):
+        """Whoever receives it is owed the sentence. "Passed to Sana"
+        answers nothing."""
+        t = self.raise_ticket().json()['id']
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': OTHER_IT}, IT_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('why', r.json()['error'])
+        self.assertEqual(SupportTicket.objects.get(id=t).assigned_to_email, IT_STAFF)
+
+    def test_it_cannot_be_handed_to_the_other_desk(self):
+        """An admin cannot approve an IT ticket, so it would vanish into a
+        queue nobody works."""
+        t = self.raise_ticket().json()['id']
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': ADMIN_STAFF,
+                        'remarks': 'theirs'}, IT_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('not on this desk', r.json()['error'])
+
+    def test_handing_it_to_whoever_already_has_it_is_refused(self):
+        """It would write a trail entry saying nothing happened."""
+        t = self.raise_ticket().json()['id']
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': IT_STAFF,
+                        'remarks': 'mine anyway'}, IT_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('already', r.json()['error'])
+
+    def test_an_employee_cannot_pass_their_own_ticket_around(self):
+        """They raised it. They do not run the queue."""
+        t = self.raise_ticket().json()['id']
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': OTHER_IT,
+                        'remarks': 'someone else please'}, EMPLOYEE)
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(SupportTicket.objects.get(id=t).assigned_to_email, IT_STAFF)
+
+    def test_a_finished_ticket_cannot_be_passed_on(self):
+        """Handing somebody work that no longer exists."""
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'reject', 'remarks': 'no'}, IT_STAFF)
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': OTHER_IT,
+                        'remarks': 'have a look'}, IT_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('nothing to pass on', r.json()['error'])
+
+    def test_a_lapsed_booking_cannot_be_passed_on(self):
+        """Nobody's to answer, so nobody's to hand over."""
+        AdminUser.objects.create(email='second.admin@apisindia.com', scope='admin')
+        b = BookingRequest.objects.create(
+            room=self.room, requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            date=timezone.localdate() - timedelta(days=1),
+            start_time=time(11, 0), end_time=time(12, 0),
+            purpose='internal_meeting', status='pending',
+            assigned_to_email=ADMIN_STAFF)
+        r = self.patch(f'/bookings/{b.id}/',
+                       {'action': 'transfer', 'to_email': 'second.admin@apisindia.com',
+                        'remarks': 'yours'}, ADMIN_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('nothing to pass on', r.json()['error'])
+
+    def test_a_fulfilled_item_request_cannot_be_passed_on(self):
+        AdminUser.objects.create(email='second.admin@apisindia.com', scope='admin')
+        i = self.item().json()['id']
+        self.patch(f'/resource-requests/{i}/', {'action': 'approve'}, ADMIN_STAFF)
+        self.patch(f'/resource-requests/{i}/', {'action': 'fulfil'}, ADMIN_STAFF)
+        r = self.patch(f'/resource-requests/{i}/',
+                       {'action': 'transfer', 'to_email': 'second.admin@apisindia.com',
+                        'remarks': 'yours'}, ADMIN_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('nothing to pass on', r.json()['error'])
+
+    def test_an_approved_item_request_still_can_be(self):
+        """Approving only says "yes, get them one". The handover is real work
+        and it can move."""
+        AdminUser.objects.create(email='second.admin@apisindia.com', scope='admin')
+        i = self.item().json()['id']
+        self.patch(f'/resource-requests/{i}/', {'action': 'approve'}, ADMIN_STAFF)
+        r = self.patch(f'/resource-requests/{i}/',
+                       {'action': 'transfer', 'to_email': 'second.admin@apisindia.com',
+                        'remarks': 'you have the key to the cupboard'}, ADMIN_STAFF)
+        self.assertEqual(r.status_code, 200, r.json())
+        self.assertEqual(ResourceRequest.objects.get(id=i).status, 'approved')

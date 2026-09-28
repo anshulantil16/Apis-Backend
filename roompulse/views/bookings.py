@@ -6,6 +6,7 @@ from rest_framework.response import Response
 
 from ..models import Room, BookingRequest
 from ..people import apply_names
+from ..handover import transfer as handover, trail_for
 from ..status import expire_stale_bookings, find_conflicts
 from ..assignment import admin_queue_for, raised_by, resolve as resolve_assignee
 from .perms import require_role, actor_role, require_signed_in
@@ -25,7 +26,9 @@ def _parse_time(s):
         return None
 
 
-def _brief(b):
+def _brief(b, trails=None):
+    """`trails` is the page's handover trail from trail_for(), so a 200-row
+    list costs one query for it rather than 200."""
     return {
         'id': b.id, 'room_id': b.room_id, 'room_name': str(b.room),
         'requested_by_name': b.requested_by_name, 'requested_by_email': b.requested_by_email,
@@ -38,6 +41,9 @@ def _brief(b):
         'assigned_to_name': b.assigned_to_name,
         'reviewed_at': b.reviewed_at.isoformat() if b.reviewed_at else None,
         'admin_remarks': b.admin_remarks, 'created_at': b.created_at.isoformat(),
+        # Who has had this before now, and why they passed it on.
+        'transfers': (trails if trails is not None
+                      else trail_for('room', [b.id])).get(b.id, []),
         'released_at': b.released_at.isoformat() if b.released_at else None,
         'released_by': b.released_by, 'release_reason': b.release_reason,
     }
@@ -82,7 +88,9 @@ class BookingListView(APIView):
             limit = max(1, min(500, int(request.query_params.get('limit', 200))))
         except (TypeError, ValueError):
             limit = 200
-        rows = apply_names([_brief(b) for b in qs[:limit]],
+        page = list(qs[:limit])
+        trails = trail_for('room', [b.id for b in page])
+        rows = apply_names([_brief(b, trails) for b in page],
                            ('requested_by_email', 'requested_by_name'),
                            ('assigned_to_email', 'assigned_to_name'))
         return Response({'results': rows, 'count': qs.count()})
@@ -242,6 +250,30 @@ class BookingActionView(APIView):
             booking.admin_remarks = str(request.data.get('remarks') or '').strip()[:300]
             booking.save()
             return Response({'message': f'Booking {booking.status}.', 'booking': _brief(booking)})
+
+        if action == 'transfer':
+            # Pass it on without answering it. Unlike a ticket there is only
+            # one live stage here -- approving IS the outcome -- so this is
+            # only ever "somebody else should decide this".
+            if role not in ('admin', 'super_admin'):
+                return Response({'error': 'Only an admin can pass a booking on.'},
+                                status=403)
+            # A slot that has passed is nobody's to answer, so it is nobody's
+            # to hand over either. Expire first, or a request that lapsed
+            # since the screen loaded gets passed to somebody as live work.
+            if booking.status == 'pending':
+                expire_stale_bookings()
+                booking.refresh_from_db()
+            if booking.status != 'pending':
+                return Response({'error': f'This booking is already {booking.status}, '
+                                          f'so there is nothing to pass on.'}, status=400)
+            moved = handover('room', booking, 'admin',
+                             request.data.get('to_email'), email, role,
+                             request.data.get('remarks'))
+            if isinstance(moved, str):
+                return Response({'error': moved}, status=400)
+            return Response({'message': f'Passed to {moved.to_name or moved.to_email}.',
+                             'booking': _brief(booking)})
 
         if action == 'release':
             # The meeting finished early, so give the room back now instead
