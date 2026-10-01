@@ -9,7 +9,8 @@ import uuid
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 
-from .auth import PortalScopedAPIView, require_tree_editor, require_user
+from .auth import (PortalScopedAPIView, require_tree_editor,
+                   require_tree_manager, require_user)
 from .models import ActivityLog, TreeProfile
 from .moderation import log_activity
 
@@ -74,7 +75,9 @@ class TreeProfileListView(PortalScopedAPIView):
         return Response({'profiles': [_brief(p, request) for p in rows]})
 
     def post(self, request):
-        user, err = require_tree_editor(request)
+        # Adding somebody changes who is ON the chart, which is a bigger
+        # thing than correcting what a card says -- see require_tree_manager.
+        user, err = require_tree_manager(request)
         if err:
             return err
         d = request.data
@@ -153,7 +156,17 @@ class TreeProfileDetailView(PortalScopedAPIView):
         if 'hidden' in d:
             # A multipart value is always a string — 'false' is truthy in
             # Python, so it has to be compared as text, not just bool()'d.
-            p.is_hidden = str(d.get('hidden')).strip().lower() in ('1', 'true', 'yes')
+            wants = str(d.get('hidden')).strip().lower() in ('1', 'true', 'yes')
+            # This one field is how a person is taken off the chart, which is
+            # a manager's business rather than an editor's. Compared against
+            # the current value, so a routine edit -- which carries the whole
+            # card back, `hidden` included and unchanged -- is not refused
+            # for merely mentioning it.
+            if wants != was_hidden:
+                _, denied = require_tree_manager(request)
+                if denied:
+                    return denied
+            p.is_hidden = wants
         p.updated_by_name = user.name
         p.updated_by_email = user.email
         p.save()
@@ -173,7 +186,7 @@ class TreeProfileDetailView(PortalScopedAPIView):
         """For an override, this reverts the card to its baseline. For an
         added person there is no baseline underneath — this removes them
         from the tree outright."""
-        user, err = require_tree_editor(request)
+        user, err = require_tree_manager(request)
         if err:
             return err
         p = TreeProfile.objects.filter(person_id=(person_id or '').strip()[:150]).first()

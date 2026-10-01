@@ -111,6 +111,19 @@ class PortalUser(models.Model):
     # department, photo) to HR/managers without handing them the whole
     # console. A superadmin can always edit tree cards regardless of this.
     can_edit_tree = models.BooleanField(default=False)
+    # And separately, the right to change who is ON the chart: add a person,
+    # remove one, put somebody under a different HOD.
+    #
+    # Two grants rather than one because the two jobs are not the same size.
+    # Correcting a misspelt designation is routine and wants delegating
+    # widely; taking a person off the org chart is structural, visible to the
+    # whole company, and wants one or two people. With a single flag, whoever
+    # could fix a typo could also delete the managing director's card.
+    #
+    # Managing implies editing -- you cannot sensibly add a person and then
+    # be unable to correct their title -- so require_tree_editor accepts
+    # either (see accounts/auth.py).
+    can_manage_tree = models.BooleanField(default=False)
 
     # The last record Pocket HRMS returned for this person, verbatim. Kept so
     # the console can show exactly what upstream is sending - including fields

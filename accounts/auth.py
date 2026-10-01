@@ -73,12 +73,37 @@ def require_tree_editor(request):
     from Admin Console — Super Admin's way of delegating this one thing
     (name/photo/designation edits on the org chart) without handing out the
     whole console.
+
+    Managing the chart implies editing it: somebody trusted to add a person
+    cannot sensibly be barred from correcting their title afterwards.
     """
     user, err = require_user(request)
     if err:
         return None, err
-    if not (user.is_superadmin or user.can_edit_tree):
+    if not (user.is_superadmin or user.can_edit_tree or user.can_manage_tree):
         return None, Response({'error': 'You are not able to edit APIS Tree.'}, status=403)
+    return user, None
+
+
+def require_tree_manager(request):
+    """(user, None) for someone allowed to change WHO is on APIS Tree.
+
+    Adding a person, removing one, or moving somebody under a different HOD
+    — as opposed to correcting what an existing card says, which is
+    require_tree_editor above.
+
+    Separate because the two are not the same size. A misspelt designation is
+    routine and worth delegating widely; taking somebody off the org chart is
+    structural and visible to the whole company. Held under one grant, anyone
+    who could fix a typo could also delete the managing director's card.
+    """
+    user, err = require_user(request)
+    if err:
+        return None, err
+    if not (user.is_superadmin or user.can_manage_tree):
+        return None, Response(
+            {'error': 'You can edit APIS Tree cards, but not add or remove '
+                      'people. Ask a Super Admin if you need that.'}, status=403)
     return user, None
 
 
