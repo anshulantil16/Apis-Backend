@@ -41,6 +41,12 @@ class BookingRequest(models.Model):
         ('approved',  'Approved'),
         ('rejected',  'Rejected'),
         ('cancelled', 'Cancelled'),
+        # A request nobody answered before the slot came and went. Not the
+        # same as rejected -- nobody turned it down, the meeting time simply
+        # passed -- and it cannot stay 'pending', because "waiting for
+        # approval" is false once there is nothing left to approve: granting
+        # a room for 11:00 at half past two grants nothing.
+        ('expired',   'Expired'),
     ]
     PURPOSE_CHOICES = [
         ('client_meeting',   'Client Meeting'),
@@ -77,6 +83,15 @@ class BookingRequest(models.Model):
     reviewed_by    = models.CharField(max_length=200, blank=True)
     reviewed_at    = models.DateTimeField(null=True, blank=True)
     admin_remarks  = models.CharField(max_length=300, blank=True)
+
+    # Whose request this is. Chosen when it is raised, from the roster the
+    # super admin keeps -- two or three people share a desk, and a shared
+    # pile could not say who had handled what.
+    #
+    # The name is stored beside the email rather than looked up: if somebody
+    # leaves the roster, the record of who dealt with this still reads.
+    assigned_to_email = models.EmailField(blank=True, db_index=True)
+    assigned_to_name  = models.CharField(max_length=200, blank=True)
 
     # A meeting that finished before its booked end. The room is free from
     # this moment, but the booking stays approved and keeps the times it was
@@ -168,6 +183,15 @@ class ResourceRequest(models.Model):
     reviewed_at    = models.DateTimeField(null=True, blank=True)
     admin_remarks  = models.CharField(max_length=300, blank=True)
     fulfilled_by   = models.CharField(max_length=200, blank=True)
+    # Whose request this is. Chosen when it is raised, from the roster the
+    # super admin keeps -- two or three people share a desk, and a shared
+    # pile could not say who had handled what.
+    #
+    # The name is stored beside the email rather than looked up: if somebody
+    # leaves the roster, the record of who dealt with this still reads.
+    assigned_to_email = models.EmailField(blank=True, db_index=True)
+    assigned_to_name  = models.CharField(max_length=200, blank=True)
+
     fulfilled_at   = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -179,6 +203,32 @@ class ResourceRequest(models.Model):
 
     def __str__(self):
         return f"{self.item_name} x{self.quantity} ({self.status})"
+
+
+IT_TICKET_CATEGORIES = [
+    ('account_login_access',       'Account / Login Access'),
+    ('printer_scanner',            'Printer / Scanner'),
+    ('vpn_access',                 'VPN Access'),
+    ('system_application_access',  'System / Application Access'),
+    ('software_installation',      'Software Installation'),
+    ('antivirus_security',         'Antivirus / Security'),
+    ('microsoft_365',              'Microsoft 365'),
+    ('teams_video_conferencing',   'Teams / Video Conferencing'),
+    ('server_storage',             'Server / Storage'),
+    ('database_access',            'Database Access'),
+    ('mobile_device_support',      'Mobile / Device Support'),
+    ('it_asset_request',           'IT Asset Request'),
+    ('other',                      'Other'),
+]
+
+# Admin's side of the same question, taken from ResourceRequest rather than
+# copied, so the two lists cannot drift apart: a category added for requests
+# is a category admins can log work against on the same day.
+LOGGED_WORK_CATEGORIES = (
+    [c for c in IT_TICKET_CATEGORIES if c[0] != 'other']
+    + [c for c in ResourceRequest.CATEGORY_CHOICES if c[0] != 'other']
+    + [('other', 'Other')]          # kept last, where a fall-through belongs
+)
 
 
 class SupportTicket(models.Model):
@@ -204,21 +254,17 @@ class SupportTicket(models.Model):
         # only evidence, one free-text field away from being overwritten.
         ('cancelled',   'Cancelled'),
     ]
-    CATEGORY_CHOICES = [
-        ('account_login_access',       'Account / Login Access'),
-        ('printer_scanner',            'Printer / Scanner'),
-        ('vpn_access',                 'VPN Access'),
-        ('system_application_access',  'System / Application Access'),
-        ('software_installation',      'Software Installation'),
-        ('antivirus_security',         'Antivirus / Security'),
-        ('microsoft_365',              'Microsoft 365'),
-        ('teams_video_conferencing',   'Teams / Video Conferencing'),
-        ('server_storage',             'Server / Storage'),
-        ('database_access',            'Database Access'),
-        ('mobile_device_support',      'Mobile / Device Support'),
-        ('it_asset_request',           'IT Asset Request'),
-        ('other',                      'Other'),
-    ]
+    # What a ticket somebody *raises* can be about: IT's own work. This is
+    # the list the IT queue is filtered and reported on, and the only one a
+    # request may use -- see TicketListView.post.
+    IT_CATEGORY_CHOICES = IT_TICKET_CATEGORIES
+    # What a job *logged* after the fact can be about, which is wider,
+    # because Admin logs work here too (see `origin` below) and an admin's
+    # day is not an IT day. Offered only IT's list, an admin filing "got the
+    # pantry tap fixed" had nothing honest to pick, so it landed on 'Other' --
+    # and "Other" was then the largest category in their monthly report,
+    # which is the one thing a report by category must never be.
+    CATEGORY_CHOICES = LOGGED_WORK_CATEGORIES
     PRIORITY_CHOICES = [
         ('low', 'Low'), ('medium', 'Medium'), ('high', 'High'), ('critical', 'Critical'),
     ]
@@ -237,6 +283,15 @@ class SupportTicket(models.Model):
     reviewed_by    = models.CharField(max_length=200, blank=True)
     reviewed_at    = models.DateTimeField(null=True, blank=True)
     admin_remarks  = models.CharField(max_length=300, blank=True)
+
+    # Whose request this is. Chosen when it is raised, from the roster the
+    # super admin keeps -- two or three people share a desk, and a shared
+    # pile could not say who had handled what.
+    #
+    # The name is stored beside the email rather than looked up: if somebody
+    # leaves the roster, the record of who dealt with this still reads.
+    assigned_to_email = models.EmailField(blank=True, db_index=True)
+    assigned_to_name  = models.CharField(max_length=200, blank=True)
 
     # Where the work came from.
     #
@@ -257,6 +312,17 @@ class SupportTicket(models.Model):
     ]
     origin = models.CharField(max_length=20, choices=ORIGIN_CHOICES,
                               default='requested', db_index=True)
+
+    # Whose work this is. IT and Admin are two teams doing two different
+    # jobs, and both log into this one table; without this the only thing
+    # telling them apart was the category, which 'Other' does not.
+    #
+    # A ticket somebody raises is always IT's -- Admin's requests are
+    # BookingRequest and ResourceRequest, which are their own tables. So this
+    # only really varies on logged work.
+    DESK_CHOICES = [('it', 'IT'), ('admin', 'Admin')]
+    desk = models.CharField(max_length=10, choices=DESK_CHOICES,
+                            default='it', db_index=True)
     # Who the logged job was for -- a person, a department, "the server room".
     # Free text on purpose: much of this work is for nobody in particular.
     logged_for = models.CharField(max_length=200, blank=True)
@@ -328,13 +394,14 @@ class TicketEvent(models.Model):
     """
 
     ACTIONS = [
-        ('created',   'Created'),
-        ('approved',  'Approved'),
-        ('rejected',  'Rejected'),
-        ('started',   'Work started'),
-        ('closed',    'Closed'),
-        ('cancelled', 'Cancelled'),
-        ('logged',    'Logged as done'),
+        ('created',     'Created'),
+        ('approved',    'Approved'),
+        ('rejected',    'Rejected'),
+        ('started',     'Work started'),
+        ('closed',      'Closed'),
+        ('cancelled',   'Cancelled'),
+        ('logged',      'Logged as done'),
+        ('transferred', 'Passed to somebody else'),
     ]
 
     ticket      = models.ForeignKey(SupportTicket, on_delete=models.CASCADE,
@@ -355,6 +422,59 @@ class TicketEvent(models.Model):
 
     def __str__(self):
         return f'{self.action} by {self.actor_email or "system"}'
+
+
+class Handover(models.Model):
+    """Who passed a piece of work to somebody else, and why.
+
+    A request is addressed to one person when it is raised, by whoever raised
+    it -- who is guessing. They pick the name they know, or the first in the
+    list, and a good deal of work lands on the wrong desk-mate: somebody on
+    leave, or the person who does not look after that system. Until now the
+    only ways out were to answer it anyway or to leave it sitting, and a
+    request sitting with the wrong person looks exactly like one nobody has
+    got to yet.
+
+    So work can be passed on. The trail is a table rather than a field
+    because the interesting cases have two or three hops in them -- raised to
+    A, passed to B who was away, passed to C -- and a field would keep only
+    the last one, which is the hop that explains least.
+
+    Not a GenericForeignKey: the contenttypes indirection buys nothing here
+    (three kinds, named once) and costs a join on every read. `kind` plus
+    `object_id` is the same information, legible in a shell.
+
+    Append-only by intent, like TicketEvent: written by handover.transfer()
+    and never updated or deleted.
+    """
+
+    KIND_CHOICES = [('ticket', 'IT ticket'), ('item', 'Item request'),
+                    ('room', 'Room booking')]
+
+    kind       = models.CharField(max_length=10, choices=KIND_CHOICES)
+    object_id  = models.PositiveIntegerField()
+
+    # Snapshotted, not foreign keys: who handed what to whom stays readable
+    # after somebody leaves and their roster row goes.
+    from_email = models.EmailField(blank=True)
+    from_name  = models.CharField(max_length=200, blank=True)
+    to_email   = models.EmailField()
+    to_name    = models.CharField(max_length=200, blank=True)
+    by_email   = models.EmailField(blank=True)
+    by_role    = models.CharField(max_length=20, blank=True)
+
+    # Required where this is written from. "Passed to Sana" answers nothing;
+    # "Sana looks after the VPN" is the whole value of the record, and the
+    # person receiving it is owed the sentence.
+    reason     = models.CharField(max_length=300)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [models.Index(fields=['kind', 'object_id', 'created_at'])]
+
+    def __str__(self):
+        return f'{self.kind} #{self.object_id} -> {self.to_email}'
 
 
 class Employee(models.Model):

@@ -16,8 +16,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .worktime import after_hours_minutes
-
 HEAD_FILL = PatternFill('solid', fgColor='0E7490')
 THIN = Side(style='thin', color='E2E8F0')
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
@@ -59,16 +57,25 @@ def _minutes(m):
     return f'{m // 60}h {m % 60}m' if m >= 60 else f'{m}m'
 
 
-def build_work_report(report, tickets):
-    """-> xlsx bytes. `report` is WorkReportView's dict, `tickets` the rows."""
+def build_work_report(report, rows):
+    """-> xlsx bytes.
+
+    `report` is WorkReportView's dict and `rows` the flat work items behind
+    it (roompulse.work_items.collect) -- tickets, item requests and room
+    bookings alike, already in one shape.
+    """
     wb = Workbook()
 
     ws = wb.active
     ws.title = 'Summary'
     ws['A1'] = f"Work done — {report['label']}"
     ws['A1'].font = Font(bold=True, size=13)
-    ws['A3'] = (f"{report['total']} jobs: {report['from_tickets']} from tickets, "
-                f"{report['logged_directly']} logged directly by the team.")
+    q = report.get('from_queue') or {}
+    ws['A3'] = (
+        f"{report['total']} jobs: {report['from_tickets']} through the queues "
+        f"({q.get('tickets', 0)} IT tickets, {q.get('item_requests', 0)} item requests, "
+        f"{q.get('room_bookings', 0)} room bookings), "
+        f"{report['logged_directly']} logged directly by the team.")
     ws['A3'].font = Font(size=10, color='475569')
     ws['A4'] = (f"Counted by the day the work was done. A ticket raised last month and "
                 f"finished this one belongs to this month. Office hours are taken as "
@@ -97,21 +104,22 @@ def build_work_report(report, tickets):
 
     detail = wb.create_sheet('Every job')
     _head(detail, DETAIL_COLUMNS)
-    for i, t in enumerate(tickets, start=2):
+    HOW = {'ticket': 'From a ticket', 'item': 'Item request', 'room': 'Room booking'}
+    for i, t in enumerate(rows, start=2):
         _row(detail, i, [
-            t.performed_on.strftime('%d %b %Y') if t.performed_on else '',
-            t.performed_by_name or t.performed_by_email or 'Unattributed',
-            'Logged' if t.origin == 'logged' else 'From a ticket',
-            t.get_category_display(),
-            t.subject,
-            t.logged_for or t.requested_by_name or '',
-            (f"{t.worked_from:%H:%M}-{t.worked_to:%H:%M}"
-             if t.worked_from and t.worked_to else ''),
-            _minutes(t.time_spent_minutes),
-            _minutes(after_hours_minutes(t.performed_on, t.worked_from, t.worked_to)),
-            t.get_status_display(),
+            t['date'].strftime('%d %b %Y') if t['date'] else '',
+            t['name'] or t['email'] or 'Unattributed',
+            'Logged' if t['origin'] == 'logged' else HOW.get(t['source'], 'From a ticket'),
+            t['category_label'],
+            t['subject'],
+            t['for'] or '',
+            (f"{t['worked_from']:%H:%M}-{t['worked_to']:%H:%M}"
+             if t['worked_from'] and t['worked_to'] else ''),
+            _minutes(t['minutes']),
+            _minutes(t['after_hours_minutes']),
+            t['status'],
         ])
-    if not tickets:
+    if not rows:
         detail.cell(row=2, column=1, value='No jobs recorded for this month.').font = \
             Font(italic=True, color='94A3B8')
 

@@ -6,7 +6,8 @@ privileged endpoint took the caller's word for who they were, read from an
 ones that try to act as somebody else.
 """
 import io
-from datetime import date, time, timedelta
+from calendar import monthrange
+from datetime import date, datetime, time, timedelta
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -15,7 +16,8 @@ from django.test.utils import override_settings as _os  # noqa: F401
 
 from accounts.models import PortalUser
 
-from .models import AdminUser, SupportTicket, TicketEvent, Employee, Room
+from .models import (AdminUser, BookingRequest, ResourceRequest, SupportTicket,
+                     TicketEvent, Employee, Room)
 from .views.auth import issue_session, resolve_role, SUPER_ADMIN_EMAIL
 from .worktime import after_hours_minutes, duration_minutes, resolve_time
 
@@ -25,6 +27,7 @@ EMPLOYEE = 'priya.sharma@apisindia.com'
 IT_STAFF = 'it.desk@apisindia.com'
 OUTSIDER = 'attacker@gmail.com'
 OTHER_IT = 'sana.it@apisindia.com'
+ADMIN_STAFF = 'meena.admin@apisindia.com'
 
 
 def auth(email):
@@ -34,11 +37,15 @@ def auth(email):
 
 class HelpdeskBase(TestCase):
     def setUp(self):
+        # Both desks are staffed in every test, because every request now has
+        # to be addressed to somebody on the right one.
         AdminUser.objects.create(email=IT_STAFF, name='IT Desk', scope='it_support')
+        AdminUser.objects.create(email=ADMIN_STAFF, name='Meena', scope='admin')
 
     def raise_ticket(self, email=EMPLOYEE, **over):
         body = {'subject': 'Laptop will not boot', 'description': 'Blue screen on startup',
-                'category': 'other', 'priority': 'high'}
+                'category': 'other', 'priority': 'high',
+                'assigned_to_email': IT_STAFF}
         body.update(over)
         return self.client.post(f'{API}/tickets/', body, **auth(email))
 
@@ -273,6 +280,7 @@ class WhatMayBeAttached(HelpdeskBase):
 
     def test_a_screenshot_is_kept_and_linked(self):
         r = self.client.post(f'{API}/tickets/', {
+            'assigned_to_email': IT_STAFF,
             'subject': 'Printer jam', 'description': 'See photo',
             'attachments': self._file('error.png', b'PNG'),
         }, **auth(EMPLOYEE))
@@ -287,6 +295,7 @@ class WhatMayBeAttached(HelpdeskBase):
         by IT Support — an .html or .svg is a script on our own origin."""
         for bad in ('payload.html', 'logo.svg', 'setup.exe', 'run.sh'):
             r = self.client.post(f'{API}/tickets/', {
+            'assigned_to_email': IT_STAFF,
                 'subject': 'x', 'description': 'y', 'attachments': self._file(bad),
             }, **auth(EMPLOYEE))
             self.assertEqual(r.status_code, 400, f'{bad} was accepted')
@@ -294,6 +303,7 @@ class WhatMayBeAttached(HelpdeskBase):
     def test_an_oversized_file_is_refused(self):
         big = SimpleUploadedFile('huge.png', b'x' * (5 * 1024 * 1024 + 10))
         r = self.client.post(f'{API}/tickets/', {
+            'assigned_to_email': IT_STAFF,
             'subject': 'x', 'description': 'y', 'attachments': big,
         }, **auth(EMPLOYEE))
         self.assertEqual(r.status_code, 400)
@@ -301,6 +311,7 @@ class WhatMayBeAttached(HelpdeskBase):
 
     def test_nothing_is_stored_when_a_file_is_refused(self):
         self.client.post(f'{API}/tickets/', {
+            'assigned_to_email': IT_STAFF,
             'subject': 'x', 'description': 'y', 'attachments': self._file('bad.exe'),
         }, **auth(EMPLOYEE))
         self.assertEqual(SupportTicket.objects.count(), 0,
@@ -318,11 +329,19 @@ class TheQueueStaysCheapToLoad(HelpdeskBase):
         headers = auth(IT_STAFF)          # minting the token is not the request
 
         def count_queries(n_tickets):
-            with self.assertNumQueries(6):
+            with self.assertNumQueries(10):
                 r = self.client.get(f'{API}/tickets/', **headers)
             return r
 
-        # 6 = session lookup, roster lookup, tickets, attachments, events, count.
+        # 10 = session lookup, roster lookup, tickets, attachments, events,
+        # the handover trail, count, and up to three to turn the addresses on
+        # the page into people's real names (HRMS, then the directory, then
+        # the roster -- it stops at the first that knows everybody, so a list
+        # of staff costs three and a list of employees costs one).
+        #
+        # The trail is ONE query for the page, not one per ticket: _brief()
+        # takes the whole page's trail from trail_for() rather than looking
+        # its own up, which is the difference this test exists to hold.
         count_queries(12)
 
         # The point of the test: twice the tickets, same number of queries.
@@ -344,6 +363,7 @@ class LoggingWorkNobodyAskedFor(HelpdeskBase):
         body = {'origin': 'logged', 'subject': 'Restarted the mail server',
                 'description': 'Queue was stuck; restarted it and cleared the backlog.',
                 'category': 'server_storage', 'time_spent_minutes': 45,
+                'worked_from': '10:00', 'worked_to': '10:45',
                 'logged_for': 'Whole office'}
         body.update(over)
         return self.client.post(f'{API}/tickets/', body,
@@ -409,6 +429,8 @@ class LoggingWorkNobodyAskedFor(HelpdeskBase):
     def test_a_logged_job_cannot_smuggle_a_dangerous_attachment(self):
         r = self.client.post(f'{API}/tickets/', {
             'origin': 'logged', 'subject': 's', 'description': 'd',
+            'category': 'other', 'logged_for': 'x',
+            'worked_from': '10:00', 'worked_to': '10:30',
             'attachments': SimpleUploadedFile('payload.html', b'<script>')}, **auth(IT_STAFF))
         self.assertEqual(r.status_code, 400)
 
@@ -431,7 +453,8 @@ class WhatTheMonthAddsUpTo(HelpdeskBase):
 
     def log_one(self, **over):
         body = {'origin': 'logged', 'subject': 'Rebuilt a laptop', 'description': 'Joiner setup',
-                'category': 'it_asset_request', 'time_spent_minutes': 30}
+                'category': 'it_asset_request', 'time_spent_minutes': 30,
+                'worked_from': '11:00', 'worked_to': '11:30', 'logged_for': 'A joiner'}
         body.update(over)
         return self.client.post(f'{API}/tickets/', body,
                                 content_type='application/json', **auth(IT_STAFF))
@@ -455,7 +478,10 @@ class WhatTheMonthAddsUpTo(HelpdeskBase):
         """Not to whoever picked it up -- the row has one slot and closing
         is the fact the report is about."""
         self.close_a_raised_ticket(closer=OTHER_IT)
-        people = {p['email']: p for p in self.report().json()['people']}
+        # Read as the super admin: everybody else's report is now their own,
+        # and this is a question about which of two people got the credit.
+        people = {p['email']: p
+                  for p in self.report(SUPER_ADMIN_EMAIL).json()['people']}
         self.assertEqual(people[OTHER_IT]['closed'], 1)
         self.assertNotIn(IT_STAFF, people)
 
@@ -609,7 +635,7 @@ class TimeOnBothKindsOfWork(HelpdeskBase):
         r = self.client.post(f'{API}/tickets/', {
             'origin': 'logged', 'subject': 'Brought the server back up',
             'description': 'Disk filled', 'category': 'server_storage',
-            'worked_from': '23:00', 'worked_to': '00:30',
+            'logged_for': 'Whole office', 'worked_from': '23:00', 'worked_to': '00:30',
         }, content_type='application/json', **auth(IT_STAFF))
         self.assertEqual(r.status_code, 201)
         self.assertEqual(r.json()['ticket']['time_spent_minutes'], 90)
@@ -621,7 +647,7 @@ class TimeOnBothKindsOfWork(HelpdeskBase):
             self.client.post(f'{API}/tickets/', {
                 'origin': 'logged', 'subject': f'Job {frm}', 'description': 'x',
                 'category': 'other', 'performed_on': wednesday.isoformat(),
-                'worked_from': frm, 'worked_to': to,
+                'logged_for': 'Whole office', 'worked_from': frm, 'worked_to': to,
             }, content_type='application/json', **auth(IT_STAFF))
 
         d = self.client.get(f'{API}/work-report/?month=2026-09', **auth(IT_STAFF)).json()
@@ -630,10 +656,14 @@ class TimeOnBothKindsOfWork(HelpdeskBase):
         self.assertEqual(d['people'][0]['after_hours_minutes'], 90)
 
     def test_a_job_with_no_window_contributes_no_late_hours(self):
-        """Not guessed at — a job nobody timed is silent, not zero-and-inside."""
-        self.client.post(f'{API}/tickets/', {
-            'origin': 'logged', 'subject': 'Untimed', 'description': 'x',
-            'category': 'other', 'time_spent_minutes': 30,
+        """Not guessed at — a job nobody timed is silent, not zero-and-inside.
+
+        Logging now asks for the hours, so this comes in the other way: a
+        ticket closed with a duration but no window, which is still allowed
+        because a closer often knows how long it took and not when."""
+        tid = self.in_progress_ticket()
+        self.client.patch(f'{API}/tickets/{tid}/', {
+            'action': 'close', 'time_spent_minutes': 30,
         }, content_type='application/json', **auth(IT_STAFF))
         d = self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()
         self.assertEqual(d['minutes_recorded'], 30)
@@ -810,9 +840,11 @@ class TheOverview(HelpdeskBase):
         self.assertEqual(d['stale_total'], 1)
 
     def test_logged_work_is_not_counted_as_a_waiting_request(self):
-        self.client.post(f'{API}/tickets/', {'origin': 'logged', 'subject': 'Restarted a server',
-                                             'description': 'x', 'category': 'server_storage'},
-                         content_type='application/json', **auth(IT_STAFF))
+        self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Restarted a server', 'description': 'x',
+            'category': 'server_storage', 'logged_for': 'Whole office',
+            'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(IT_STAFF))
         d = self.overview().json()
         row = next(w for w in d['waiting'] if 'IT tickets' in w['what'])
         self.assertEqual(row['count'], 0)
@@ -822,3 +854,1147 @@ class TheOverview(HelpdeskBase):
         Employee.objects.create(email='p@apisindia.com', name='P', source='directory',
                                 is_active=True, synced_at=timezone.now() - timedelta(days=45))
         self.assertTrue(any('last synced' in p for p in self.overview().json()['problems']))
+
+
+class AnExpiredSessionSaysSo(HelpdeskBase):
+    """A session that has aged out must answer 401, not "you are not an admin".
+
+    actor_role gives (None, '') for an expired token -- the same shape as a
+    signed-in employee without the role. Handlers that checked the role first
+    told an admin looking at the approvals screen that only an admin could
+    approve, which is both wrong and unactionable.
+
+    It also left the app stuck: rpFetch signs out on a 401 and ignores a 403,
+    so the dead session survived until somebody reloaded by hand. That is why
+    the report said a hard refresh "fixed" it.
+    """
+
+    DEAD = {'HTTP_X_ADMINPULSE_SESSION': 'expired-or-forged-token'}
+
+    def test_approving_a_booking(self):
+        r = self.client.patch(f'{API}/bookings/1/', {'action': 'approve'},
+                              content_type='application/json', **self.DEAD)
+        self.assertEqual(r.status_code, 401, r.content[:120])
+
+    def test_approving_an_item_request(self):
+        r = self.client.patch(f'{API}/resource-requests/1/', {'action': 'approve'},
+                              content_type='application/json', **self.DEAD)
+        self.assertEqual(r.status_code, 401, r.content[:120])
+
+    def test_acting_on_a_ticket(self):
+        r = self.client.patch(f'{API}/tickets/1/', {'action': 'approve'},
+                              content_type='application/json', **self.DEAD)
+        self.assertEqual(r.status_code, 401, r.content[:120])
+
+    def test_the_message_does_not_blame_the_role(self):
+        """The old answer sent somebody hunting for a permissions problem that
+        was not there."""
+        r = self.client.patch(f'{API}/resource-requests/1/', {'action': 'approve'},
+                              content_type='application/json', **self.DEAD)
+        self.assertNotIn('admin', (r.json().get('error') or '').lower())
+
+    def test_a_real_admin_is_still_allowed(self):
+        """The guard must not have broken the case it sits in front of."""
+        AdminUser.objects.create(email='meena@apisindia.com', name='Meena', scope='admin')
+        r = self.client.patch(f'{API}/resource-requests/999999/', {'action': 'approve'},
+                              content_type='application/json',
+                              **auth('meena@apisindia.com'))
+        # 404 for the missing row, not 401/403: they got past both gates.
+        self.assertEqual(r.status_code, 404, r.content[:120])
+
+
+class TheRoomGridIsNotPublic(HelpdeskBase):
+    """It carries who is meeting where and until when."""
+
+    def test_an_unsigned_caller_is_refused(self):
+        self.assertEqual(self.client.get(f'{API}/rooms/').status_code, 401)
+
+    def test_any_signed_in_employee_still_sees_it(self):
+        self.assertEqual(self.client.get(f'{API}/rooms/', **auth(EMPLOYEE)).status_code, 200)
+
+
+class PendingBookingsAreVisible(HelpdeskBase):
+    """Booking a room and being told it went for approval, then seeing the room
+    say "nothing booked today", left no way to tell the request existed -- and
+    invited the next person to ask for the same slot."""
+
+    def test_a_pending_request_shows_on_the_room(self):
+        room = Room.objects.filter(is_active=True).first()
+        # A slot still to come TODAY, worked out from the clock rather than
+        # written down: this used to book 15:00-16:00, which was fine until
+        # requests whose time has passed started expiring, and then the test
+        # passed every morning and failed every afternoon.
+        now = timezone.localtime()
+        start = (now + timedelta(minutes=5)).time().replace(second=0, microsecond=0)
+        end = time(23, 59)
+        if start >= end:                  # the last minutes of the day
+            return
+        BookingRequest.objects.create(
+            room=room, requested_by_name='Ravi', requested_by_email=IT_STAFF,
+            date=now.date(), start_time=start, end_time=end,
+            purpose='internal_meeting', status='pending')
+        grid = self.client.get(f'{API}/rooms/', **auth(IT_STAFF)).json()['results']
+        mine = next(r for r in grid if r['id'] == room.id)
+        self.assertEqual(len(mine['pending']), 1)
+        self.assertEqual(mine['pending'][0]['requested_by_name'], 'Ravi')
+
+    def test_an_approved_one_is_not_listed_as_pending(self):
+        room = Room.objects.filter(is_active=True).first()
+        BookingRequest.objects.create(
+            room=room, requested_by_name='Ravi', requested_by_email=IT_STAFF,
+            date=timezone.localdate(), start_time=time(15, 0), end_time=time(16, 0),
+            purpose='internal_meeting', status='approved')
+        grid = self.client.get(f'{API}/rooms/', **auth(IT_STAFF)).json()['results']
+        mine = next(r for r in grid if r['id'] == room.id)
+        self.assertEqual(mine['pending'], [])
+
+
+
+class AnAdminsWorkIsAdminWork(HelpdeskBase):
+    """Two halves of the same complaint: an Admin logging a job had only IT's
+    categories to file it under, and the work their own queues produced was
+    not counted at all. Between them, an Admin's month read as almost empty."""
+
+    def setUp(self):
+        super().setUp()
+
+    def log(self, email, category):
+        return self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Got the pantry tap fixed',
+            'description': 'Plumber came at 11.', 'category': category,
+            'performed_by_name': 'Meena', 'time_spent_minutes': 45,
+            'logged_for': 'The pantry', 'worked_from': '11:00', 'worked_to': '11:45',
+        }, content_type='application/json', **auth(email))
+
+    def test_an_admin_can_file_a_job_under_an_admin_category(self):
+        r = self.log(ADMIN_STAFF, 'plumbing')
+        self.assertEqual(r.status_code, 201, r.content[:200])
+        self.assertEqual(SupportTicket.objects.get(pk=r.json()['id']).category, 'plumbing')
+
+    def test_a_raised_ticket_still_cannot_be_admin_work(self):
+        """The IT queue is for IT. An admin category on a request falls back
+        to 'other' rather than filling IT's queue with plumbing."""
+        t = self.raise_ticket(category='housekeeping').json()
+        self.assertEqual(SupportTicket.objects.get(pk=t['id']).category, 'other')
+
+    def test_the_report_names_the_admin_category(self):
+        self.log(ADMIN_STAFF, 'plumbing')
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertIn('Plumbing', [c['label'] for c in d['by_category']])
+
+    def _a_fulfilled_request(self, when=None):
+        req = ResourceRequest.objects.create(
+            requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            category='stationery_office_supplies', item_name='A4 paper', quantity=5,
+            status='fulfilled', reviewed_by=ADMIN_STAFF,
+            fulfilled_by=ADMIN_STAFF, fulfilled_at=when or timezone.now())
+        return req
+
+    def test_fulfilling_an_item_request_counts_as_work_done(self):
+        self._a_fulfilled_request()
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['total'], 1)
+        self.assertEqual(d['from_queue']['item_requests'], 1)
+        mine = next(p for p in d['people'] if p['email'] == ADMIN_STAFF)
+        self.assertEqual(mine['total'], 1)
+
+    def test_approving_a_room_booking_counts_too(self):
+        room = Room.objects.filter(is_active=True).first()
+        BookingRequest.objects.create(
+            room=room, requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            date=timezone.localdate(), start_time=time(15, 0), end_time=time(16, 0),
+            purpose='internal_meeting', status='approved',
+            reviewed_by=ADMIN_STAFF, reviewed_at=timezone.now())
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['from_queue']['room_bookings'], 1)
+
+    def test_approving_your_own_request_is_not_work(self):
+        """Staff requests are auto-approved, so this would let anyone raise
+        their own month's figures by booking rooms."""
+        room = Room.objects.filter(is_active=True).first()
+        BookingRequest.objects.create(
+            room=room, requested_by_name='Meena', requested_by_email=ADMIN_STAFF,
+            date=timezone.localdate(), start_time=time(9, 0), end_time=time(10, 0),
+            purpose='internal_meeting', status='approved',
+            reviewed_by=ADMIN_STAFF, reviewed_at=timezone.now())
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['total'], 0)
+
+    def test_approved_but_not_yet_handed_over_is_not_done(self):
+        ResourceRequest.objects.create(
+            requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            category='stationery_office_supplies', item_name='A4 paper',
+            status='approved', reviewed_by=ADMIN_STAFF, reviewed_at=timezone.now())
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['total'], 0)
+        self.assertEqual(d['still_open'], 1)
+
+    def test_work_on_the_last_day_of_the_month_is_in_the_month(self):
+        """A date range against a datetime column ends at midnight, which
+        drops the whole of the last day."""
+        today = timezone.localdate()
+        last = date(today.year, today.month, monthrange(today.year, today.month)[1])
+        at = timezone.make_aware(datetime.combine(last, time(18, 30)))
+        self._a_fulfilled_request(when=at)
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['total'], 1, f"{last} fell out of {d['label']}")
+
+    def test_the_spreadsheet_agrees_with_the_screen(self):
+        self._a_fulfilled_request()
+        self.log(ADMIN_STAFF, 'plumbing')
+        r = self.client.get(f'{API}/work-report/export/', **auth(ADMIN_STAFF))
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.content[:2] == b'PK', 'not a workbook')
+
+
+class ALoggedJobHasToBeWorthReportingOn(HelpdeskBase):
+    """Half-filled records are what make a monthly report unanswerable: it can
+    say a job happened and nothing else. Every field on the form is required,
+    and the server is where that is decided -- a form can be bypassed."""
+
+    def setUp(self):
+        super().setUp()
+
+    def log(self, **over):
+        body = {'origin': 'logged', 'subject': 'Rebuilt a laptop',
+                'description': 'Joiner setup', 'category': 'it_asset_request',
+                'logged_for': 'A joiner', 'worked_from': '10:00', 'worked_to': '10:45'}
+        body.update(over)
+        return self.client.post(f'{API}/tickets/', body,
+                                content_type='application/json', **auth(IT_STAFF))
+
+    def test_a_complete_one_is_accepted(self):
+        self.assertEqual(self.log().status_code, 201)
+
+    def test_who_it_was_for_is_required(self):
+        r = self.log(logged_for='')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('who', r.json()['error'].lower())
+
+    def test_both_ends_of_the_window_are_required(self):
+        self.assertEqual(self.log(worked_from='').status_code, 400)
+        self.assertEqual(self.log(worked_to='').status_code, 400)
+
+    def test_a_category_must_be_chosen_not_defaulted(self):
+        """It used to fall back to 'Other' without saying so, which is how
+        'Other' became the biggest slice of an admin's report."""
+        r = self.log(category='')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('category', r.json()['error'].lower())
+
+    def test_a_category_from_the_wrong_side_is_refused_not_silently_changed(self):
+        r = self.log(category='not_a_real_category')
+        self.assertEqual(r.status_code, 400)
+
+    def test_a_job_that_took_no_time_is_refused(self):
+        self.assertEqual(self.log(worked_from='10:00', worked_to='10:00').status_code, 400)
+
+
+class AnAdminCanSeeWhatTheyLogged(HelpdeskBase):
+    """The list treated an admin as an ordinary employee and then excluded the
+    work log outright, so a job an admin had just logged was saved, counted,
+    and visible nowhere -- which reads exactly like it did not save."""
+
+    def setUp(self):
+        super().setUp()
+        r = self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Got the pantry tap fixed',
+            'description': 'Plumber came at 11.', 'category': 'plumbing',
+            'logged_for': 'The pantry', 'worked_from': '11:00', 'worked_to': '11:45',
+        }, content_type='application/json', **auth(ADMIN_STAFF))
+        self.assertEqual(r.status_code, 201, r.content[:200])
+
+    def rows(self, email):
+        return self.client.get(f'{API}/tickets/?limit=500', **auth(email)).json()['results']
+
+    def test_the_admin_who_logged_it_can_see_it(self):
+        logged = [r for r in self.rows(ADMIN_STAFF) if r['origin'] == 'logged']
+        self.assertEqual(len(logged), 1)
+        self.assertEqual(logged[0]['subject'], 'Got the pantry tap fixed')
+
+    def test_an_employee_still_cannot(self):
+        self.assertTrue(all(r['origin'] != 'logged' for r in self.rows(EMPLOYEE)))
+
+    def test_an_admin_does_not_inherit_it_support_triage(self):
+        """Seeing the work log is not the same as seeing everybody's tickets."""
+        self.raise_ticket()          # an employee's IT ticket
+        subjects = [r['subject'] for r in self.rows(ADMIN_STAFF)]
+        self.assertNotIn('Laptop will not boot', subjects)
+
+
+class TheTwoDesksAreKeptApart(HelpdeskBase):
+    """IT and Admin are different people doing different work. Logged jobs all
+    live in one table, so without a desk on the row an admin's own work came
+    back looking like an IT ticket -- which is how it was labelled on the
+    screen that reported this."""
+
+    def setUp(self):
+        super().setUp()
+
+    def log(self, email, category, subject='A job'):
+        return self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': subject, 'description': 'x',
+            'category': category, 'logged_for': 'The office',
+            'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(email))
+
+    def test_an_admins_job_is_admin_work(self):
+        r = self.log(ADMIN_STAFF, 'plumbing')
+        self.assertEqual(r.status_code, 201, r.content[:200])
+        self.assertEqual(SupportTicket.objects.get(pk=r.json()['id']).desk, 'admin')
+
+    def test_an_admins_job_under_other_is_still_admin_work(self):
+        """'Other' is on both lists, so the category cannot say whose it is --
+        the person can."""
+        r = self.log(ADMIN_STAFF, 'other')
+        self.assertEqual(SupportTicket.objects.get(pk=r.json()['id']).desk, 'admin')
+
+    def test_an_it_job_is_it_work(self):
+        r = self.log(IT_STAFF, 'server_storage')
+        self.assertEqual(SupportTicket.objects.get(pk=r.json()['id']).desk, 'it')
+
+    def test_my_requests_never_shows_logged_work(self):
+        """A job you logged is not something you asked for. It was appearing
+        on the requests screen badged 'IT Ticket' -- wrong twice over for an
+        admin's own admin work."""
+        self.log(ADMIN_STAFF, 'plumbing', subject='Got the pantry tap fixed')
+        rows = self.client.get(f'{API}/tickets/?mine={ADMIN_STAFF}',
+                               **auth(ADMIN_STAFF)).json()['results']
+        self.assertEqual([r for r in rows if r['origin'] == 'logged'], [])
+
+    def test_each_desk_sees_its_own_log(self):
+        self.log(ADMIN_STAFF, 'plumbing', subject='Pantry tap')
+        self.log(IT_STAFF, 'server_storage', subject='Mail server')
+        seen = [r['subject'] for r in self.client.get(
+            f'{API}/tickets/?origin=logged', **auth(ADMIN_STAFF)).json()['results']]
+        self.assertIn('Pantry tap', seen)
+        self.assertNotIn('Mail server', seen)
+
+    def test_the_reports_are_separate(self):
+        self.log(ADMIN_STAFF, 'plumbing', subject='Pantry tap')
+        self.log(IT_STAFF, 'server_storage', subject='Mail server')
+
+        admin_side = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(admin_side['desk_label'], 'Admin')
+        self.assertEqual(admin_side['total'], 1)
+        self.assertEqual([p['email'] for p in admin_side['people']], [ADMIN_STAFF])
+
+        it_side = self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()
+        self.assertEqual(it_side['desk_label'], 'IT')
+        self.assertEqual(it_side['total'], 1)
+        self.assertEqual([p['email'] for p in it_side['people']], [IT_STAFF])
+
+    def test_admin_queue_work_is_not_in_its_report(self):
+        """Fulfilling an item request is Admin's job, so it must not land in
+        an IT engineer's month."""
+        ResourceRequest.objects.create(
+            requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            category='stationery_office_supplies', item_name='A4 paper',
+            status='fulfilled', fulfilled_by=ADMIN_STAFF, fulfilled_at=timezone.now())
+        self.assertEqual(
+            self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()['total'], 0)
+        self.assertEqual(
+            self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()['total'], 1)
+
+    def test_the_super_admin_sees_both_and_can_ask_for_either(self):
+        self.log(ADMIN_STAFF, 'plumbing')
+        self.log(IT_STAFF, 'server_storage')
+        both = self.client.get(f'{API}/work-report/', **auth(SUPER_ADMIN_EMAIL)).json()
+        self.assertEqual(both['total'], 2)
+        self.assertEqual(both['desk_label'], 'IT and Admin')
+        one = self.client.get(f'{API}/work-report/?desk=admin',
+                              **auth(SUPER_ADMIN_EMAIL)).json()
+        self.assertEqual(one['total'], 1)
+
+
+class EveryRequestIsAddressedToSomebody(HelpdeskBase):
+    """Two or three people share each desk. Everything used to land in one
+    pile all of them saw, so nothing could say which of them had handled what
+    -- and the monthly report could only count whoever pressed the button."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=OTHER_IT, name='Sana', scope='it_support')
+
+    def ticket_to(self, who, email=EMPLOYEE):
+        return self.client.post(f'{API}/tickets/', {
+            'subject': 'VPN will not connect', 'description': 'Times out.',
+            'category': 'vpn_access', 'priority': 'high',
+            'assigned_to_email': who,
+        }, content_type='application/json', **auth(email))
+
+    def test_the_picker_offers_the_right_desk(self):
+        it = self.client.get(f'{API}/desk-staff/?desk=it', **auth(EMPLOYEE)).json()['results']
+        self.assertEqual({p['email'] for p in it}, {IT_STAFF, OTHER_IT})
+        admin = self.client.get(f'{API}/desk-staff/?desk=admin', **auth(EMPLOYEE)).json()['results']
+        self.assertEqual({p['email'] for p in admin}, {ADMIN_STAFF})
+
+    def test_the_roster_is_not_public(self):
+        self.assertEqual(self.client.get(f'{API}/desk-staff/?desk=it').status_code, 401)
+
+    def test_a_ticket_must_name_somebody(self):
+        r = self.client.post(f'{API}/tickets/', {
+            'subject': 'x', 'description': 'y', 'category': 'vpn_access',
+        }, content_type='application/json', **auth(EMPLOYEE))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('who', r.json()['error'].lower())
+
+    def test_it_must_be_somebody_on_that_desk(self):
+        """Otherwise the field is free text, and 'assigned to whoever the
+        browser said' is not an assignment."""
+        for who in (ADMIN_STAFF, EMPLOYEE, 'nobody@apisindia.com'):
+            self.assertEqual(self.ticket_to(who).status_code, 400, who)
+
+    def test_it_is_recorded_with_the_name_beside_the_address(self):
+        t = self.ticket_to(OTHER_IT).json()['ticket']
+        self.assertEqual(t['assigned_to_email'], OTHER_IT)
+        self.assertEqual(t['assigned_to_name'], 'Sana')
+
+    def test_each_person_sees_only_their_own(self):
+        self.ticket_to(IT_STAFF)
+        self.ticket_to(OTHER_IT)
+        mine = self.client.get(f'{API}/tickets/', **auth(IT_STAFF)).json()['results']
+        self.assertEqual([t['assigned_to_email'] for t in mine], [IT_STAFF])
+
+    def test_the_super_admin_sees_everybodys(self):
+        self.ticket_to(IT_STAFF)
+        self.ticket_to(OTHER_IT)
+        rows = self.client.get(f'{API}/tickets/', **auth(SUPER_ADMIN_EMAIL)).json()['results']
+        self.assertEqual(len(rows), 2)
+
+    def test_an_item_request_must_name_an_admin(self):
+        body = {'item_name': 'A4 paper', 'quantity': 5, 'requested_by_name': 'Priya',
+                'category': 'stationery_office_supplies'}
+        self.assertEqual(self.client.post(f'{API}/resource-requests/', body,
+                                          content_type='application/json',
+                                          **auth(EMPLOYEE)).status_code, 400)
+        body['assigned_to_email'] = ADMIN_STAFF
+        self.assertEqual(self.client.post(f'{API}/resource-requests/', body,
+                                          content_type='application/json',
+                                          **auth(EMPLOYEE)).status_code, 201)
+
+    def test_a_room_booking_must_name_an_admin(self):
+        room = Room.objects.filter(is_active=True).first()
+        body = {'room_id': room.id, 'date': timezone.localdate().isoformat(),
+                'start_time': '15:00', 'end_time': '16:00',
+                'purpose': 'internal_meeting', 'requested_by_name': 'Priya'}
+        r = self.client.post(f'{API}/bookings/', body,
+                             content_type='application/json', **auth(EMPLOYEE))
+        self.assertEqual(r.status_code, 400)
+        body['assigned_to_email'] = ADMIN_STAFF
+        r = self.client.post(f'{API}/bookings/', body,
+                             content_type='application/json', **auth(EMPLOYEE))
+        self.assertIn(r.status_code, (200, 201), r.content[:160])
+
+
+class WhatIsOnMyDesk(HelpdeskBase):
+    """The other half of "My Requests": not what I asked for, what I was
+    given. This is the screen a person on a desk works from."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=OTHER_IT, name='Sana', scope='it_support')
+        self.client.post(f'{API}/tickets/', {
+            'subject': 'VPN will not connect', 'description': 'Times out.',
+            'category': 'vpn_access', 'assigned_to_email': IT_STAFF,
+        }, content_type='application/json', **auth(EMPLOYEE))
+        self.client.post(f'{API}/resource-requests/', {
+            'item_name': 'A4 paper', 'quantity': 5, 'requested_by_name': 'Priya',
+            'category': 'stationery_office_supplies', 'assigned_to_email': ADMIN_STAFF,
+        }, content_type='application/json', **auth(EMPLOYEE))
+
+    def tasks(self, email):
+        return self.client.get(f'{API}/my-tasks/', **auth(email)).json()
+
+    def test_it_shows_what_was_given_to_me(self):
+        d = self.tasks(IT_STAFF)
+        self.assertEqual(d['waiting'], 1)
+        self.assertEqual(d['by_kind']['ticket'], 1)
+        self.assertEqual(d['results'][0]['what'], 'VPN will not connect')
+
+    def test_it_does_not_show_somebody_elses(self):
+        self.assertEqual(self.tasks(OTHER_IT)['waiting'], 0)
+
+    def test_each_desk_gets_its_own_kind_of_work(self):
+        self.assertEqual(self.tasks(ADMIN_STAFF)['by_kind']['item'], 1)
+        self.assertEqual(self.tasks(ADMIN_STAFF)['by_kind']['ticket'], 0)
+
+    def test_an_employee_has_no_desk(self):
+        self.assertIn(self.client.get(f'{API}/my-tasks/', **auth(EMPLOYEE)).status_code,
+                      (401, 403))
+
+    def test_a_logged_job_is_not_a_task(self):
+        """It has already happened. Nobody is waiting on it."""
+        self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Restarted the mail server',
+            'description': 'x', 'category': 'server_storage',
+            'logged_for': 'Whole office', 'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(IT_STAFF))
+        self.assertEqual(self.tasks(IT_STAFF)['waiting'], 1)
+
+
+class EverybodySeesTheRightThings(HelpdeskBase):
+    """One class covering every role against every list, because fixing these
+    one branch at a time is what broke them one branch at a time.
+
+    Two rules carry most of it. A logged job is assigned to nobody -- it had
+    already happened when it was written down -- so an assignment filter must
+    leave it alone; that is why IT's own work log vanished from IT's screen.
+    And unassigned work belongs to nobody, so it is shown to the whole desk
+    rather than to no one."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=OTHER_IT, name='Sana', scope='it_support')
+        self.room = Room.objects.filter(is_active=True).first()
+
+    def ticket(self, by, to, subject):
+        return self.client.post(f'{API}/tickets/', {
+            'subject': subject, 'description': 'x', 'category': 'vpn_access',
+            'assigned_to_email': to,
+        }, content_type='application/json', **auth(by))
+
+    def log(self, by, category, subject):
+        return self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': subject, 'description': 'x',
+            'category': category, 'logged_for': 'The office',
+            'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(by))
+
+    def subjects(self, who, q=''):
+        r = self.client.get(f'{API}/tickets/{q}', **auth(who)).json()
+        return sorted(t['subject'] for t in r['results'])
+
+    # ── the work log ────────────────────────────────────────────────────
+    def test_it_sees_its_own_log(self):
+        """This is the bug: a job IT logged is assigned to nobody, so the
+        assignment filter removed it from the screen of the person who had
+        just written it."""
+        self.log(IT_STAFF, 'server_storage', 'Restarted mail')
+        self.assertEqual(self.subjects(IT_STAFF, '?origin=logged&desk=it'),
+                         ['Restarted mail'])
+
+    def test_admin_sees_its_own_log(self):
+        self.log(ADMIN_STAFF, 'plumbing', 'Pantry tap')
+        self.assertEqual(self.subjects(ADMIN_STAFF, '?origin=logged&desk=admin'),
+                         ['Pantry tap'])
+
+    def test_neither_desk_sees_the_others_log(self):
+        self.log(IT_STAFF, 'server_storage', 'Restarted mail')
+        self.log(ADMIN_STAFF, 'plumbing', 'Pantry tap')
+        self.assertEqual(self.subjects(IT_STAFF, '?origin=logged&desk=admin'), [])
+        self.assertEqual(self.subjects(ADMIN_STAFF, '?origin=logged&desk=it'), [])
+
+    def test_an_employee_sees_neither(self):
+        self.log(IT_STAFF, 'server_storage', 'Restarted mail')
+        self.log(ADMIN_STAFF, 'plumbing', 'Pantry tap')
+        self.assertEqual(self.subjects(EMPLOYEE, '?origin=logged'), [])
+
+    # ── my requests ─────────────────────────────────────────────────────
+    def test_a_request_you_sent_to_a_colleague_is_still_yours(self):
+        """The commonest case there is, and it answered "nothing": the list
+        was narrowed to what you were ASSIGNED before being asked for what
+        you RAISED, and the two do not overlap."""
+        self.ticket(IT_STAFF, OTHER_IT, 'My own laptop')
+        self.assertEqual(self.subjects(IT_STAFF, f'?mine={IT_STAFF}'), ['My own laptop'])
+
+    def test_my_requests_leaves_out_work_you_logged(self):
+        self.log(IT_STAFF, 'server_storage', 'Restarted mail')
+        self.assertEqual(self.subjects(IT_STAFF, f'?mine={IT_STAFF}'), [])
+
+    def test_an_admins_own_booking_is_in_their_requests(self):
+        self.client.post(f'{API}/bookings/', {
+            'room_id': self.room.id, 'date': timezone.localdate().isoformat(),
+            'start_time': '15:00', 'end_time': '16:00', 'purpose': 'internal_meeting',
+            'requested_by_name': 'Meena', 'assigned_to_email': ADMIN_STAFF,
+        }, content_type='application/json', **auth(ADMIN_STAFF))
+        d = self.client.get(f'{API}/bookings/?mine={ADMIN_STAFF}', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(len(d['results']), 1)
+
+    def test_you_cannot_read_somebody_elses_requests(self):
+        self.ticket(EMPLOYEE, IT_STAFF, 'VPN down')
+        rows = self.client.get(f'{API}/tickets/?mine={EMPLOYEE}', **auth(OUTSIDER)).json()
+        self.assertEqual(rows.get('results', []), [])
+
+    # ── the queue each desk works ───────────────────────────────────────
+    def test_each_it_person_gets_their_own_tickets(self):
+        self.ticket(EMPLOYEE, IT_STAFF, 'VPN down')
+        self.ticket(EMPLOYEE, OTHER_IT, 'Printer jam')
+        self.assertEqual(self.subjects(IT_STAFF), ['VPN down'])
+        self.assertEqual(self.subjects(OTHER_IT), ['Printer jam'])
+
+    def test_work_nobody_has_been_given_shows_on_the_whole_desk(self):
+        """Raised before assignment existed, so it belongs to nobody -- and a
+        row belonging to nobody otherwise appears on no screen at all."""
+        SupportTicket.objects.create(
+            requested_by_name='Old', requested_by_email='old@apisindia.com',
+            subject='Ancient ticket', description='x', category='other',
+            status='pending', desk='it')
+        self.assertIn('Ancient ticket', self.subjects(IT_STAFF))
+        self.assertIn('Ancient ticket', self.subjects(OTHER_IT))
+        self.assertNotIn('Ancient ticket', self.subjects(ADMIN_STAFF))
+
+    def test_an_admin_does_not_get_the_ticket_queue(self):
+        self.ticket(EMPLOYEE, IT_STAFF, 'VPN down')
+        self.assertEqual(self.subjects(ADMIN_STAFF), [])
+
+    def test_my_tasks_counts_the_unclaimed_separately(self):
+        SupportTicket.objects.create(
+            requested_by_name='Old', requested_by_email='old@apisindia.com',
+            subject='Ancient ticket', description='x', category='other',
+            status='pending', desk='it')
+        self.ticket(EMPLOYEE, IT_STAFF, 'VPN down')
+        d = self.client.get(f'{API}/my-tasks/', **auth(IT_STAFF)).json()
+        self.assertEqual(d['by_kind']['ticket'], 2)
+        self.assertEqual(d['unassigned'], 1)
+
+
+class YourMonthIsYours(HelpdeskBase):
+    """Two or three people share a desk, so "what did I do this month" is not
+    "what did the desk do". Shown the desk's figures, nobody can point at
+    their own -- which is the whole reason for tracking it per person."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=OTHER_IT, name='Sana', scope='it_support')
+
+    def log(self, who, subject):
+        return self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': subject, 'description': 'x',
+            'category': 'server_storage', 'logged_for': 'The office',
+            'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(who))
+
+    def test_the_report_is_only_your_own_work(self):
+        self.log(IT_STAFF, 'Mine')
+        self.log(OTHER_IT, 'Hers')
+        d = self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()
+        self.assertEqual(d['total'], 1)
+        self.assertEqual([p['email'] for p in d['people']], [IT_STAFF])
+        self.assertEqual(d['scope'], 'me')
+
+    def test_the_super_admin_still_sees_everybody(self):
+        self.log(IT_STAFF, 'Mine')
+        self.log(OTHER_IT, 'Hers')
+        d = self.client.get(f'{API}/work-report/', **auth(SUPER_ADMIN_EMAIL)).json()
+        self.assertEqual(d['total'], 2)
+        self.assertEqual(len(d['people']), 2)
+        self.assertEqual(d['scope'], 'everyone')
+
+    def test_the_work_log_can_be_narrowed_to_one_person(self):
+        self.log(IT_STAFF, 'Mine')
+        self.log(OTHER_IT, 'Hers')
+        rows = self.client.get(
+            f'{API}/tickets/?origin=logged&performed_by={IT_STAFF}',
+            **auth(IT_STAFF)).json()['results']
+        self.assertEqual([r['subject'] for r in rows], ['Mine'])
+
+    def test_the_spreadsheet_is_scoped_the_same_way(self):
+        self.log(IT_STAFF, 'Mine')
+        self.log(OTHER_IT, 'Hers')
+        r = self.client.get(f'{API}/work-report/export/', **auth(IT_STAFF))
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.content[:2] == b'PK')
+
+
+class PeopleAreCalledWhatTheyAreCalled(HelpdeskBase):
+    """The screens read "Anshulantil01", "2022Bth005" and "Rainy222004" --
+    sign-in handles, taken from the session or from whatever the browser sent
+    when a request was raised. The company's record of who people are is
+    accounts.PortalUser, synced from HRMS, and that is what a report a manager
+    reads has to say."""
+
+    def setUp(self):
+        super().setUp()
+        PortalUser.objects.create(
+            employee_code='E1001', email=IT_STAFF, name='Kanchan Sharma')
+        PortalUser.objects.create(
+            employee_code='E1002', email=EMPLOYEE, name='Priya Nair')
+
+    def test_a_raised_ticket_shows_the_real_name(self):
+        self.client.post(f'{API}/tickets/', {
+            'subject': 'VPN down', 'description': 'x', 'category': 'vpn_access',
+            'requested_by_name': '2022Bth005',          # the sign-in handle
+            'assigned_to_email': IT_STAFF,
+        }, content_type='application/json', **auth(EMPLOYEE))
+        rows = self.client.get(f'{API}/tickets/', **auth(IT_STAFF)).json()['results']
+        self.assertEqual(rows[0]['requested_by_name'], 'Priya Nair')
+        self.assertEqual(rows[0]['assigned_to_name'], 'Kanchan Sharma')
+
+    def test_the_month_names_the_person_who_did_the_work(self):
+        self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Restarted the mail server',
+            'description': 'x', 'category': 'server_storage',
+            'performed_by_name': 'Anshulantil01',
+            'logged_for': 'The office', 'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(IT_STAFF))
+        d = self.client.get(f'{API}/work-report/', **auth(IT_STAFF)).json()
+        self.assertEqual(d['people'][0]['name'], 'Kanchan Sharma')
+
+    def test_it_is_named_on_both_desks_reports(self):
+        """collect() has two exits and the first version named people in only
+        one of them, so IT's month came back reading 'it.desk'."""
+        self.client.post(f'{API}/tickets/', {
+            'origin': 'logged', 'subject': 'Restarted the mail server',
+            'description': 'x', 'category': 'server_storage',
+            'logged_for': 'The office', 'worked_from': '10:00', 'worked_to': '10:30',
+        }, content_type='application/json', **auth(IT_STAFF))
+        for who in (IT_STAFF, SUPER_ADMIN_EMAIL):
+            d = self.client.get(f'{API}/work-report/?desk=it', **auth(who)).json()
+            self.assertEqual(d['people'][0]['name'], 'Kanchan Sharma', who)
+
+    def test_the_picker_lists_real_names(self):
+        d = self.client.get(f'{API}/desk-staff/?desk=it', **auth(EMPLOYEE)).json()
+        self.assertEqual([p['name'] for p in d['results']], ['Kanchan Sharma'])
+
+    def test_somebody_hrms_does_not_know_keeps_the_name_on_the_row(self):
+        """A contractor, or a joiner not yet in the feed. Better their typed
+        name than an email prefix."""
+        self.client.post(f'{API}/resource-requests/', {
+            'item_name': 'A4 paper', 'quantity': 1, 'requested_by_name': 'Ravi Contractor',
+            'category': 'stationery_office_supplies', 'assigned_to_email': ADMIN_STAFF,
+        }, content_type='application/json', **auth('ravi.contractor@apisindia.com'))
+        rows = self.client.get(f'{API}/resource-requests/', **auth(ADMIN_STAFF)).json()['results']
+        self.assertEqual(rows[0]['requested_by_name'], 'Ravi Contractor')
+
+
+class SigningInGivesYourRealName(HelpdeskBase):
+    """The session's name is carried onto everything the person then does, so
+    a handle here spreads: it was a prettied-up email prefix, which is how
+    "Anshulantil01" got onto other people's screens."""
+
+    def sign_in(self, email):
+        from django.core.cache import cache
+        self.client.post(f'{API}/login/',
+                         {'action': 'send_otp', 'email': email},
+                         content_type='application/json')
+        saved = cache.get(f'roompulse_otp_{email}') or {}
+        return self.client.post(
+            f'{API}/login/',
+            {'action': 'verify_otp', 'email': email, 'otp': saved.get('code')},
+            content_type='application/json')
+
+    def test_it_is_the_name_hrms_has(self):
+        PortalUser.objects.create(employee_code='E9', email=EMPLOYEE, name='Priya Nair')
+        r = self.sign_in(EMPLOYEE)
+        self.assertEqual(r.status_code, 200, r.content[:160])
+        self.assertEqual(r.json()['name'], 'Priya Nair')
+
+    def test_without_hrms_it_falls_back_rather_than_failing(self):
+        r = self.sign_in('new.joiner@apisindia.com')
+        self.assertEqual(r.status_code, 200, r.content[:160])
+        self.assertTrue(r.json()['name'])
+
+
+class TheBrowsersCopyOfYourNameGetsCorrected(HelpdeskBase):
+    """The name is saved into the browser at sign-in and read back on every
+    later visit, so a session minted before names were resolved properly
+    keeps the old one until that person happens to sign out -- weeks, maybe."""
+
+    def test_it_answers_with_the_name_hrms_has(self):
+        PortalUser.objects.create(employee_code='E7', email=IT_STAFF, name='Kanchan Sharma')
+        d = self.client.get(f'{API}/me/', **auth(IT_STAFF)).json()
+        self.assertEqual(d['name'], 'Kanchan Sharma')
+        self.assertEqual(d['email'], IT_STAFF)
+        self.assertEqual(d['role'], 'it_support')
+
+    def test_it_is_not_public(self):
+        self.assertEqual(self.client.get(f'{API}/me/').status_code, 401)
+
+    def test_somebody_hrms_does_not_know_still_gets_an_answer(self):
+        d = self.client.get(f'{API}/me/', **auth('new.joiner@apisindia.com')).json()
+        self.assertTrue(d['name'])
+
+
+class ASlotThatHasPassedIsNotWaiting(HelpdeskBase):
+    """A request for 11:00-12:00 still reading "waiting for approval" at half
+    past two tells the person something untrue: nobody is going to approve
+    it, and approving it would grant a room for a meeting that has already
+    not happened."""
+
+    def setUp(self):
+        super().setUp()
+        self.room = Room.objects.filter(is_active=True).first()
+
+    def booking(self, day, start, end, status='pending'):
+        return BookingRequest.objects.create(
+            room=self.room, requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            date=day, start_time=start, end_time=end,
+            purpose='internal_meeting', status=status,
+            assigned_to_email=ADMIN_STAFF)
+
+    def test_yesterdays_unanswered_request_expires(self):
+        b = self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        self.client.get(f'{API}/bookings/', **auth(ADMIN_STAFF))
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'expired')
+
+    def test_one_earlier_today_expires_too(self):
+        now = timezone.localtime()
+        if now.hour < 2:                 # nothing has passed yet today
+            return
+        b = self.booking(now.date(), time(0, 30), time(1, 0))
+        self.client.get(f'{API}/bookings/', **auth(ADMIN_STAFF))
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'expired')
+
+    def test_one_still_to_come_is_left_alone(self):
+        b = self.booking(timezone.localdate() + timedelta(days=1), time(11, 0), time(12, 0))
+        self.client.get(f'{API}/bookings/', **auth(ADMIN_STAFF))
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'pending')
+
+    def test_a_meeting_happening_right_now_is_left_alone(self):
+        """Its end time has not passed, so it is still answerable."""
+        now = timezone.localtime()
+        b = self.booking(now.date(), time(0, 0), time(23, 59))
+        self.client.get(f'{API}/bookings/', **auth(ADMIN_STAFF))
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'pending')
+
+    def test_an_approved_one_is_never_touched(self):
+        """It happened. Expiring it would rewrite the room's history."""
+        b = self.booking(timezone.localdate() - timedelta(days=3),
+                         time(11, 0), time(12, 0), status='approved')
+        self.client.get(f'{API}/bookings/', **auth(ADMIN_STAFF))
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'approved')
+
+    def test_it_cannot_be_approved_afterwards(self):
+        b = self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        r = self.client.patch(f'{API}/bookings/{b.id}/', {'action': 'approve'},
+                              content_type='application/json', **auth(ADMIN_STAFF))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('passed', r.json()['error'])
+        b.refresh_from_db()
+        self.assertEqual(b.status, 'expired')
+
+    def test_it_drops_off_the_room_card(self):
+        self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        grid = self.client.get(f'{API}/rooms/', **auth(ADMIN_STAFF)).json()['results']
+        mine = next(r for r in grid if r['id'] == self.room.id)
+        self.assertEqual(mine['pending'], [])
+
+    def test_it_stops_counting_as_something_waiting(self):
+        self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        d = self.client.get(f'{API}/overview/', **auth(SUPER_ADMIN_EMAIL)).json()
+        row = next((w for w in d['waiting'] if 'oom' in w['what']), None)
+        self.assertTrue(row is None or row['count'] == 0, row)
+
+    def test_the_sweep_writes_nothing_when_there_is_nothing_to_write(self):
+        from roompulse.status import expire_stale_bookings
+        self.booking(timezone.localdate() + timedelta(days=1), time(11, 0), time(12, 0))
+        self.assertEqual(expire_stale_bookings(), 0)
+
+    # The four screens that were still counting a dead slot. Each one of
+    # these was found by asking "where else does a pending booking get
+    # counted?", which is the question the first fix did not ask.
+
+    def test_it_is_not_on_the_admins_desk(self):
+        """"3 waiting on you" including a slot from last Tuesday is an admin
+        being shown work that cannot be done."""
+        self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        d = self.client.get(f'{API}/my-tasks/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['by_kind']['room'], 0)
+        self.assertEqual(d['waiting'], 0)
+
+    def test_it_is_not_still_open_in_the_month(self):
+        self.booking(timezone.localdate() - timedelta(days=1), time(11, 0), time(12, 0))
+        d = self.client.get(f'{API}/work-report/', **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['still_open'], 0)
+
+    def test_it_is_off_the_rooms_own_day(self):
+        """The room was free. A request nobody answered did not occupy it, so
+        it does not belong on the timeline any more than a cancelled one."""
+        day = timezone.localdate() - timedelta(days=1)
+        self.booking(day, time(11, 0), time(12, 0))
+        d = self.client.get(f'{API}/rooms/{self.room.id}/calendar/?date={day}',
+                            **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['bookings'], [])
+
+    def test_a_slot_that_has_already_finished_cannot_be_booked(self):
+        """It would be created and then immediately expired, which reads as
+        the system having lost it -- or, booked by an admin, auto-approved
+        into the room's history as a meeting that never happened."""
+        now = timezone.localtime()
+        if now.hour < 2:
+            return
+        r = self.client.post(f'{API}/bookings/', {
+            'room_id': self.room.id, 'date': timezone.localdate().isoformat(),
+            'start_time': '00:30', 'end_time': '01:00',
+            'name': 'Priya', 'purpose': 'internal_meeting', 'attendees': 2,
+            'assigned_to_email': ADMIN_STAFF,
+        }, **auth(EMPLOYEE))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('already finished', r.json()['error'])
+
+    def test_a_slot_still_running_can_still_be_booked(self):
+        """The guard is on the END time: somebody booking the room for the
+        meeting they are walking into must not be turned away."""
+        now = timezone.localtime()
+        r = self.client.post(f'{API}/bookings/', {
+            'room_id': self.room.id, 'date': timezone.localdate().isoformat(),
+            'start_time': '00:00', 'end_time': '23:59',
+            'name': 'Priya', 'purpose': 'internal_meeting', 'attendees': 2,
+            'assigned_to_email': ADMIN_STAFF,
+        }, **auth(EMPLOYEE))
+        self.assertEqual(r.status_code, 201, r.json())
+
+    def test_the_super_admin_sees_both_desks_on_their_strip(self):
+        """They are on neither roster, so the desk lookup found nothing and
+        defaulted to IT -- making the one screen that says how much is
+        waiting count IT's half of it."""
+        # Unassigned, which is what a super admin's strip shows them: work
+        # nobody has picked up. One addressed to Meena is Meena's.
+        b = self.booking(timezone.localdate() + timedelta(days=1), time(11, 0), time(12, 0))
+        b.assigned_to_email = ''
+        b.save(update_fields=['assigned_to_email'])
+        ResourceRequest.objects.create(
+            requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            category='stationery_office_supplies', item_name='Notebooks',
+            quantity=2, status='pending')
+        d = self.client.get(f'{API}/my-tasks/', **auth(SUPER_ADMIN_EMAIL)).json()
+        self.assertEqual(d['desk'], '')
+        self.assertEqual(d['by_kind']['room'], 1, d)
+        self.assertEqual(d['by_kind']['item'], 1, d)
+
+    def test_a_desk_still_sees_only_its_own_queues(self):
+        """The fix above must not merge the two desks."""
+        self.booking(timezone.localdate() + timedelta(days=1), time(11, 0), time(12, 0))
+        d = self.client.get(f'{API}/my-tasks/', **auth(IT_STAFF)).json()
+        self.assertEqual(d['desk'], 'it')
+        self.assertEqual(d['by_kind']['room'], 0, d)
+
+    def test_the_rooms_day_uses_the_name_the_company_knows(self):
+        """Every other list resolves this; the calendar was left reading
+        whatever was typed into the booking form."""
+        day = timezone.localdate() + timedelta(days=1)
+        PortalUser.objects.update_or_create(
+            email=EMPLOYEE, defaults={'name': 'Priya Sharma'})
+        b = self.booking(day, time(11, 0), time(12, 0))
+        b.requested_by_name = 'priya'
+        b.save(update_fields=['requested_by_name'])
+        d = self.client.get(f'{API}/rooms/{self.room.id}/calendar/?date={day}',
+                            **auth(ADMIN_STAFF)).json()
+        self.assertEqual(d['bookings'][0]['requested_by_name'], 'Priya Sharma')
+
+
+# ── passing work to the right person ─────────────────────────────────────
+class WorkCanBePassedOn(HelpdeskBase):
+    """Whoever raises a request picks one name off a list, and they are
+    guessing: they choose the person they know, or the first in the list. A
+    good deal of work lands on somebody who is on leave or does not look after
+    the thing that broke, and until now the choices were to answer it anyway
+    or leave it sitting -- and a request sitting with the wrong person is
+    indistinguishable from one nobody has got to yet."""
+
+    def setUp(self):
+        super().setUp()
+        AdminUser.objects.create(email=OTHER_IT, name='Sana', scope='it_support')
+        self.room = Room.objects.filter(is_active=True).first()
+
+    def patch(self, path, body, who):
+        return self.client.patch(f'{API}{path}', body,
+                                 content_type='application/json', **auth(who))
+
+    def item(self, **over):
+        body = {'name': 'Priya', 'item_name': 'Notebooks', 'quantity': 2,
+                'category': 'stationery_office_supplies',
+                'assigned_to_email': ADMIN_STAFF}
+        body.update(over)
+        return self.client.post(f'{API}/resource-requests/', body, **auth(EMPLOYEE))
+
+    # ── the thing itself ─────────────────────────────────────────────────
+
+    def test_a_ticket_moves_to_the_person_it_is_passed_to(self):
+        t = self.raise_ticket().json()['id']
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': OTHER_IT,
+                        'remarks': 'Sana looks after the VPN'}, IT_STAFF)
+        self.assertEqual(r.status_code, 200, r.json())
+        self.assertEqual(SupportTicket.objects.get(id=t).assigned_to_email, OTHER_IT)
+
+    def test_it_lands_on_the_new_persons_desk_and_leaves_the_old_one(self):
+        """The whole point: it is now their work, and no longer the other
+        person's."""
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/',
+                   {'action': 'transfer', 'to_email': OTHER_IT,
+                    'remarks': 'not mine'}, IT_STAFF)
+        mine = self.client.get(f'{API}/my-tasks/', **auth(OTHER_IT)).json()
+        self.assertEqual([x['id'] for x in mine['results']], [t])
+        theirs = self.client.get(f'{API}/my-tasks/', **auth(IT_STAFF)).json()
+        self.assertNotIn(t, [x['id'] for x in theirs['results']])
+
+    def test_the_status_does_not_move(self):
+        """A transfer is not a decision. It was pending before and it is
+        pending now -- somebody else is going to answer it."""
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': OTHER_IT,
+                                      'remarks': 'away this week'}, IT_STAFF)
+        self.assertEqual(SupportTicket.objects.get(id=t).status, 'pending')
+
+    def test_the_new_person_can_then_approve_it(self):
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': OTHER_IT,
+                                      'remarks': 'yours'}, IT_STAFF)
+        r = self.patch(f'/tickets/{t}/', {'action': 'approve'}, OTHER_IT)
+        self.assertEqual(r.status_code, 200, r.json())
+        self.assertEqual(SupportTicket.objects.get(id=t).status, 'approved')
+
+    def test_an_item_request_can_be_passed_to_another_admin(self):
+        AdminUser.objects.create(email='second.admin@apisindia.com',
+                                 name='Ravi', scope='admin')
+        i = self.item().json()['id']
+        r = self.patch(f'/resource-requests/{i}/',
+                       {'action': 'transfer', 'to_email': 'second.admin@apisindia.com',
+                        'remarks': 'Ravi keeps the stationery'}, ADMIN_STAFF)
+        self.assertEqual(r.status_code, 200, r.json())
+        req = ResourceRequest.objects.get(id=i)
+        self.assertEqual(req.assigned_to_email, 'second.admin@apisindia.com')
+        self.assertEqual(req.assigned_to_name, 'Ravi')
+        self.assertEqual(req.status, 'pending')
+
+    def test_a_booking_can_be_passed_to_another_admin(self):
+        AdminUser.objects.create(email='second.admin@apisindia.com',
+                                 name='Ravi', scope='admin')
+        b = BookingRequest.objects.create(
+            room=self.room, requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            date=timezone.localdate() + timedelta(days=1),
+            start_time=time(11, 0), end_time=time(12, 0),
+            purpose='internal_meeting', status='pending',
+            assigned_to_email=ADMIN_STAFF)
+        r = self.patch(f'/bookings/{b.id}/',
+                       {'action': 'transfer', 'to_email': 'second.admin@apisindia.com',
+                        'remarks': 'Ravi handles the board room'}, ADMIN_STAFF)
+        self.assertEqual(r.status_code, 200, r.json())
+        b.refresh_from_db()
+        self.assertEqual(b.assigned_to_email, 'second.admin@apisindia.com')
+        self.assertEqual(b.status, 'pending')
+
+    # ── the trail ────────────────────────────────────────────────────────
+
+    def test_every_hop_is_kept_not_just_the_last(self):
+        """Raised to A, passed to B who was away, passed to C. A field would
+        keep only the last hop, which is the one that explains least."""
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': OTHER_IT,
+                                      'remarks': 'VPN is Sana'}, IT_STAFF)
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': IT_STAFF,
+                                      'remarks': 'on leave, back to you'}, OTHER_IT)
+        d = self.client.get(f'{API}/tickets/', **auth(IT_STAFF)).json()
+        hops = next(x for x in d['results'] if x['id'] == t)['transfers']
+        self.assertEqual([h['reason'] for h in hops],
+                         ['VPN is Sana', 'on leave, back to you'])
+        self.assertEqual([h['to_email'] for h in hops], [OTHER_IT, IT_STAFF])
+
+    def test_it_shows_on_the_tickets_own_history(self):
+        """Which is the trail people actually read on the card."""
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': OTHER_IT,
+                                      'remarks': 'Sana looks after the VPN'}, IT_STAFF)
+        # Read as Sana, not as the person who passed it on: it is off their
+        # queue now, which is the transfer working.
+        d = self.client.get(f'{API}/tickets/', **auth(OTHER_IT)).json()
+        hist = next(x for x in d['results'] if x['id'] == t)['history']
+        moved = [e for e in hist if e['action'] == 'transferred']
+        self.assertEqual(len(moved), 1, hist)
+        self.assertIn('Sana', moved[0]['remarks'])
+
+    def test_the_trail_names_people_properly(self):
+        PortalUser.objects.update_or_create(
+            email=OTHER_IT, defaults={'name': 'Sana Qureshi'})
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'transfer', 'to_email': OTHER_IT,
+                                      'remarks': 'hers'}, IT_STAFF)
+        d = self.client.get(f'{API}/tickets/', **auth(OTHER_IT)).json()
+        hops = next(x for x in d['results'] if x['id'] == t)['transfers']
+        self.assertEqual(hops[0]['to'], 'Sana Qureshi')
+
+    # ── what it refuses ──────────────────────────────────────────────────
+
+    def test_a_reason_is_required(self):
+        """Whoever receives it is owed the sentence. "Passed to Sana"
+        answers nothing."""
+        t = self.raise_ticket().json()['id']
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': OTHER_IT}, IT_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('why', r.json()['error'])
+        self.assertEqual(SupportTicket.objects.get(id=t).assigned_to_email, IT_STAFF)
+
+    def test_it_cannot_be_handed_to_the_other_desk(self):
+        """An admin cannot approve an IT ticket, so it would vanish into a
+        queue nobody works."""
+        t = self.raise_ticket().json()['id']
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': ADMIN_STAFF,
+                        'remarks': 'theirs'}, IT_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('not on this desk', r.json()['error'])
+
+    def test_handing_it_to_whoever_already_has_it_is_refused(self):
+        """It would write a trail entry saying nothing happened."""
+        t = self.raise_ticket().json()['id']
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': IT_STAFF,
+                        'remarks': 'mine anyway'}, IT_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('already', r.json()['error'])
+
+    def test_an_employee_cannot_pass_their_own_ticket_around(self):
+        """They raised it. They do not run the queue."""
+        t = self.raise_ticket().json()['id']
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': OTHER_IT,
+                        'remarks': 'someone else please'}, EMPLOYEE)
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(SupportTicket.objects.get(id=t).assigned_to_email, IT_STAFF)
+
+    def test_a_finished_ticket_cannot_be_passed_on(self):
+        """Handing somebody work that no longer exists."""
+        t = self.raise_ticket().json()['id']
+        self.patch(f'/tickets/{t}/', {'action': 'reject', 'remarks': 'no'}, IT_STAFF)
+        r = self.patch(f'/tickets/{t}/',
+                       {'action': 'transfer', 'to_email': OTHER_IT,
+                        'remarks': 'have a look'}, IT_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('nothing to pass on', r.json()['error'])
+
+    def test_a_lapsed_booking_cannot_be_passed_on(self):
+        """Nobody's to answer, so nobody's to hand over."""
+        AdminUser.objects.create(email='second.admin@apisindia.com', scope='admin')
+        b = BookingRequest.objects.create(
+            room=self.room, requested_by_name='Priya', requested_by_email=EMPLOYEE,
+            date=timezone.localdate() - timedelta(days=1),
+            start_time=time(11, 0), end_time=time(12, 0),
+            purpose='internal_meeting', status='pending',
+            assigned_to_email=ADMIN_STAFF)
+        r = self.patch(f'/bookings/{b.id}/',
+                       {'action': 'transfer', 'to_email': 'second.admin@apisindia.com',
+                        'remarks': 'yours'}, ADMIN_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('nothing to pass on', r.json()['error'])
+
+    def test_a_fulfilled_item_request_cannot_be_passed_on(self):
+        AdminUser.objects.create(email='second.admin@apisindia.com', scope='admin')
+        i = self.item().json()['id']
+        self.patch(f'/resource-requests/{i}/', {'action': 'approve'}, ADMIN_STAFF)
+        self.patch(f'/resource-requests/{i}/', {'action': 'fulfil'}, ADMIN_STAFF)
+        r = self.patch(f'/resource-requests/{i}/',
+                       {'action': 'transfer', 'to_email': 'second.admin@apisindia.com',
+                        'remarks': 'yours'}, ADMIN_STAFF)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('nothing to pass on', r.json()['error'])
+
+    def test_an_approved_item_request_still_can_be(self):
+        """Approving only says "yes, get them one". The handover is real work
+        and it can move."""
+        AdminUser.objects.create(email='second.admin@apisindia.com', scope='admin')
+        i = self.item().json()['id']
+        self.patch(f'/resource-requests/{i}/', {'action': 'approve'}, ADMIN_STAFF)
+        r = self.patch(f'/resource-requests/{i}/',
+                       {'action': 'transfer', 'to_email': 'second.admin@apisindia.com',
+                        'remarks': 'you have the key to the cupboard'}, ADMIN_STAFF)
+        self.assertEqual(r.status_code, 200, r.json())
+        self.assertEqual(ResourceRequest.objects.get(id=i).status, 'approved')

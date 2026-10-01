@@ -5,6 +5,7 @@ done: 'start' (approved -> in_progress) and 'close' (in_progress -> closed).
 """
 from datetime import datetime
 
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -12,8 +13,13 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 import os
 
-from ..models import SupportTicket, TicketAttachment, TicketEvent
+from ..attachments import url_for as attachment_url
+from ..people import apply_names
+from ..models import (ResourceRequest, SupportTicket, TicketAttachment,
+                      TicketEvent)
 from ..worktime import after_hours_minutes, resolve_time
+from ..assignment import raised_by, resolve as resolve_assignee, tickets_for
+from ..handover import transfer as handover, trail_for
 from .perms import actor_role, require_signed_in
 
 MAX_ATTACHMENTS = 10
@@ -60,10 +66,32 @@ def _log(ticket, action, role, email, remarks='', from_status=''):
     )
 
 
-def _brief(t, request=None):
+def desk_for(role, category):
+    """Whose work a logged job is.
+
+    From the role, because that is what the person actually is -- an admin
+    logging something under 'Other' is still Admin's work, and the category
+    cannot say so. The super admin is neither, so for them the category
+    decides, which it can: the two lists only overlap on 'other'.
+    """
+    if role == 'admin':
+        return 'admin'
+    if role == 'it_support':
+        return 'it'
+    admin_only = {c[0] for c in ResourceRequest.CATEGORY_CHOICES} - {
+        c[0] for c in SupportTicket.IT_CATEGORY_CHOICES}
+    return 'admin' if category in admin_only else 'it'
+
+
+def _brief(t, request=None, trails=None):
+    """`trails` is the whole page's handover trail, from trail_for(), so a
+    200-row list costs one query for it rather than 200. Left out for a
+    single-ticket response, where one lookup is the whole cost."""
     def _url(a):
-        u = a.file.url
-        return request.build_absolute_uri(u) if request else u
+        # A signed path under /api/, not /media/. See roompulse/attachments.py:
+        # the old link was unauthenticated and, behind the proxy, often pointed
+        # at a host the browser could not reach.
+        return attachment_url(a)
     return {
         'id': t.id, 'kind': 'ticket',
         'requested_by_name': t.requested_by_name, 'requested_by_email': t.requested_by_email,
@@ -75,6 +103,13 @@ def _brief(t, request=None):
                         for a in t.attachments.all()],
         'status': t.status, 'status_label': t.get_status_display(),
         'origin': t.origin, 'origin_label': t.get_origin_display(),
+        'desk': t.desk, 'desk_label': t.get_desk_display(),
+        'assigned_to_email': t.assigned_to_email,
+        'assigned_to_name': t.assigned_to_name,
+        # Who has had this before now. Read from the card so the person
+        # holding it can see it was passed to them and why.
+        'transfers': (trails if trails is not None
+                      else trail_for('ticket', [t.id])).get(t.id, []),
         'logged_for': t.logged_for,
         'performed_by_email': t.performed_by_email,
         'performed_by_name': t.performed_by_name,
@@ -122,15 +157,24 @@ class TicketListView(APIView):
         # without this a 200-ticket page ran 400 extra queries.
         qs = (SupportTicket.objects.all()
               .prefetch_related('attachments', 'events'))
-        # An employee sees their own tickets. Only IT Support and the super
-        # admin see everybody's.
-        if role not in ('it_support', 'super_admin'):
-            # Their own tickets, and never the team's internal work log --
-            # that is a record of what IT did, not correspondence with them.
-            qs = qs.filter(requested_by_email=email).exclude(origin='logged')
+        # Who sees what lives in roompulse/assignment.py, one function per
+        # queue. It was four branches here, patched one at a time, and every
+        # patch broke a case nobody re-read -- most recently IT's own logged
+        # work, which the assignment filter removed because a job you logged
+        # is not a job anybody assigned you.
+        qs = tickets_for(qs, role, email)
         category = request.query_params.get('category')
         if category:
             qs = qs.filter(category=category)
+        desk = request.query_params.get('desk')
+        if desk in dict(SupportTicket.DESK_CHOICES):
+            qs = qs.filter(desk=desk)
+        # Who DID the work, as opposed to who it is assigned to. The work
+        # log is per person: two admins share a desk, and "what did I do this
+        # month" is not "what did the desk do".
+        performed_by = request.query_params.get('performed_by')
+        if performed_by:
+            qs = qs.filter(performed_by_email__iexact=performed_by.strip().lower())
         origin = request.query_params.get('origin')
         if origin in dict(SupportTicket.ORIGIN_CHOICES):
             qs = qs.filter(origin=origin)
@@ -139,14 +183,32 @@ class TicketListView(APIView):
             qs = qs.filter(status=status)
         # `mine` is now a narrowing convenience for IT staff; an employee is
         # already restricted to their own above, so it cannot widen anything.
+        # "My Requests": what this person ASKED FOR. It replaces the filter
+        # above rather than narrowing it -- see raised_by. A job they logged
+        # is not a request; nobody is waiting on it and there is nothing to
+        # approve, because it has already happened.
         mine = request.query_params.get('mine')
         if mine:
-            qs = qs.filter(requested_by_email=mine.strip().lower())
+            who = mine.strip().lower()
+            if who == (email or '').lower() or role == 'super_admin':
+                qs = raised_by(
+                    SupportTicket.objects.all().prefetch_related('attachments', 'events'),
+                    who).exclude(origin='logged')
+            else:
+                # Asking for somebody else's: answer within what they may see.
+                qs = raised_by(qs, who).exclude(origin='logged')
         try:
             limit = max(1, min(500, int(request.query_params.get('limit', 200))))
         except (TypeError, ValueError):
             limit = 200
-        return Response({'results': [_brief(t, request) for t in qs[:limit]], 'count': qs.count()})
+        page = list(qs[:limit])
+        trails = trail_for('ticket', [t.id for t in page])
+        rows = apply_names(
+            [_brief(t, request, trails) for t in page],
+            ('requested_by_email', 'requested_by_name'),
+            ('performed_by_email', 'performed_by_name'),
+            ('assigned_to_email', 'assigned_to_name'))
+        return Response({'results': rows, 'count': qs.count()})
 
     def post(self, request):
         # Identity from the session, never from the body — otherwise anyone
@@ -164,8 +226,21 @@ class TicketListView(APIView):
         if not description:
             return Response({'error': 'Please describe the issue.'}, status=400)
 
-        category = str(d.get('category') or 'other').strip()
-        if category not in {c[0] for c in SupportTicket.CATEGORY_CHOICES}:
+        # Which list applies depends on what this is. A job logged after the
+        # fact may be Admin's work and carries Admin's categories; a ticket
+        # somebody raises is an IT ticket and may not, or the IT queue fills
+        # with plumbing.
+        is_logged = str(d.get('origin') or '').strip() == 'logged'
+        allowed = (SupportTicket.CATEGORY_CHOICES if is_logged
+                   else SupportTicket.IT_CATEGORY_CHOICES)
+        category = str(d.get('category') or '').strip()
+        if category not in {c[0] for c in allowed}:
+            if is_logged:
+                # A logged job is a record, and a record filed under the wrong
+                # heading is worse than one that was refused: the monthly
+                # report groups by this, and nobody goes back to correct it.
+                return Response({'error': 'Pick the category this job belongs to.'},
+                                status=400)
             category = 'other'
         priority = str(d.get('priority') or 'medium').strip()
         if priority not in {c[0] for c in SupportTicket.PRIORITY_CHOICES}:
@@ -182,15 +257,23 @@ class TicketListView(APIView):
         # already happened. So it is created at the stage it is really at --
         # done, or still running -- rather than entering the queue at
         # 'pending' and being walked through a workflow after the fact.
-        if str(d.get('origin') or '').strip() == 'logged':
+        if is_logged:
             if role not in ('it_support', 'admin', 'super_admin'):
                 return Response({'error': 'Only IT Support or an admin can log work.'},
                                 status=403)
             return self._log_work(request, d, role, email, subject, description,
                                   category, priority, files)
 
+        # Addressed to somebody, from the roster, before anything else is
+        # written. A request nobody owns is the thing this replaces.
+        chosen = resolve_assignee('it', d.get('assigned_to_email'))
+        if isinstance(chosen, str):
+            return Response({'error': chosen}, status=400)
+        assigned_email, assigned_name = chosen
+
         auto_approve = role in ('it_support', 'super_admin')
         ticket = SupportTicket.objects.create(
+            assigned_to_email=assigned_email, assigned_to_name=assigned_name,
             requested_by_name=str(d.get('requested_by_name') or d.get('name') or '').strip()[:200],
             requested_by_email=email,
             department=str(d.get('department') or '').strip()[:150],
@@ -224,6 +307,21 @@ class TicketListView(APIView):
         for something done on Friday -- and it belongs to the day the work
         happened, not the day someone found time to type it in.
         """
+        # Everything on the form is required. A record with the hours or who
+        # it was for left blank cannot be reported on -- it counts as one job
+        # and answers nothing else -- and a field that is optional on a form
+        # people fill in daily is a field that is empty.
+        #
+        # The date is the exception: it is not in this list because leaving it
+        # out means today, which is the truth for most of what gets logged and
+        # is never a guess. The form fills it in regardless.
+        for field, complaint in (
+                ('logged_for',   'Say who or what this job was for.'),
+                ('worked_from',  'Give the time you started.'),
+                ('worked_to',    'Give the time you finished.')):
+            if not str(d.get(field) or '').strip():
+                return Response({'error': complaint}, status=400)
+
         today = timezone.localdate()
         raw_date = str(d.get('performed_on') or '').strip()
         if raw_date:
@@ -248,6 +346,9 @@ class TicketListView(APIView):
         if isinstance(timing, str):
             return Response({'error': timing}, status=400)
         minutes, worked_from, worked_to, _after = timing
+        if not minutes:
+            return Response({'error': 'How long did it take? Give the hours, or the minutes.'},
+                            status=400)
 
         # 'closed' unless they say it is still running. Either way it is real
         # work and counts; the status only says whether it finished.
@@ -257,7 +358,7 @@ class TicketListView(APIView):
 
         actor_name = str(d.get('performed_by_name') or d.get('requested_by_name') or '').strip()
         ticket = SupportTicket.objects.create(
-            origin='logged',
+            origin='logged', desk=desk_for(role, category),
             requested_by_name=actor_name[:200],
             requested_by_email=email,          # the person who did and logged it
             logged_for=str(d.get('logged_for') or '').strip()[:200],
@@ -294,6 +395,12 @@ class TicketActionView(APIView):
     """
 
     def patch(self, request, ticket_id):
+        # Authentication before authorisation. Without this an expired
+        # session reaches the role check as role=None and is answered "you are
+        # not an admin", which is both wrong and unactionable -- and a 403
+        # does not make the client drop the dead session the way a 401 does.
+        if (err := require_signed_in(request)):
+            return err
         try:
             ticket = SupportTicket.objects.get(id=ticket_id)
         except SupportTicket.DoesNotExist:
@@ -373,6 +480,34 @@ class TicketActionView(APIView):
             ticket.save()
             _log(ticket, 'closed', role, email, remarks, was)
             return Response({'message': 'Ticket closed.', 'ticket': _brief(ticket, request)})
+
+        if action == 'transfer':
+            # Pass it on. The status does not move: this is the same request
+            # at the same stage, on somebody else's desk. A ticket raised to
+            # the wrong person is the commonest way a queue stalls, because
+            # the employee raising it is guessing which of two or three
+            # people looks after the thing that broke.
+            if not is_it_staff:
+                return Response({'error': 'Only IT Support can pass a ticket on.'},
+                                status=403)
+            # Anything still to be dealt with. A closed, rejected or
+            # cancelled ticket is finished -- handing it over would give
+            # somebody work that no longer exists.
+            if ticket.status not in ('pending', 'approved', 'in_progress'):
+                return Response({'error': f'This ticket is already {ticket.status}, '
+                                          f'so there is nothing to pass on.'}, status=400)
+            moved = handover('ticket', ticket, 'it',
+                             request.data.get('to_email'), email, role, remarks)
+            if isinstance(moved, str):
+                return Response({'error': moved}, status=400)
+            # On the ticket's own history too, which is the trail people
+            # actually read on the card.
+            _log(ticket, 'transferred', role, email,
+                 f'To {moved.to_name or moved.to_email} — {moved.reason}', was)
+            return Response({
+                'message': f'Passed to {moved.to_name or moved.to_email}.',
+                'ticket': _brief(ticket, request),
+            })
 
         if action == 'cancel':
             is_owner = email == ticket.requested_by_email.lower()

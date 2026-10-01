@@ -11,6 +11,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from ..models import ResourceRequest
+from ..people import apply_names
+from ..assignment import admin_queue_for, raised_by, resolve as resolve_assignee
+from ..handover import transfer as handover, trail_for
 from .perms import actor_role, require_signed_in
 
 
@@ -21,7 +24,9 @@ def _parse_date(s):
         return None
 
 
-def _brief(r):
+def _brief(r, trails=None):
+    """`trails` is the page's handover trail from trail_for(), so a 200-row
+    list costs one query for it rather than 200."""
     return {
         'id': r.id, 'kind': 'resource',
         'requested_by_name': r.requested_by_name, 'requested_by_email': r.requested_by_email,
@@ -31,6 +36,11 @@ def _brief(r):
         'urgency': r.urgency, 'urgency_label': r.get_urgency_display(),
         'reason': r.reason, 'needed_by': r.needed_by.isoformat() if r.needed_by else None,
         'status': r.status, 'reviewed_by': r.reviewed_by,
+        'assigned_to_email': r.assigned_to_email,
+        'assigned_to_name': r.assigned_to_name,
+        # Who has had this before now, and why they passed it on.
+        'transfers': (trails if trails is not None
+                      else trail_for('item', [r.id])).get(r.id, []),
         'reviewed_at': r.reviewed_at.isoformat() if r.reviewed_at else None,
         'admin_remarks': r.admin_remarks,
         'fulfilled_by': r.fulfilled_by,
@@ -55,8 +65,8 @@ class ResourceRequestListView(APIView):
             return err
         role, email = actor_role(request)
         qs = ResourceRequest.objects.all()
-        if role not in ('admin', 'it_support', 'super_admin'):
-            qs = qs.filter(requested_by_email=email)
+        # Who sees what: roompulse/assignment.py.
+        qs = admin_queue_for(qs, role, email)
         category = request.query_params.get('category')
         if category:
             qs = qs.filter(category=category)
@@ -65,12 +75,20 @@ class ResourceRequestListView(APIView):
             qs = qs.filter(status=status)
         mine = request.query_params.get('mine')
         if mine:
-            qs = qs.filter(requested_by_email=mine.strip().lower())
+            who = mine.strip().lower()
+            qs = (raised_by(ResourceRequest.objects.all(), who)
+                  if who == (email or '').lower() or role == 'super_admin'
+                  else raised_by(qs, who))
         try:
             limit = max(1, min(500, int(request.query_params.get('limit', 200))))
         except (TypeError, ValueError):
             limit = 200
-        return Response({'results': [_brief(r) for r in qs[:limit]], 'count': qs.count()})
+        page = list(qs[:limit])
+        trails = trail_for('item', [r.id for r in page])
+        rows = apply_names([_brief(r, trails) for r in page],
+                           ('requested_by_email', 'requested_by_name'),
+                           ('assigned_to_email', 'assigned_to_name'))
+        return Response({'results': rows, 'count': qs.count()})
 
     def post(self, request):
         # Identity from the session, never the body: otherwise anyone can
@@ -101,7 +119,15 @@ class ResourceRequestListView(APIView):
             quantity = 1
 
         auto_approve = role in ('admin', 'super_admin')
+        # Addressed to somebody on the desk, from the roster, before
+        # anything is written. A request nobody owns is what this replaces.
+        chosen = resolve_assignee('admin', d.get('assigned_to_email'))
+        if isinstance(chosen, str):
+            return Response({'error': chosen}, status=400)
+        assigned_email, assigned_name = chosen
+
         req = ResourceRequest.objects.create(
+            assigned_to_email=assigned_email, assigned_to_name=assigned_name,
             requested_by_name=name[:200], requested_by_email=email,
             department=str(d.get('department') or '').strip()[:150],
             category=category, item_name=item_name[:200], quantity=quantity,
@@ -130,6 +156,12 @@ class ResourceRequestActionView(APIView):
     """
 
     def patch(self, request, request_id):
+        # Authentication before authorisation. Without this an expired
+        # session reaches the role check as role=None and is answered "you are
+        # not an admin", which is both wrong and unactionable -- and a 403
+        # does not make the client drop the dead session the way a 401 does.
+        if (err := require_signed_in(request)):
+            return err
         try:
             req = ResourceRequest.objects.get(id=request_id)
         except ResourceRequest.DoesNotExist:
@@ -150,6 +182,29 @@ class ResourceRequestActionView(APIView):
             req.admin_remarks = str(request.data.get('remarks') or '').strip()[:300]
             req.save()
             return Response({'message': f'Request {req.status}.', 'request': _brief(req)})
+
+        if action == 'transfer':
+            # Pass it on without deciding it. Whoever raised this picked a
+            # name from a list; if they picked the wrong one, the choice left
+            # was to answer it anyway or leave it sitting, and a request
+            # sitting with the wrong person is indistinguishable from one
+            # nobody has got to.
+            if not is_staff:
+                return Response({'error': 'Only an admin can pass a request on.'},
+                                status=403)
+            # Still live: waiting for a decision, or agreed and not yet handed
+            # over -- the handover is real work and can move. Fulfilled,
+            # rejected and cancelled are finished.
+            if req.status not in ('pending', 'approved'):
+                return Response({'error': f'This request is already {req.status}, '
+                                          f'so there is nothing to pass on.'}, status=400)
+            moved = handover('item', req, 'admin',
+                             request.data.get('to_email'), email, role,
+                             request.data.get('remarks'))
+            if isinstance(moved, str):
+                return Response({'error': moved}, status=400)
+            return Response({'message': f'Passed to {moved.to_name or moved.to_email}.',
+                             'request': _brief(req)})
 
         if action == 'fulfil':
             if not is_staff:

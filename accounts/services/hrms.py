@@ -238,6 +238,30 @@ def _date(row, *names):
     return parsed if parsed.year > 1900 else None
 
 
+def _scrub(row, requested):
+    """The row, reduced to the columns we actually asked for.
+
+    Keeping it verbatim was fine while the EmployeeFields header was
+    honoured and correctly set, which is a sentence with two conditions in
+    it. The full employee record includes PanNo, AadharNumberPocket,
+    BankAccNo, UANNumber, PFAccNo, ESINo and Password; none of that is any
+    business of an intranet, and none of it should be one misconfiguration
+    away from sitting in our database.
+
+    The allowlist is what we requested, matched case-insensitively because
+    the API is not consistent about casing, plus the "<name>String" partners
+    of the lookup columns, which is where the readable values live.
+    """
+    if not requested:
+        return {}
+    allowed = set()
+    for name in requested:
+        allowed.add(name.lower())
+        allowed.add(f'{name}string'.lower())
+    return {k: v for k, v in row.items()
+            if isinstance(k, str) and k.lower() in allowed}
+
+
 def _name_of(row):
     """Whole name, however this tenant happens to have split it.
 
@@ -288,7 +312,8 @@ def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
 
     try:
         with transaction.atomic():
-            _write_employees(log, rows, deactivate_missing, modified_since, emp_status)
+            _write_employees(log, rows, deactivate_missing, modified_since,
+                             emp_status, fields)
     except Exception as e:
         log.ok, log.message, log.finished_at = False, f'Sync failed partway through: {e}', timezone.now()
         log.save()
@@ -297,7 +322,8 @@ def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
     return log
 
 
-def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
+def _write_employees(log, rows, deactivate_missing, modified_since, emp_status,
+                     requested=None):
     log.fetched = len(rows)
     seen_codes = []
     claimed_by = {}          # email -> the employee code that got there first
@@ -356,12 +382,19 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status):
                                                 'POCKETREPORTINGMANAGERstring'),
             'date_of_birth': _date(row, 'DateOfBirth'),
             'date_of_joining': _date(row, 'DateOfJoining'),
+            'grade': _resolved(row, 'Grade'),
+            'category': _resolved(row, 'Category'),
+            'office_mobile': _pick(row, 'OfficeMobileNo'),
             'hrms_id': _pick(row, 'Id'),
             'is_active': active,
             'from_hrms': True,
             'last_synced_at': timezone.now(),
-            # Verbatim, so the console can show what upstream actually sent.
-            'hrms_raw': row,
+            # What upstream sent for the columns we asked for -- not the
+            # whole row. See _scrub: the full record carries PAN, Aadhaar,
+            # bank account, UAN, PF and ESI numbers and a password column,
+            # and this field is written to the database and shown on a
+            # console screen.
+            'hrms_raw': _scrub(row, requested or EMPLOYEE_FIELDS),
         }
 
         if existing:

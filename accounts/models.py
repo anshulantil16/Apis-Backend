@@ -74,6 +74,22 @@ class PortalUser(models.Model):
     location      = models.CharField(max_length=200, blank=True)
     reporting_manager_code = models.CharField(max_length=50, blank=True)
 
+    # Already requested from HRMS and already arriving on every row; they
+    # were being dropped on the floor.
+    #
+    # `grade` is the cadre code -- "O2", "M3", "W1" -- which is the same
+    # code pms.increment_group() looks for when working out an increment
+    # band, and which is currently typed into a spreadsheet by hand. Having
+    # it here does not change PMS; it means the number can be checked
+    # against the company's own record instead of against a re-upload.
+    grade         = models.CharField(max_length=20, blank=True)
+    # "Sales", "Factory", "Corporate" -- the broad grouping above
+    # department, which HRMS calls Category.
+    category      = models.CharField(max_length=100, blank=True)
+    # The company-issued number. PersonalMobileNo is deliberately not stored:
+    # a work directory is for reaching people at work.
+    office_mobile = models.CharField(max_length=30, blank=True)
+
     # Birthdays and work anniversaries. Both are complete for every employee in
     # the HRMS feed, and both are only ever read a day-and-month at a time - the
     # year is kept because joining year is what makes an anniversary countable

@@ -1,4 +1,8 @@
 from django.urls import path
+
+from .attachments import AttachmentView
+from .views.desk_staff import DeskStaffView, WhoAmIView
+from .views.my_tasks import MyTasksView
 from .views import (
     RoomPulseLoginView, RoomListView, RoomDetailView,
     BookingListView, BookingActionView, RoomCalendarView,
@@ -11,6 +15,9 @@ from .views import (
 )
 
 urlpatterns = [
+    # Signed, expiring links to ticket attachments. Under /api/ so the
+    # proxy forwards it, unlike /media/.
+    path('attachments/<str:token>/', AttachmentView.as_view()),
     path('login/', RoomPulseLoginView.as_view()),
 
     path('rooms/', RoomListView.as_view()),
@@ -33,6 +40,12 @@ urlpatterns = [
     path('employees/add/', EmployeeCreateView.as_view()),
     path('employees/<int:employee_id>/', EmployeeRowView.as_view()),
 
+    # Who a request can be addressed to -- the roster, reduced to a picker.
+    path('desk-staff/', DeskStaffView.as_view()),
+    # Who this session is, freshly named -- the browser's copy can be old.
+    path('me/', WhoAmIView.as_view()),
+    # The other half of 'My Requests': what has been given to me.
+    path('my-tasks/', MyTasksView.as_view()),
     path('admins/', AdminRosterView.as_view()),
     path('admins/role/', AdminRoleView.as_view()),
 

@@ -5,7 +5,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from ..models import Room, BookingRequest
-from ..status import find_conflicts
+from ..people import apply_names
+from ..handover import transfer as handover, trail_for
+from ..status import expire_stale_bookings, find_conflicts
+from ..assignment import admin_queue_for, raised_by, resolve as resolve_assignee
 from .perms import require_role, actor_role, require_signed_in
 
 
@@ -23,7 +26,9 @@ def _parse_time(s):
         return None
 
 
-def _brief(b):
+def _brief(b, trails=None):
+    """`trails` is the page's handover trail from trail_for(), so a 200-row
+    list costs one query for it rather than 200."""
     return {
         'id': b.id, 'room_id': b.room_id, 'room_name': str(b.room),
         'requested_by_name': b.requested_by_name, 'requested_by_email': b.requested_by_email,
@@ -32,8 +37,13 @@ def _brief(b):
         'purpose': b.purpose, 'purpose_label': b.get_purpose_display(),
         'purpose_detail': b.purpose_detail, 'attendees': b.attendees,
         'status': b.status, 'reviewed_by': b.reviewed_by,
+        'assigned_to_email': b.assigned_to_email,
+        'assigned_to_name': b.assigned_to_name,
         'reviewed_at': b.reviewed_at.isoformat() if b.reviewed_at else None,
         'admin_remarks': b.admin_remarks, 'created_at': b.created_at.isoformat(),
+        # Who has had this before now, and why they passed it on.
+        'transfers': (trails if trails is not None
+                      else trail_for('room', [b.id])).get(b.id, []),
         'released_at': b.released_at.isoformat() if b.released_at else None,
         'released_by': b.released_by, 'release_reason': b.release_reason,
     }
@@ -53,10 +63,12 @@ class BookingListView(APIView):
         # read -- the same shape of hole the ticket queue had.
         if (err := require_signed_in(request)):
             return err
+        # A request whose slot has come and gone is not waiting on anybody.
+        expire_stale_bookings()
         role, email = actor_role(request)
         qs = BookingRequest.objects.select_related('room').all()
-        if role not in ('admin', 'it_support', 'super_admin'):
-            qs = qs.filter(requested_by_email=email)
+        # Who sees what: roompulse/assignment.py.
+        qs = admin_queue_for(qs, role, email)
         room_id = request.query_params.get('room')
         if room_id:
             qs = qs.filter(room_id=room_id)
@@ -68,12 +80,20 @@ class BookingListView(APIView):
             qs = qs.filter(status=status)
         mine = request.query_params.get('mine')
         if mine:
-            qs = qs.filter(requested_by_email=mine.strip().lower())
+            who = mine.strip().lower()
+            qs = (raised_by(BookingRequest.objects.select_related('room'), who)
+                  if who == (email or '').lower() or role == 'super_admin'
+                  else raised_by(qs, who))
         try:
             limit = max(1, min(500, int(request.query_params.get('limit', 200))))
         except (TypeError, ValueError):
             limit = 200
-        return Response({'results': [_brief(b) for b in qs[:limit]], 'count': qs.count()})
+        page = list(qs[:limit])
+        trails = trail_for('room', [b.id for b in page])
+        rows = apply_names([_brief(b, trails) for b in page],
+                           ('requested_by_email', 'requested_by_name'),
+                           ('assigned_to_email', 'assigned_to_name'))
+        return Response({'results': rows, 'count': qs.count()})
 
     def post(self, request):
         # Identity from the session, never the body: otherwise anyone can
@@ -100,6 +120,14 @@ class BookingListView(APIView):
             return Response({'error': 'End time must be after start time.'}, status=400)
         if booking_date < timezone.localdate():
             return Response({'error': 'Cannot book a room in the past.'}, status=400)
+        # And not a slot earlier TODAY. The date check alone let somebody book
+        # 09:00-10:00 at three in the afternoon: as an employee the request
+        # was accepted and then expired by the next screen that loaded, which
+        # reads as the system losing it; as an admin it was auto-approved, and
+        # the room's history gained a confirmed meeting that never happened.
+        if booking_date == timezone.localdate() and end_time <= timezone.localtime().time():
+            return Response({'error': 'That slot has already finished. '
+                                      'Pick a time still to come.'}, status=400)
 
         name = str(d.get('requested_by_name') or d.get('name') or '').strip()
         if not name:
@@ -132,7 +160,15 @@ class BookingListView(APIView):
                     'conflict': _brief(c),
                 }, status=409)
 
+        # Addressed to somebody on the desk, from the roster, before
+        # anything is written. A request nobody owns is what this replaces.
+        chosen = resolve_assignee('admin', d.get('assigned_to_email'))
+        if isinstance(chosen, str):
+            return Response({'error': chosen}, status=400)
+        assigned_email, assigned_name = chosen
+
         booking = BookingRequest.objects.create(
+            assigned_to_email=assigned_email, assigned_to_name=assigned_name,
             room=room, requested_by_name=name[:200], requested_by_email=email,
             department=str(d.get('department') or '').strip()[:150],
             date=booking_date, start_time=start_time, end_time=end_time,
@@ -162,6 +198,12 @@ class BookingActionView(APIView):
     """
 
     def patch(self, request, booking_id):
+        # Authentication before authorisation. Without this an expired
+        # session reaches the role check as role=None and is answered "you are
+        # not an admin", which is both wrong and unactionable -- and a 403
+        # does not make the client drop the dead session the way a 401 does.
+        if (err := require_signed_in(request)):
+            return err
         try:
             booking = BookingRequest.objects.select_related('room').get(id=booking_id)
         except BookingRequest.DoesNotExist:
@@ -174,6 +216,17 @@ class BookingActionView(APIView):
             if role not in ('admin', 'super_admin'):
                 return Response({'error': 'Only an admin can approve or reject bookings.'},
                                 status=403)
+            # Approving a slot that has already passed grants nothing, and
+            # leaves an "approved" booking for a meeting that did not happen
+            # sitting in the room's history. Rejecting it is no better -- the
+            # person was not turned down, they were not answered.
+            if booking.status == 'pending':
+                expire_stale_bookings()
+                booking.refresh_from_db()
+            if booking.status == 'expired':
+                return Response({
+                    'error': 'That slot has already passed, so there is nothing '
+                             'left to approve. Ask them to book again.'}, status=400)
             if booking.status != 'pending':
                 return Response({'error': f'This booking is already {booking.status}.'}, status=400)
 
@@ -197,6 +250,30 @@ class BookingActionView(APIView):
             booking.admin_remarks = str(request.data.get('remarks') or '').strip()[:300]
             booking.save()
             return Response({'message': f'Booking {booking.status}.', 'booking': _brief(booking)})
+
+        if action == 'transfer':
+            # Pass it on without answering it. Unlike a ticket there is only
+            # one live stage here -- approving IS the outcome -- so this is
+            # only ever "somebody else should decide this".
+            if role not in ('admin', 'super_admin'):
+                return Response({'error': 'Only an admin can pass a booking on.'},
+                                status=403)
+            # A slot that has passed is nobody's to answer, so it is nobody's
+            # to hand over either. Expire first, or a request that lapsed
+            # since the screen loaded gets passed to somebody as live work.
+            if booking.status == 'pending':
+                expire_stale_bookings()
+                booking.refresh_from_db()
+            if booking.status != 'pending':
+                return Response({'error': f'This booking is already {booking.status}, '
+                                          f'so there is nothing to pass on.'}, status=400)
+            moved = handover('room', booking, 'admin',
+                             request.data.get('to_email'), email, role,
+                             request.data.get('remarks'))
+            if isinstance(moved, str):
+                return Response({'error': moved}, status=400)
+            return Response({'message': f'Passed to {moved.to_name or moved.to_email}.',
+                             'booking': _brief(booking)})
 
         if action == 'release':
             # The meeting finished early, so give the room back now instead
@@ -260,10 +337,19 @@ class RoomCalendarView(APIView):
             room = Room.objects.get(id=room_id)
         except Room.DoesNotExist:
             return Response({'error': 'Room not found.'}, status=404)
+        # A request nobody answered before its slot passed did not occupy the
+        # room, so it does not belong on the room's day either -- same reason
+        # a cancelled one does not. Expire first, or a slot that passed since
+        # the last screen load is still sitting here as 'pending'.
+        expire_stale_bookings()
         bookings = (BookingRequest.objects.filter(room=room, date=d)
-                   .exclude(status='cancelled').order_by('start_time'))
+                   .exclude(status__in=('cancelled', 'expired')).order_by('start_time'))
         return Response({
             'room': {'id': room.id, 'name': str(room), 'capacity': room.capacity},
             'date': d.isoformat(),
-            'bookings': [_brief(b) for b in bookings],
+            # By the name the company knows them by, like every other list.
+            # This one was left reading whatever was typed into the form.
+            'bookings': apply_names([_brief(b) for b in bookings],
+                                    ('requested_by_email', 'requested_by_name'),
+                                    ('assigned_to_email', 'assigned_to_name')),
         })

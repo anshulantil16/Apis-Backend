@@ -37,6 +37,21 @@ it writes files that are not in git and the next deploy conflicts with them.
 alterations on `pms` and `roompulse`. That drift predates this work and is
 deliberately left alone — do not bundle it into an unrelated deploy.
 
+**Local is SQLite, QA and Live are MySQL, and they disagree about what is an
+error.** A green test run here is not evidence a migration will apply there.
+The ones that bite:
+
+- **Narrowing a column** fails on MySQL if any existing row would be
+  truncated — `(1265, "Data truncated for column ...")`. SQLite applies the
+  same `ALTER` silently and keeps the long values. Clear or shorten the data
+  in an earlier migration, then change the schema in the next one. Ordering
+  these the other way round is what broke a QA deploy of
+  `noticeboard.NewsItem.external_id`.
+- **Indexed columns** cannot exceed MySQL's utf8mb4 key limit of 3072 bytes,
+  i.e. 768 characters. SQLite has no such limit. If a value must be long and
+  looked up, store a hash and index that.
+- **Widening is always safe**; it is only shrinking that needs the two-step.
+
 ## The clock
 
 `TIME_ZONE = 'Asia/Kolkata'`, `USE_TZ = True`. Datetimes are still stored in
@@ -59,7 +74,18 @@ in use?" goes through `status.effective_end()`, which is what makes a release
 free the room both on the grid and for the next person trying to book that
 slot. Cancelling is the different case — the meeting never happened.
 
-## AdminPulse (`roompulse/`) — identity
+## Help Desk (`roompulse/`) — identity
+
+**The product is called Help Desk.** It was AdminPulse, and before that
+RoomPulse. Every string a user reads — including the OTP email — says Help
+Desk. The internal names deliberately do not: the Django app label
+`roompulse` and every table it owns, the `/api/roompulse/` routes, the
+`X-AdminPulse-Session` header, and `RoomPulseLoginView`. Renaming the app
+label would rewrite live QA and Live tables for no visible gain, so it stays.
+
+A user's access to the tool is granted by `accounts.AppKey.HELPDESK`
+(`'helpdesk'`), which the frontend checks by that exact string. It used to be
+`'roompulse'`; migration `accounts/0007` rewrote the existing grants.
 
 **An `email` in a request body is data about the request. It is never a claim
 about who is making it.**
@@ -176,6 +202,72 @@ returns all-time `totals`. Anything added to the report needs both, or a quiet
 period is indistinguishable from an empty system and the dashboard looks
 broken. It covers bookings, item requests **and** tickets — the helpdesk was
 missing from it at first, which is most of what people actually use.
+
+## Dashboard content goes through one gate
+
+Anything a person can put on the intranet home page — a vacancy, a wall photo,
+an announcement, a referral, a Daily News story — inherits
+`accounts.moderation.ModeratedContent` and **starts PENDING**. Nothing reaches
+the dashboard until a superadmin approves it, and every create, edit, approve,
+reject and delete is written to `ActivityLog`.
+
+Two rules when adding another kind:
+
+- Filter with the model's `published()` classmethod, never by hand. A view that
+  builds its own filter is how a pending row reaches the home page.
+- Add one line to `CONTENT_TYPES` in `accounts/views_moderation.py` and the
+  approval console picks it up — there is nothing else to wire.
+
+A superadmin's own submission is auto-approved: they are the approving
+authority, so queueing work for themselves adds a step without adding control.
+The activity log still records that they created it.
+
+## Daily News (`noticeboard.NewsItem`)
+
+The strip under Your Tools. Stories about the market APIS sells into — APIs,
+food APIs, nutraceuticals, honey — and about the company. Not the same thing as
+the frontend's `WHATS_NEW`, which is news about the intranet's own tools and
+ships with a build.
+
+- `published_on` is the day the story is *about*, not the day it was typed —
+  otherwise the strip claims a week-old piece broke this morning.
+- A picture is either an upload (ours, keeps working) or `image_url`
+  (someone else's, can rot). `_news()` resolves the two to one field and the
+  card falls back to a plain tile when the link dies.
+- `GET` returns the newest 12; `?scope=all` returns everything, which is what
+  "View all" and the console ask for.
+
+Feeds (`NewsSource`, `newsfeed.py`) fill it on a schedule, run by
+`manage.py fetch_news` from cron -- a management command, not Celery, for the
+reason spelled out in `accounts/management/commands/sync_hrms.py`.
+
+- **The two seeded feeds publish straight to the dashboard** (`auto_publish`),
+  decided after the queue was built and used: one that fills every morning gets
+  bulk-approved unread within a fortnight, so it is a gate in name only and a
+  chore as well. A source added later still starts off needing approval -- the
+  switch is per source, not global.
+- What makes that safe is the lifecycle, not vigilance. `NewsItem.for_strip()`
+  shows only what is approved, unexpired and newer than `STRIP_MAX_AGE_DAYS`
+  (pinned bypasses it), so the strip empties itself. `purge_old()` runs at the
+  end of every fetch and deletes fetched rows past `PURGE_AFTER_DAYS`;
+  hand-written and pinned rows are never purged.
+- Nothing unapproved ever reaches the strip, for anyone, superadmin included.
+  The console reads `?scope=all`; the dashboard reads the strip.
+- Google ranks by relevance, not date, so `resolved_url()` appends `when:Nd`
+  from `max_age_days`. Without it a narrow query answers with its best matches
+  going back years -- one real query returned results from 2013.
+- **Never truncate a feed link.** Google News article links are opaque encoded
+  ids: in one real feed 13 of 39 were over 500 characters and the longest was
+  824. A clipped link is not a shorter link, it is a broken one -- Google
+  answers it with "400, malformed". `source_url`/`image_url` are 2000.
+- `external_id` is a SHA-256 of the feed's id, not the id itself. It is
+  indexed, and MySQL's utf8mb4 limit is 3072 bytes, so a column wide enough for
+  the raw id could carry no index at all.
+- Junk titles are judged on the *final* headline. Google appends
+  " - The Publisher" to every title, so a placeholder arrives as
+  "BlogDescription - PIB" and passes a check made before the suffix is stripped.
+- A source stops fetching at `BACKLOG_LIMIT` unreviewed stories and records
+  that as `paused`, not `failed` -- nothing is broken.
 
 ## SalesIQ (`sales/`) — the two primary files
 

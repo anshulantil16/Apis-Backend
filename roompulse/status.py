@@ -5,6 +5,7 @@ reused wherever a room's current state is needed (grid, calendar, exports).
 """
 from datetime import datetime, timedelta
 
+from django.db import models
 from django.utils import timezone
 
 UPCOMING_WINDOW_MIN = 60  # a room shows "Upcoming" once its next booking starts within this
@@ -107,3 +108,29 @@ def find_conflicts(qs, date, start_time, end_time, exclude_id=None):
     if exclude_id:
         qs = qs.exclude(id=exclude_id)
     return [b for b in qs if overlaps(start_time, end_time, b.start_time, effective_end(b))]
+
+
+def expire_stale_bookings():
+    """Close off requests whose slot came and went unanswered.
+
+    A pending booking for 11:00-12:00 still reading "waiting for approval" at
+    half past two is telling the requester something untrue: nobody is going
+    to approve it, and approving it would grant a room for a meeting that has
+    already not happened.
+
+    Swept on read rather than by a cron, because the answer has to be right
+    the moment somebody looks, and a cron that has not run yet is the same
+    bug with a delay. The write only happens when there is something to
+    write, so the usual page costs one extra SELECT and no UPDATE.
+
+    -> how many were expired.
+    """
+    from .models import BookingRequest
+
+    now = timezone.localtime()
+    stale = BookingRequest.objects.filter(status='pending').filter(
+        models.Q(date__lt=now.date())
+        | models.Q(date=now.date(), end_time__lte=now.time()))
+    if not stale.exists():
+        return 0
+    return stale.update(status='expired', updated_at=timezone.now())
