@@ -62,6 +62,7 @@ def serialize_user(u):
         'is_active': u.is_active,
         'is_superadmin': u.is_superadmin,
         'is_bootstrap': u.is_bootstrap_superadmin,
+        'can_edit_tree': u.can_edit_tree,
         'allowed_apps': u.allowed_apps,
         'from_hrms': u.from_hrms,
         'last_login_at': local_str(u.last_login_at, '%d-%m-%Y %H:%M'),
@@ -387,6 +388,8 @@ class AdminUserDetailView(_AdminView):
             u.is_active = bool(d['is_active'])
         if 'is_superadmin' in d:
             u.is_superadmin = bool(d['is_superadmin'])
+        if 'can_edit_tree' in d:
+            u.can_edit_tree = bool(d['can_edit_tree'])
         if 'app_access' in d:
             wanted = d['app_access'] or []
             unknown = [a for a in wanted if a not in AppKey.values]

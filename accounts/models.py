@@ -91,6 +91,10 @@ class PortalUser(models.Model):
     is_superadmin = models.BooleanField(default=False)
     # Which tools this person may open. A superadmin bypasses this entirely.
     app_access    = models.JSONField(default=list, blank=True)
+    # Lets Super Admin delegate APIS Tree card edits (name, designation,
+    # department, photo) to HR/managers without handing them the whole
+    # console. A superadmin can always edit tree cards regardless of this.
+    can_edit_tree = models.BooleanField(default=False)
 
     # The last record Pocket HRMS returned for this person, verbatim. Kept so
     # the console can show exactly what upstream is sending - including fields
@@ -317,3 +321,60 @@ class ActivityLog(models.Model):
 
     def __str__(self):
         return f'{self.actor_name or "System"} {self.action} {self.object_type} #{self.object_id}'
+
+
+class TreeProfile(models.Model):
+    """One row in APIS Tree that the static frontend chart doesn't already
+    know about the content of — either an edit to an existing card, or a
+    person added on top of the chart entirely.
+
+    APIS Tree's structure — who reports to whom — is defined in frontend
+    source (features/tree/APIS_TREE.tsx) since it rarely changes and drives
+    the chart's own layout. What changes more often — a person's name,
+    title, department, photo, or the roster itself gaining someone new —
+    lives here instead.
+
+    Two shapes share this one table, distinguished by `is_new`:
+
+    - An OVERRIDE (`is_new=False`) corrects one of the chart's own cards.
+      `person_id` matches that card's stable frontend id (a HOD's own
+      `.id`, or a slug for a sub-tree member — see memberId() in
+      APIS_TREE.tsx) and `parent_hod_id` is blank. A row only exists once
+      someone has actually edited that card; until then the frontend's own
+      baseline value shows.
+    - An ADDITION (`is_new=True`) is a person who isn't in the static chart
+      at all. `person_id` is server-generated (nothing on the frontend
+      refers to it yet), and `parent_hod_id` says where it renders: blank
+      for a new top-level HOD card, or an existing HOD's `.id` for someone
+      added into that HOD's own sub-tree. Deleting an addition removes the
+      person outright — there's no baseline underneath it to revert to,
+      unlike an override.
+
+    A third flag, `is_hidden`, is independent of the above: the static
+    chart has no delete of its own (its cards are hardcoded frontend data,
+    not database rows), so removing one of ITS people is recorded as an
+    override with `is_hidden=True` rather than an actual deletion — the
+    row is what remembers "don't render this card", the same way an
+    override row remembers a name change. An added person has no baseline
+    to hide, so removing one deletes its row outright instead.
+    """
+    person_id  = models.CharField(max_length=150, unique=True, db_index=True)
+    name       = models.CharField(max_length=200, blank=True)
+    role       = models.CharField(max_length=200, blank=True)
+    department = models.CharField(max_length=200, blank=True)
+    photo      = models.ImageField(upload_to='orgtree/%Y/%m/', null=True, blank=True)
+    # Only meaningful when is_new=True — see class docstring.
+    is_new        = models.BooleanField(default=False)
+    parent_hod_id = models.CharField(max_length=150, blank=True, db_index=True)
+    # Only ever set on a static card's own override (is_new=False) — see
+    # class docstring for why this and is_new mean different things.
+    is_hidden     = models.BooleanField(default=False)
+    updated_by_name  = models.CharField(max_length=200, blank=True)
+    updated_by_email = models.CharField(max_length=254, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['person_id']
+
+    def __str__(self):
+        return self.person_id

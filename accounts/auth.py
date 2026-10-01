@@ -66,6 +66,22 @@ def require_superadmin(request):
     return user, None
 
 
+def require_tree_editor(request):
+    """(user, None) for someone allowed to edit APIS Tree cards, or (None, 401/403).
+
+    A superadmin always qualifies; anyone else needs `can_edit_tree` granted
+    from Admin Console — Super Admin's way of delegating this one thing
+    (name/photo/designation edits on the org chart) without handing out the
+    whole console.
+    """
+    user, err = require_user(request)
+    if err:
+        return None, err
+    if not (user.is_superadmin or user.can_edit_tree):
+        return None, Response({'error': 'You are not able to edit APIS Tree.'}, status=403)
+    return user, None
+
+
 def optional_user(request):
     """Whoever is signed in, or None — for endpoints that stay open to all
     but should still attribute the caller when there is one."""

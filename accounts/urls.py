@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views_moderation import AdminActivityView, AdminModerationView
+from .views_tree import TreeProfileDetailView, TreeProfileListView
 from .views import (AdminBulkAccessView, AdminHrmsPreviewView, AdminSessionsView, AdminSyncView,
                     CelebrationsView, TickerView,
                     AdminUserDetailView, AdminUsersView,
@@ -31,4 +32,8 @@ urlpatterns = [
     # Dashboard content: the approval queue and the audit trail.
     path('portal/admin/moderation/', AdminModerationView.as_view()),
     path('portal/admin/activity/',   AdminActivityView.as_view()),
+
+    # APIS Tree card edits — any signed-in employee reads, editors write.
+    path('tree/profiles/',               TreeProfileListView.as_view()),
+    path('tree/profiles/<str:person_id>/', TreeProfileDetailView.as_view()),
 ]
