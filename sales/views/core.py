@@ -805,6 +805,11 @@ class SalesOverviewView(APIView):
             'gap_to_target': (round(like_for_like['target'] - like_for_like['revenue'], 2)
                               if like_for_like['target'] else None),
             'prev_revenue': prev_rev,
+            # Whether there is anything BEHIND this window, as opposed to a
+            # real zero. "vs Rs 0 prior period" reads as a collapse; most of
+            # the time it means the file simply does not go back that far,
+            # and the screen should say which.
+            'prev_period_has_data': bool(prev and (prev['revenue'] or prev['qty'])),
             'revenue_growth_pct': _pct_change(revenue, prev_rev),
             'quantity_growth_pct': _pct_change(_money(agg['qty']),
                                                _money(prev['qty']) if prev else 0),
@@ -812,6 +817,20 @@ class SalesOverviewView(APIView):
                        'to': hi.isoformat() if hi else None},
             'filters': applied,
             'has_data': revenue != 0 or (agg['lines'] or 0) > 0,
+            # How much is actually loaded, so the page can tell a real figure
+            # from a near-empty table. A dashboard reading Rs 1.91 L off five
+            # leftover rows is indistinguishable from a dashboard reading
+            # Rs 274 Cr off the real file -- both look equally confident, and
+            # that cost a morning of "are we picking the data correctly?".
+            #
+            # The threshold is deliberately low: the real file is 24,000-odd
+            # lines, so anything in the dozens is leftovers or a part upload,
+            # and nothing legitimate sits near it.
+            'loaded': {
+                'lines': SalesRecord.objects.count(),
+                'uploads': SalesUpload.objects.filter(status='completed').count(),
+                'looks_empty': SalesRecord.objects.count() < 100,
+            },
         })
 
 
