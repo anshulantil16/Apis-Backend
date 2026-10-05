@@ -4,7 +4,7 @@ import io
 from datetime import date, timedelta
 
 import openpyxl
-from django.db.models import Count, Max, Min, Sum
+from django.db.models import Count, Max, Min, Q, Sum
 from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -731,9 +731,24 @@ class SalesOverviewView(APIView):
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
         agg = qs.aggregate(
             revenue=Sum('net_amount'), qty=Sum('quantity'), target=Sum('target_amount'),
-            orders=Count('invoice_no', distinct=True), lines=Count('id'),
+            # Only rows that actually carry an invoice. Counting distinct
+            # invoice_no across everything also counted the empty string --
+            # one phantom order standing in for all 20,064 review-sheet rows,
+            # which are monthly aggregates and have no invoice behind them.
+            orders=Count('invoice_no', distinct=True,
+                         filter=~Q(invoice_no='')),
+            lines=Count('id'),
             discount=Sum('discount'), weight=Sum('net_weight_kg'),
         )
+        # The invoiced part on its own. Two thirds of the money on this
+        # dashboard comes from the review sheet, which has no invoices, no
+        # customers and no SKUs -- so anything "per order" has to be measured
+        # over the invoiced rows alone or it is a ratio between two different
+        # populations. Dividing total revenue by invoice count read as an
+        # average order of Rs 30 lakh against a true Rs 1.8 lakh.
+        invoiced = qs.exclude(invoice_no='').aggregate(
+            revenue=Sum('net_amount'),
+            orders=Count('invoice_no', distinct=True))
         # Cases, pieces, kilograms and metres all land in the same quantity
         # column, so the total is only meaningful once it is split by unit.
         uom_split = [
@@ -783,7 +798,15 @@ class SalesOverviewView(APIView):
             'customers': customers,
             'skus': skus,
             'discount': _money(agg['discount']),
-            'avg_order_value': _money(revenue / orders) if orders else 0.0,
+            # Over the invoiced rows only -- see `invoiced` above.
+            'avg_order_value': (_money(float(invoiced['revenue'] or 0) / invoiced['orders'])
+                                if invoiced['orders'] else 0.0),
+            # What share of the money the per-order figures actually describe,
+            # so the screen can say "of the invoiced months" rather than
+            # implying it covers everything.
+            'invoiced_revenue': _money(invoiced['revenue']),
+            'invoiced_pct': (round(float(invoiced['revenue'] or 0) / revenue * 100, 1)
+                             if revenue else None),
             'target': target,
             # Compared over the months that carry both a plan and a result.
             # Revenue and target above are the full totals for the current
@@ -1079,22 +1102,34 @@ class SalesInsightsView(APIView):
                             f'single {noun} in this selection.',
                 })
 
-        # Target achievement
-        tgt = _money(qs.aggregate(v=Sum('target_amount'))['v'])
+        # Target achievement, over the months that carry BOTH a plan and a
+        # result -- the same basis as the headline tile, via the same
+        # function. This block used to divide revenue-to-date by the whole
+        # year's plan, which is the very bug comparable_window was written to
+        # kill: it reported 86% and a shortfall of Rs 45 Cr on a year that is
+        # half over, while the tile four inches above it said 73% and
+        # Rs 36 Cr. Two numbers for one question on one screen is worse than
+        # either of them being wrong.
+        basis = comparable_window(qs)
+        tgt = basis['target']
+        total_cmp = basis['revenue']
         if tgt:
-            ach = total / tgt * 100
+            ach = total_cmp / tgt * 100
             if ach >= 100:
                 insights.append({
                     'type': 'win',
                     'title': f'Target exceeded — {ach:.0f}%',
-                    'body': f'Sales of {total:,.0f} against a target of {tgt:,.0f}, '
-                            f'ahead by {total - tgt:,.0f}.',
+                    'body': f'Sales of {total_cmp:,.0f} against a target of {tgt:,.0f} '
+                            f'over the {basis["months"]} month(s) with both, '
+                            f'ahead by {total_cmp - tgt:,.0f}.',
                 })
             else:
                 insights.append({
                     'type': 'risk' if ach < 80 else 'info',
                     'title': f'Target achievement at {ach:.0f}%',
-                    'body': f'Short of target by {tgt - total:,.0f}. '
+                    'body': f'Short of target by {tgt - total_cmp:,.0f} '
+                            f'over the {basis["months"]} month(s) with both a plan '
+                            f'and a result. '
                             f'{"Well behind plan — worth investigating by region." if ach < 80 else "Within reach of plan."}',
                 })
             # Who is dragging

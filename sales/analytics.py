@@ -83,7 +83,8 @@ def growth_matrix(qs_all, field, cur_from, cur_to, limit=60):
     because "big" and "fast-growing" only mean anything relative to the rest
     of this particular book of business."""
     if not cur_from or not cur_to:
-        return {'results': [], 'median_revenue': 0, 'median_growth': 0}
+        return {'results': [], 'median_revenue': 0, 'median_growth': 0,
+                'comparable': False}
 
     span = (cur_to - cur_from).days + 1
     p_to = cur_from - timedelta(days=1)
@@ -98,20 +99,35 @@ def growth_matrix(qs_all, field, cur_from, cur_to, limit=60):
 
     names = sorted(cur, key=lambda k: cur[k], reverse=True)[:limit]
     if not names:
-        return {'results': [], 'median_revenue': 0, 'median_growth': 0}
+        return {'results': [], 'median_revenue': 0, 'median_growth': 0,
+                'comparable': False}
 
     revs = sorted(cur[n] for n in names)
     med_rev = revs[len(revs) // 2]
     growths = [g for g in (_pctc(cur[n], prev.get(n, 0)) for n in names) if g is not None]
     med_growth = sorted(growths)[len(growths) // 2] if growths else 0.0
 
+    # Is there anything at all to compare against? The quadrant is entirely
+    # about momentum, so when the prior window is empty -- the file simply
+    # does not reach back that far -- there is no momentum to measure and
+    # nothing here is knowable.
+    #
+    # It used to answer anyway. Every growth came back None, which line 'fast'
+    # read as 0, which cleared a median of 0, so every single group came out
+    # "fast" and the page declared half the sales force Stars -- "big and
+    # growing, protect and invest" -- on no evidence whatever, above a chart
+    # that plotted nothing because the real y-value was null. A blank chart is
+    # a puzzle; a blank chart under confident advice is worse.
+    comparable = any(prev.get(n, 0) for n in names)
+
     out = []
     for n in names:
         g = _pctc(cur[n], prev.get(n, 0))
         big = cur[n] >= med_rev
         fast = (g if g is not None else 0) >= med_growth
-        quad = ('star' if big and fast else 'cash_cow' if big else
-                'rising' if fast else 'watch')
+        quad = (('star' if big and fast else 'cash_cow' if big else
+                 'rising' if fast else 'watch')
+                if comparable else None)
         out.append({
             'name': n, 'revenue': round(cur[n], 2),
             'prev_revenue': round(prev.get(n, 0), 2),
@@ -120,6 +136,9 @@ def growth_matrix(qs_all, field, cur_from, cur_to, limit=60):
         })
     return {
         'results': out,
+        # False when nothing precedes this window. The revenue in each row is
+        # still real and still worth showing; only the momentum half is not.
+        'comparable': comparable,
         'median_revenue': round(med_rev, 2), 'median_growth': round(med_growth, 1),
         'current_window': {'from': cur_from.isoformat(), 'to': cur_to.isoformat()},
         'prior_window': {'from': p_from.isoformat(), 'to': p_to.isoformat()},

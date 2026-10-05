@@ -1410,3 +1410,112 @@ class TheSellingOrganisation(TestCase):
         """0% would say they missed the plan. There is no plan."""
         d = self.org()
         self.assertIsNone(d['tree'][0]['achievement_pct'])
+
+
+# ── what an audit against the real file turned up ────────────────────────
+class PerOrderFiguresOnlyCountInvoicedRows(TestCase):
+    """Two thirds of the money on this dashboard arrives from the review
+    sheet, which is monthly aggregates: no invoice, no customer, no SKU.
+    Dividing all the revenue by the invoices that do exist is a ratio between
+    two different populations, and on the real file it reported an average
+    order of Rs 30 lakh against a true Rs 1.8 lakh."""
+
+    def setUp(self):
+        upload(a_workbook([
+            a_row(**{'Invoice No.': 'INV-1', 'Taxable Amount': 10000}),
+            a_row(**{'Invoice No.': 'INV-2', 'Taxable Amount': 10000}),
+        ]))
+        # A row with no invoice on it, standing for a review-sheet month.
+        SalesRecord.objects.create(
+            upload=SalesUpload.objects.first(),
+            order_date=date(2026, 4, 1), period=date(2026, 4, 1),
+            invoice_no='', net_amount=980000, quantity=0)
+
+    def overview(self):
+        return Client().get('/api/sales/overview/').json()
+
+    def test_a_row_with_no_invoice_is_not_an_order(self):
+        """Counting distinct invoice numbers across everything also counts
+        the empty string: one phantom order standing in for every aggregate
+        row in the file."""
+        self.assertEqual(self.overview()['orders'], 2)
+
+    def test_average_order_value_ignores_rows_with_no_invoice(self):
+        """20,000 over two invoices, not 1,000,000 over two."""
+        self.assertEqual(self.overview()['avg_order_value'], 10000)
+
+    def test_the_headline_still_counts_every_rupee(self):
+        """Only the per-order figures narrow; revenue is all of it."""
+        self.assertEqual(self.overview()['revenue'], 1000000)
+
+    def test_it_says_how_much_of_the_money_is_invoiced(self):
+        d = self.overview()
+        self.assertEqual(d['invoiced_revenue'], 20000)
+        self.assertEqual(d['invoiced_pct'], 2.0)
+
+
+class MomentumNeedsSomethingToCompareWith(TestCase):
+    """The growth quadrant is entirely about momentum. With nothing before
+    the window, every growth comes back None -- which the quadrant read as
+    zero, cleared a median of zero, and so declared every single group
+    "fast". Half the sales force came out as Stars, "big and growing, protect
+    and invest", on no evidence at all, above a chart that plotted nothing
+    because the real y-value was null."""
+
+    def setUp(self):
+        upload(a_workbook([
+            a_row(**{'RSM Name': 'Anil Mehra', 'Invoice No.': 'INV-1',
+                     'Taxable Amount': 50000}),
+            a_row(**{'RSM Name': 'Sunil Rao', 'Invoice No.': 'INV-2',
+                     'Taxable Amount': 10000}),
+        ]))
+
+    def matrix(self):
+        return Client().get('/api/sales/matrix/?dim=rsm').json()
+
+    def test_it_says_there_is_nothing_to_compare_against(self):
+        self.assertFalse(self.matrix()['comparable'])
+
+    def test_nobody_is_called_a_star_on_no_evidence(self):
+        for r in self.matrix()['results']:
+            self.assertIsNone(r['quadrant'], r)
+
+    def test_the_revenue_is_still_reported(self):
+        """Only the momentum half is unknowable. The rupees are real."""
+        rows = {r['name']: r for r in self.matrix()['results']}
+        self.assertEqual(rows['Anil Mehra']['revenue'], 50000)
+
+
+class OneQuestionGetsOneAnswer(TestCase):
+    """Achievement was computed two ways on the same screen: the tile over
+    the months carrying both a plan and a result, and the insights panel over
+    revenue-to-date against the whole year's plan. On the real file that read
+    73% in one place and 86% in the other, with a gap of Rs 36 Cr against
+    Rs 45 Cr -- the exact bug comparable_window was written to kill, fixed in
+    one panel and left standing in the other."""
+
+    def setUp(self):
+        upload(a_workbook([a_row(**{'Invoice No.': 'INV-1',
+                                    'Taxable Amount': 70000})]))
+        rec = SalesRecord.objects.first()
+        # A month with a plan and a result, and another with plan only --
+        # the rest of the year, which must not drag achievement down.
+        SalesRecord.objects.filter(id=rec.id).update(
+            target_amount=100000, measured_amount=70000)
+        SalesRecord.objects.create(
+            upload=SalesUpload.objects.first(),
+            order_date=date(2027, 1, 1), period=date(2027, 1, 1),
+            invoice_no='', net_amount=0, quantity=0, target_amount=100000)
+
+    def test_the_tile_and_the_insight_report_the_same_number(self):
+        tile = Client().get('/api/sales/overview/').json()['achievement_pct']
+        insights = Client().get('/api/sales/insights/').json()['insights']
+        said = [i for i in insights if 'arget' in i['title']]
+        self.assertTrue(said, 'no target insight was produced')
+        self.assertIn(f'{tile:.0f}%', said[0]['title'])
+
+    def test_a_month_with_a_plan_and_no_sales_yet_is_left_out(self):
+        """Counting the rest of the year makes a healthy business read as
+        though it is missing target."""
+        self.assertEqual(
+            Client().get('/api/sales/overview/').json()['achievement_pct'], 70.0)
