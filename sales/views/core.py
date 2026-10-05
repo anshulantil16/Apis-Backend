@@ -22,7 +22,8 @@ from ..ingest import (map_headers, parse_date, parse_num, build_template,
 from .. import aop as AOP
 
 from ..forecasting import forecast_series
-from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters,
+from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters, detail_qs,
+                      qs_for_dimension, money_base,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
                       NOT_SALES_ZONES, with_actuals, comparable_window,
                       same_months_last_year)
@@ -382,21 +383,42 @@ class SalesUploadView(SalesIQAdminView):
         # know -- the two files cover different spans and different channels,
         # so which one a month came from decides what the month means.
         elected = elected_sources()
-        if len(set(elected.values())) > 1:
+        # Only worth saying when both files are in play. With one loaded
+        # there is no election to explain, and claiming there is sends
+        # somebody looking for a second file they never uploaded.
+        if (elected
+                and SalesRecord.objects.filter(
+                    source=SalesRecord.SOURCE_INVOICE).exists()
+                and SalesRecord.objects.filter(
+                    source=SalesRecord.SOURCE_PLAN).exists()):
             def _span(ms):
                 ms = sorted(ms)
+                if not ms:
+                    return ''
                 if len(ms) == 1:
                     return ms[0].strftime('%b %Y')
                 return f"{ms[0].strftime('%b %Y')} to {ms[-1].strftime('%b %Y')}"
             inv = [m for m, src in elected.items() if src == 'invoice']
             pln = [m for m, src in elected.items() if src == 'plan']
-            upload.notes.append(
-                f'Sales by month come from two places, never both at once. '
-                f'{_span(pln)} ({len(pln)} month(s)) from the review sheet, the '
-                f'only record that covers those months. {_span(inv)} '
-                f'({len(inv)} month(s)) from the invoice dump, which accounts '
-                f'for it in full and carries the line detail. Product, SKU and '
-                f'customer breakdowns exist only for the invoice months.')
+            # Attributed like every other message, but to both sheets: it is
+            # a fact about the election BETWEEN them, and an unattributed
+            # message leaves the reader guessing which half it is about.
+            parts = ['Both sheets: sales by month come from two places, '
+                     'never both at once.']
+            if pln:
+                parts.append(
+                    f'{_span(pln)} ({len(pln)} month(s)) from the review sheet, '
+                    f'which is the record your own YTD ACH column is read off.')
+            if inv:
+                parts.append(
+                    f'{_span(inv)} ({len(inv)} month(s)) from the invoice dump, '
+                    f'the only record that reaches those months.')
+            parts.append(
+                'The invoice dump is also what answers a date range, because it '
+                'is the only one of the two that knows what day a sale happened '
+                'on, and it is where product, SKU and customer breakdowns come '
+                'from. Those cover its months only.')
+            upload.notes.append(' '.join(parts))
         for title, resp in outcomes:
             if resp.status_code != 200:
                 upload.warnings.insert(
@@ -729,41 +751,62 @@ class SalesOverviewView(SalesIQView):
     """Headline KPIs + comparison against the preceding equal-length window."""
 
     def get(self, request):
+        # Two queries, because there are two files and they answer different
+        # questions.
+        #
+        # `qs` is the MONEY. By month or by year that is the review sheet,
+        # which is the record the business keeps and the one its YTD ACH
+        # column is read off; for a date range it is the invoice dump, the
+        # only one of the two that knows what day anything happened on.
+        #
+        # `detail` is the invoice dump alone, always. Everything below exists
+        # only on an invoice -- orders, customers, SKUs, quantity, discount,
+        # weight -- and the review sheet has none of them. Measured over `qs`
+        # in month/year mode they would read zero against a real revenue
+        # figure, and before that they were a ratio between two different
+        # populations: total revenue over invoice count gave an average order
+        # of Rs 30 lakh against a true Rs 1.8 lakh.
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
-        agg = qs.aggregate(
-            revenue=Sum('net_amount'), qty=Sum('quantity'), target=Sum('target_amount'),
+        detail = detail_qs(request)
+
+        agg = qs.aggregate(revenue=Sum('net_amount'), target=Sum('target_amount'),
+                           lines=Count('id'))
+        inv = detail.aggregate(
+            revenue=Sum('measured_amount'),
             # Only rows that actually carry an invoice. Counting distinct
             # invoice_no across everything also counted the empty string --
-            # one phantom order standing in for all 20,064 review-sheet rows,
-            # which are monthly aggregates and have no invoice behind them.
-            orders=Count('invoice_no', distinct=True,
-                         filter=~Q(invoice_no='')),
-            lines=Count('id'),
-            discount=Sum('discount'), weight=Sum('net_weight_kg'),
-        )
-        # The invoiced part on its own. Two thirds of the money on this
-        # dashboard comes from the review sheet, which has no invoices, no
-        # customers and no SKUs -- so anything "per order" has to be measured
-        # over the invoiced rows alone or it is a ratio between two different
-        # populations. Dividing total revenue by invoice count read as an
-        # average order of Rs 30 lakh against a true Rs 1.8 lakh.
-        invoiced = qs.exclude(invoice_no='').aggregate(
-            revenue=Sum('net_amount'),
-            orders=Count('invoice_no', distinct=True))
+            # one phantom order standing in for every row without one.
+            orders=Count('invoice_no', distinct=True, filter=~Q(invoice_no='')),
+            qty=Sum('quantity'), discount=Sum('discount'),
+            weight=Sum('net_weight_kg'))
+        invoiced = {'revenue': inv['revenue'], 'orders': inv['orders']}
         # Cases, pieces, kilograms and metres all land in the same quantity
         # column, so the total is only meaningful once it is split by unit.
         uom_split = [
             {'unit': (r['uom'] or 'unspecified'),
              'quantity': _money(r['q']), 'lines': r['n']}
-            for r in (qs.exclude(quantity=0).order_by().values('uom')
+            for r in (detail.exclude(quantity=0).order_by().values('uom')
                         .annotate(q=Sum('quantity'), n=Count('id'))
                         .order_by('-n'))
         ]
+        agg['qty'] = inv['qty']
+        agg['discount'] = inv['discount']
+        agg['weight'] = inv['weight']
+        agg['orders'] = inv['orders']
         revenue = _money(agg['revenue'])
         target = _money(agg['target'])
         like_for_like = comparable_window(qs)
-        last_year = same_months_last_year(
-            apply_dim_filters(SalesRecord.objects.all(), request)[0])
+        # Which file answered the money question above. Every comparison
+        # below has to be drawn from the same one, or the tile reads
+        # "Rs 16 Cr, up 16% on last year" with the two halves measured off
+        # different files -- which is the shape of the original complaint.
+        from_dump = applied.get('source') == 'invoice_dump'
+        cmp_base = money_base(request, dump_only=from_dump)
+        # Deliberately ignores the date window, so narrowing to this year
+        # does not take last year's comparison away with it. Withheld
+        # entirely for a date range: the review sheet has no days, so there
+        # is no "same fortnight last year" to answer with.
+        last_year = None if from_dump else same_months_last_year(cmp_base)
         lo, hi = _period_bounds(qs)
 
         # Preceding window of identical length, same dimension filters, so the
@@ -773,14 +816,13 @@ class SalesOverviewView(SalesIQView):
             span = (hi - lo).days + 1
             p_hi = lo - timedelta(days=1)
             p_lo = p_hi - timedelta(days=span - 1)
-            pqs, _ = apply_dim_filters(SalesRecord.objects.all(), request)
-            prev = (pqs.filter(order_date__gte=p_lo, order_date__lte=p_hi)
+            prev = (cmp_base.filter(order_date__gte=p_lo, order_date__lte=p_hi)
                        .aggregate(revenue=Sum('net_amount'), qty=Sum('quantity')))
 
         prev_rev = _money(prev['revenue']) if prev else 0.0
-        customers = qs.exclude(customer_name='').values('customer_name').distinct().count()
-        skus = qs.exclude(sku='').values('sku').distinct().count()
-        orders = agg['orders'] or 0
+        customers = detail.exclude(customer_name='').values('customer_name').distinct().count()
+        skus = detail.exclude(sku='').values('sku').distinct().count()
+        orders = invoiced['orders'] or 0
 
         return Response({
             'revenue': revenue,
@@ -873,7 +915,11 @@ class SalesBreakdownView(SalesIQView):
         except (TypeError, ValueError):
             limit = 15
 
-        qs, applied = apply_filters(SalesRecord.objects.all(), request)
+        # Which file can answer a split by THIS column. The review sheet
+        # carries zone, state, channel, head, RSM, ASM, item and brand;
+        # customer, SKU, category, city and the rest live only on an invoice,
+        # and a split by one of those read off the sheet comes back empty.
+        qs, applied, _from_dump = qs_for_dimension(request, field)
         # What the whole slice is worth BEFORE rows with nothing in this
         # column are dropped, so the chart can say what it is leaving out.
         grand = _money(qs.aggregate(v=Sum('net_amount'))['v'])

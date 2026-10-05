@@ -8,14 +8,14 @@ This assembles the tree in one query and rolls the figures up it. A level with
 no name is dropped rather than shown as a blank branch: the Pre-Sales Dump has
 RSM and ASM but no head, and an empty root labelled "" is noise, not structure.
 """
-from django.db.models import Count, Max, Sum
+from django.db.models import Count, Max, Q, Sum
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from .auth import SalesIQAdminView, SalesIQView
 
 from ..ingest import is_vacant
 from ..models import SalesRecord
-from .filters import apply_filters
+from .filters import apply_filters, detail_qs
 
 
 def _pct(part, whole):
@@ -78,12 +78,24 @@ class SalesOrgView(SalesIQView):
 
         rows = (qs.values(*levels)
                   .annotate(revenue=Sum('net_amount'), target=Sum('target_amount'),
-                            quantity=Sum('quantity'), lines=Count('id'),
-                            customers=Count('customer_name', distinct=True),
+                            lines=Count('id'),
                             states=Count('state', distinct=True),
-                            areas=Count('subzone', distinct=True),
-                            skus=Count('sku', distinct=True))
+                            areas=Count('subzone', distinct=True))
                   .order_by())
+
+        # Customers, SKUs and quantity are facts about an invoice, and the
+        # review sheet -- which is what answers a month or a year, and so is
+        # what `qs` holds most of the time -- has none of the three. Counted
+        # off `qs` they came back as nought customers under every head, beside
+        # a real revenue figure. They are read off the dump instead and merged
+        # into the same tree, which is why a node's customer count can cover
+        # fewer months than its revenue.
+        detail = detail_qs(request)
+        det_rows = (detail.values(*levels)
+                    .annotate(quantity=Sum('quantity'), lines=Count('id'),
+                              customers=Count('customer_name', distinct=True),
+                              skus=Count('sku', distinct=True))
+                    .order_by())
 
         # Field officers are a headcount attached to a sub-region, not a
         # measure of a month. The review sheet writes the number once per
@@ -128,11 +140,32 @@ class SalesOrgView(SalesIQView):
             for node in touched:
                 node['revenue'] += float(r['revenue'] or 0)
                 node['target'] += float(r['target'] or 0)
-                node['quantity'] += float(r['quantity'] or 0)
                 node['lines'] += r['lines'] or 0
-                node['customers'] += r['customers'] or 0
                 node['states'] += r['states'] or 0
                 node['areas'] += r['areas'] or 0
+
+        # The invoice-only figures, up the same tree. A dump row naming none
+        # of the levels lands on the root alone, which is honest: the money is
+        # attributed, the customer behind it is not.
+        for r in det_rows:
+            path, parent = [], root
+            for lvl in levels:
+                name = (r.get(lvl) or '').strip()
+                if not name:
+                    continue
+                path.append(name)
+                key = tuple(path)
+                node = index.get(key)
+                if node is None:
+                    node = _node(name, lvl)
+                    node['depth'] = len(path) - 1
+                    index[key] = node
+                    parent['children'].append(node)
+                parent = node
+            touched = [root] + [index[tuple(path[:d + 1])] for d in range(len(path))]
+            for node in touched:
+                node['quantity'] += float(r['quantity'] or 0)
+                node['customers'] += r['customers'] or 0
                 node['skus'] += r['skus'] or 0
 
         # Roll the territory headcounts up the same tree, each territory
@@ -160,6 +193,16 @@ class SalesOrgView(SalesIQView):
             if mark not in seen:
                 seen.add(mark)
                 root['field_officers'] += heads
+
+        # Counted once across the whole dump rather than added up per group:
+        # one customer buying from two RSMs is one customer, and summing the
+        # per-group distinct counts reported them twice at the top.
+        whole = detail.aggregate(
+            customers=Count('customer_name', distinct=True,
+                            filter=~Q(customer_name='')),
+            skus=Count('sku', distinct=True, filter=~Q(sku='')))
+        root['customers'] = whole['customers'] or 0
+        root['skus'] = whole['skus'] or 0
 
         _finish(root)
 

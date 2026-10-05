@@ -1275,7 +1275,11 @@ class EveryRequestIsAddressedToSomebody(HelpdeskBase):
 
     def test_a_room_booking_must_name_an_admin(self):
         room = Room.objects.filter(is_active=True).first()
-        body = {'room_id': room.id, 'date': timezone.localdate().isoformat(),
+        # Tomorrow, not today: a slot that has already finished is refused on
+        # its own merits, so booking one at 3pm made this pass or fail
+        # depending on what time the suite was run.
+        body = {'room_id': room.id,
+                'date': (timezone.localdate() + timedelta(days=1)).isoformat(),
                 'start_time': '15:00', 'end_time': '16:00',
                 'purpose': 'internal_meeting', 'requested_by_name': 'Priya'}
         r = self.client.post(f'{API}/bookings/', body,
@@ -1404,7 +1408,9 @@ class EverybodySeesTheRightThings(HelpdeskBase):
 
     def test_an_admins_own_booking_is_in_their_requests(self):
         self.client.post(f'{API}/bookings/', {
-            'room_id': self.room.id, 'date': timezone.localdate().isoformat(),
+            'room_id': self.room.id,
+            # Tomorrow -- see the note in EveryRequestIsAddressedToSomebody.
+            'date': (timezone.localdate() + timedelta(days=1)).isoformat(),
             'start_time': '15:00', 'end_time': '16:00', 'purpose': 'internal_meeting',
             'requested_by_name': 'Meena', 'assigned_to_email': ADMIN_STAFF,
         }, content_type='application/json', **auth(ADMIN_STAFF))

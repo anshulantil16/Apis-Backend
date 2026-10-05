@@ -230,111 +230,83 @@ class SalesRecord(models.Model):
         return f"{self.order_date} {self.product_name or self.sku} — {self.net_amount}"
 
 
-# How much of a month the invoice extract has to account for before it is
-# treated as that month's record of sales.
-#
-# The number only has to separate "this is the month the extract covers" from
-# "these are a few stragglers", and the real gap between those two is enormous
-# -- in the file this was built against, the covered month came in at 236% of
-# the review sheet's figure and the month before it at 3%. Half is a long way
-# from either.
-INVOICE_MONTH_COVERAGE = 0.5
-
-
 def sync_actual_source():
-    """Decide, for each month, which file that month's sales come from.
+    """Bring every row's net_amount back to its own measured figure.
+
+    Which file answers a given question is decided per request, in
+    apply_filters -- see below for why. This runs after every upload and
+    every deletion to undo the old behaviour, where the losing source was
+    zeroed in the table, and to keep the two columns in step for rows
+    written before that changed.
 
     The two primary-sales files are not a detail copy and a summary copy of
-    the same thing, which is the assumption this function used to make:
+    the same thing:
 
-      * the Pre-Sales Dump is a live ERP extract -- line level, all channels
-        including export, but only the month it was taken in, plus a tail of
-        credit notes raised since against earlier months;
-      * the AOP-vs-ACH sheet is the monthly review file -- no line detail and
-        general trade only, but two full financial years of actuals beside
-        the plan.
+      * the Pre-Sales Dump is a live ERP extract -- line level, dated to the
+        day, all channels including export, but only the month it was taken
+        in, plus a tail of credit notes raised since against earlier months;
+      * the AOP-vs-ACH sheet is the monthly review file -- no line detail, no
+        customers, no SKUs, general trade only, but two full financial years
+        of actuals beside the plan, and it is the record the business itself
+        reads.
 
-    Letting the dump win outright, as it did, threw away eighteen months of
-    history to keep one month of detail. What was left was a trend chart whose
-    first seven months were made entirely of credit notes and so ran below
-    zero, and a headline of Rs 16 crore -- one September -- standing in for the
-    company's year.
+    THE REVIEW SHEET OWNS EVERY MONTH IT HAS A FIGURE FOR. The dump owns only
+    the months the sheet does not reach.
 
-    So the election is per month, and a month goes to the dump only when the
-    dump actually accounts for it. A month it merely clipped stays with the
-    review sheet.
+    It used to be a contest, with the dump taking any month it accounted for
+    at least half of. That made the dashboard disagree with the sheet the
+    business has open beside it: September came from the dump, so the
+    year-to-date figure was the sheet's YTD ACH minus the sheet's September
+    plus the dump's -- a number that appears nowhere in either file and could
+    not be reconciled against anything.
 
-    Whichever source loses a month has its rows zeroed for that month rather
-    than dropped: the returns in a month the review sheet owns are already
-    inside that sheet's net figure, and adding the dump's credit notes on top
-    would count them twice.
+    The dump is still the record for a DATE range, because it is the only one
+    of the two that knows what day anything happened on; that election is
+    made per request in apply_filters, not here.
 
-    Every branch reads from measured_amount and writes only net_amount, so
-    this is re-runnable and order-independent. Run it after every upload and
-    every deletion.
+    Nothing is zeroed. net_amount is every row's own figure, and which rows
+    a question is answered from is decided per request, in apply_filters --
+    because the answer depends on the question. Zeroing the losing source
+    could not express that: it made one of the two permanently worth nothing,
+    so a date range asked of the dump came back empty.
+
+    What this function now does is record which months the sheet speaks for,
+    which is what apply_filters needs in order to leave the dump out of a
+    month/year total without leaving it out of everything.
     """
-    from django.db.models import F, Q, Sum
+    from django.db.models import F
 
-    plan = SalesRecord.objects.filter(source=SalesRecord.SOURCE_PLAN)
-    invoice = SalesRecord.objects.filter(source=SalesRecord.SOURCE_INVOICE)
-
-    if not plan.exists():
-        # Nothing to reconcile against; the dump is all there is.
-        invoice.update(net_amount=F('measured_amount'))
-        return
-    if not invoice.exists():
-        plan.update(net_amount=F('measured_amount'))
-        invoice.update(net_amount=F('measured_amount'))
-        return
-
-    # What each source says it sold, month by month. The dump is judged on
-    # its POSITIVE lines only: a month holding nothing but credit notes has
-    # a negative total, and "less than the review sheet" is the wrong reason
-    # to reject it -- it never claimed to cover that month at all.
-    inv_positive = {
-        r['period']: float(r['v'] or 0)
-        for r in (invoice.exclude(is_cancelled=True)
-                  .values('period')
-                  .annotate(v=Sum('measured_amount',
-                                  filter=Q(measured_amount__gt=0)))
-                  .order_by())
-    }
-    plan_actual = {
-        r['period']: float(r['v'] or 0)
-        for r in (plan.values('period').annotate(v=Sum('measured_amount'))
-                  .order_by())
-    }
-
-    invoice_months = set()
-    for period, sold in inv_positive.items():
-        if sold <= 0:
-            continue
-        claimed = plan_actual.get(period, 0.0)
-        # No review figure to compare against means nothing contradicts the
-        # dump, so the dump stands.
-        if claimed <= 0 or sold >= claimed * INVOICE_MONTH_COVERAGE:
-            invoice_months.add(period)
-
-    invoice.filter(period__in=invoice_months).update(net_amount=F('measured_amount'))
-    invoice.exclude(period__in=invoice_months).update(net_amount=0)
-    plan.exclude(period__in=invoice_months).update(net_amount=F('measured_amount'))
-    plan.filter(period__in=invoice_months).update(net_amount=0)
+    SalesRecord.objects.update(net_amount=F('measured_amount'))
 
 
-def elected_sources():
-    """-> {month: 'invoice' | 'plan'}, for explaining the election to the user.
+def sheet_months():
+    """Months the review sheet has a figure for.
 
-    Reads the same figures sync_actual_source() elected on, so the note the
-    upload shows cannot drift away from what the dashboard actually did.
+    A month it carries at zero is not one it speaks for: an unstarted month
+    sits in the sheet as an empty cell, and claiming it would silence the
+    dump for a month the sheet never described.
     """
     from django.db.models import Sum
 
-    out = {}
-    for src, name in ((SalesRecord.SOURCE_INVOICE, 'invoice'),
-                      (SalesRecord.SOURCE_PLAN, 'plan')):
-        for r in (SalesRecord.objects.filter(source=src)
-                  .exclude(net_amount=0).values('period')
-                  .annotate(v=Sum('net_amount')).order_by()):
-            if r['period']:
-                out[r['period']] = name
+    return {r['period'] for r in
+            (SalesRecord.objects.filter(source=SalesRecord.SOURCE_PLAN)
+             .values('period').annotate(v=Sum('measured_amount')).order_by())
+            if r['period'] and float(r['v'] or 0) != 0}
+
+
+def elected_sources():
+    """-> {month: 'invoice' | 'plan'} for a month/year view, to explain it.
+
+    Decided by sheet_months(), which is the same thing apply_filters reads,
+    so the note an upload shows cannot drift away from what the dashboard
+    actually does. It used to infer the election from which rows had been
+    zeroed; nothing is zeroed any more, and reading it that way reported
+    every month as coming from both files at once.
+    """
+    covered = sheet_months()
+    out = {m: 'plan' for m in covered}
+    for r in (SalesRecord.objects.filter(source=SalesRecord.SOURCE_INVOICE)
+              .exclude(period__in=covered).values('period').distinct()):
+        if r['period']:
+            out[r['period']] = 'invoice'
     return out

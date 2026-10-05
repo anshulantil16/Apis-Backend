@@ -70,8 +70,14 @@ COLUMN_ALIASES = {
     'mrp':            ['mrp'],
     'gross_weight_kg': ['gross weight in kg', 'gross weight'],
     'net_weight_kg':   ['net weight in kg', 'net weight'],
-    'channel':       ['channel', 'sales channel', 'trade channel', 'route to market',
-                      'gen bus posting group'],
+    # NOT 'gen bus posting group'. That is Business Central's posting group --
+    # DOMESTIC / EXPORT, an accounting classification -- and reading it as the
+    # sales channel put "Domestic" on the channel filter beside the review
+    # sheet's GT and OT, two vocabularies in one list describing different
+    # things. The dump's own channel split is Customer Type (General Trade,
+    # Modern Trade, Super Stockiest, Export, CPC, B2B), which is stored and
+    # filterable under that name.
+    'channel':       ['channel', 'sales channel', 'trade channel', 'route to market'],
     'customer_code': ['customer code', 'customer no', 'party code', 'distributor code',
                       'dealer code', 'buyer code', 'account code'],
     'customer_name': ['customer', 'customer name', 'party name', 'distributor',
@@ -512,7 +518,10 @@ PRE_SALES_DUMP = [
     ('External Doc. No.', True), ('Cust. GST Reg.', True), ('Location', True),
     ('Location State', True), ('Location Gst Reg.', False), ('Global Dim1', False),
     ('Packeging Type', True), ('Item Sub Type', True), ('Currency Code', True),
-    ('Gen. Bus. Posting Group', True), ('Item Code', True), ('Item Name', True),
+    # Read and then deliberately dropped: it is DOMESTIC / EXPORT, an
+    # accounting posting group, and it was being stored as the sales channel.
+    # Use Customer Type for the dump's channel split.
+    ('Gen. Bus. Posting Group', False), ('Item Code', True), ('Item Name', True),
     ('Pack Size', True), ('Batch No.', True), ('PKD', True), ('Use By', True),
     ('Quantity', True), ('Unit Of Measure Code', True), ('HSN Code', True),
     ('Unit Price', True),

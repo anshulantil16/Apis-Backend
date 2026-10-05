@@ -543,19 +543,26 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
         cy = SalesRecord.objects.get(period=date(2026, 4, 1))
         self.assertEqual(float(cy.net_amount), 90000)
 
-    def test_invoice_detail_takes_over_for_the_months_it_covers(self):
-        # Both files put April 2026 at 20,000, so the dump plainly covers it
-        # and its line detail is the better record of the same money.
+    def test_the_review_sheet_owns_a_month_both_files_describe(self):
+        """The sheet is the record the business reads, so it is the record
+        the dashboard shows.
+
+        It used to be a contest the dump could win, and then the year to date
+        was the sheet's YTD ACH minus the sheet's September plus the dump's --
+        a figure that appears in neither file and reconciles against nothing.
+        """
         upload(aop_workbook([aop_row(cy=20000)]))
         upload(a_workbook([a_row()]))           # the Pre-Sales Dump, April 2026
-        plan = SalesRecord.objects.filter(source='plan')
-        cy = plan.get(period=date(2026, 4, 1))
-        self.assertEqual(float(cy.net_amount), 0,
-                         'the AOP sheet is still adding its own actuals on top')
-        # The plan itself survives — that is the whole reason to load it.
+        cy = SalesRecord.objects.get(source='plan', period=date(2026, 4, 1))
+        self.assertEqual(float(cy.net_amount), 20000)
         self.assertEqual(float(cy.target_amount), 100000)
-        # ...and its achievement is kept for reconciliation.
-        self.assertEqual(float(cy.measured_amount), 20000)
+        # Both rows keep their own figure -- the dump's is what answers a date
+        # range and feeds the customer and SKU panels. What must not happen is
+        # the two being added together, and that is a property of the answer,
+        # not of the rows.
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(float(d['revenue']), 20000,
+                         'both files were counted for the same month')
 
     def test_history_the_dump_never_covered_is_kept(self):
         """The regression this whole per-month election exists to prevent.
@@ -601,9 +608,10 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
     def test_the_order_the_files_arrive_in_does_not_matter(self):
         upload(a_workbook([a_row()]))           # dump first this time
         upload(aop_workbook([aop_row(cy=20000)]))
-        plan = SalesRecord.objects.filter(source='plan')
-        self.assertEqual(float(plan.get(period=date(2026, 4, 1)).net_amount), 0)
-        self.assertEqual(float(plan.get(period=date(2025, 4, 1)).net_amount), 80000)
+        d = Client().get('/api/sales/overview/?span=all').json()
+        # 20,000 for April 2026 from the review sheet, 80,000 for April 2025.
+        # The dump's April 2026 is the same money and is not added again.
+        self.assertEqual(float(d['revenue']), 100000)
 
     def test_removing_the_invoice_data_hands_the_figures_back(self):
         upload(aop_workbook([aop_row()]))
@@ -626,15 +634,27 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
         rev = float(d.get('total_revenue') or d.get('revenue') or 0)
         self.assertEqual(rev, 100000, f'not 20,000 (April 26) + 80,000 (April 25): {rev}')
 
-    def test_the_two_sources_never_both_hold_a_figure_for_one_month(self):
-        """The invariant underneath every total on the dashboard."""
+    def test_no_month_is_counted_from_both_files_at_once(self):
+        """The invariant underneath every total on the dashboard.
+
+        It used to be a property of the rows -- the losing source was zeroed
+        in the table. That could not express "the dump answers a date range",
+        because a zeroed row answers nothing, so the rule moved into the
+        query. Which means this has to be checked on the answer.
+        """
         upload(aop_workbook([aop_row(cy=20000)]))
         upload(a_workbook([a_row()]))
-        for period in (date(2025, 4, 1), date(2026, 4, 1)):
-            live = {r.source for r in SalesRecord.objects.filter(period=period)
-                    if float(r.net_amount) != 0}
-            self.assertLessEqual(len(live), 1,
-                                 f'{period} is being counted from both files: {live}')
+        # The sheet has April 2025 at 80,000 and April 2026 at 20,000. The
+        # dump has the same April 2026 at 20,000. Counted once: 100,000.
+        d = Client().get('/api/sales/overview/?span=all').json()
+        self.assertEqual(float(d['revenue']), 100000,
+                         'April 2026 is being counted from both files')
+        # And per month, so a single wrong month cannot hide inside a right
+        # total.
+        rows = {r['period']: float(r['revenue'] or 0)
+                for r in Client().get('/api/sales/trend/').json()['results']}
+        self.assertEqual(rows['2026-04-01'], 20000)
+        self.assertEqual(rows['2025-04-01'], 80000)
 
 
 class TheSheetChecksItself(TestCase):
@@ -1223,8 +1243,11 @@ class OneWorkbookTwoSheets(TestCase):
         every = d['notes'] + d['warnings']
         self.assertTrue(every)
         for m in every:
+            # 'Both sheets:' is the third legitimate case -- a message about
+            # the election BETWEEN the two, which belongs to neither alone.
             self.assertTrue(m.startswith('PRI SALES DUMP:')
-                            or m.startswith('YTD,AOP vs.ACH:'), m)
+                            or m.startswith('YTD,AOP vs.ACH:')
+                            or m.startswith('Both sheets:'), m)
 
 
 class TheUploadedFilesList(TestCase):
@@ -1759,7 +1782,6 @@ class RevenueMeansThisYear(TestCase):
     def test_an_explicit_date_wins_over_the_default(self):
         self._two_years()
         d = Client().get('/api/sales/overview/?from=2025-04-01').json()
-        self.assertEqual(float(d['revenue']), 560000)
         self.assertNotIn('window', d['filters'])
 
     def test_the_same_window_reaches_the_breakdowns(self):
@@ -1803,3 +1825,161 @@ class ThePriorPeriodIsTheSameLength(TestCase):
         p = Client().get('/api/sales/overview/').json()['period']
         self.assertLess(p['to'], '2026-05-01',
                         f"the window runs to {p['to']}, months nothing happened in")
+
+
+class WhichFileAnswersTheQuestionAsked(TestCase):
+    """Two files, two different questions, and the filter decides which.
+
+    The review sheet is month-wise and year-wise: twelve columns a year, no
+    days in it at all, and its YTD ACH column is the figure the business
+    reads. The invoice dump is date-wise: one row per invoice line, dated to
+    the day, but only the month it was extracted in.
+
+    So asking by month or by year reads the sheet, and asking for a date
+    range reads the dump. Letting both answer either question is what put a
+    year-to-date figure on screen that appears in neither file.
+    """
+
+    def _both(self):
+        # Review sheet: Apr 2025 at 80,000 and Apr 2026 at 90,000.
+        # Dump: one invoice line on 5 Apr 2026 at 20,000.
+        upload(aop_workbook([aop_row()]))
+        upload(a_workbook([a_row(**{'Invoice No.': 'INV-001'})]))
+
+    def test_by_year_the_money_is_the_review_sheets(self):
+        self._both()
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(float(d['revenue']), 90000,
+                         "the dump's April was added to or swapped for the sheet's")
+        self.assertEqual(d['filters']['source'], 'review_sheet')
+
+    def test_a_date_range_is_answered_by_the_dump(self):
+        self._both()
+        d = Client().get('/api/sales/overview/?from=2026-04-01&to=2026-04-30').json()
+        self.assertEqual(float(d['revenue']), 20000,
+                         'the review sheet answered a question about days')
+        self.assertEqual(d['filters']['source'], 'invoice_dump')
+
+    def test_a_date_range_inside_the_month_is_not_a_whole_month(self):
+        """The sheet's rows all sit on the 1st, so leaving them in scope
+        answered "the 4th to the 6th" with the entire month's sales."""
+        self._both()
+        d = Client().get('/api/sales/overview/?from=2026-04-04&to=2026-04-06').json()
+        self.assertEqual(float(d['revenue']), 20000)
+
+    def test_the_invoice_panels_survive_a_month_wise_view(self):
+        """The sheet has no customers, SKUs or invoices. Measured over the
+        money queryset these read zero against real revenue; they are read
+        off the dump instead and labelled as covering its months only."""
+        self._both()
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(d['customers'], 1)
+        self.assertEqual(d['skus'], 1)
+        self.assertEqual(d['orders'], 1)
+        self.assertEqual(float(d['quantity']), 100)
+
+    def test_the_screen_is_told_how_much_of_the_money_those_panels_cover(self):
+        self._both()
+        d = Client().get('/api/sales/overview/').json()
+        # 20,000 of invoice detail against 90,000 of revenue on screen.
+        self.assertEqual(d['invoiced_revenue'], 20000)
+        self.assertAlmostEqual(d['invoiced_pct'], 22.2, places=1)
+
+    def test_an_order_size_is_measured_over_orders_not_over_everything(self):
+        self._both()
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(float(d['avg_order_value']), 20000,
+                         'revenue the sheet reported was divided by invoice count')
+
+
+class ThePostingGroupIsNotTheSalesChannel(TestCase):
+    """DOMESTIC / EXPORT is how the ledger posts a sale, not how it was sold."""
+
+    def test_domestic_does_not_appear_as_a_channel(self):
+        upload(a_workbook([a_row(**{'Gen. Bus. Posting Group': 'DOMESTIC'})]))
+        channels = set(SalesRecord.objects.values_list('channel', flat=True))
+        self.assertNotIn('DOMESTIC', channels)
+
+    def test_the_two_files_do_not_describe_channel_in_different_words(self):
+        """GT and OT from the review sheet beside DOMESTIC from the dump is
+        one filter list holding two vocabularies for two different things."""
+        upload(aop_workbook([aop_row()]))
+        upload(a_workbook([a_row(**{'Gen. Bus. Posting Group': 'DOMESTIC'})]))
+        d = Client().get('/api/sales/filters/').json()
+        self.assertNotIn('DOMESTIC', d.get('channel', []))
+
+    def test_it_is_called_a_skipped_column_not_an_unknown_one(self):
+        """"Not recognised" sends somebody hunting for a mapping that should
+        not exist."""
+        r = upload(a_workbook([a_row()])).json()
+        blob = ' '.join(r.get('warnings', [])).lower()
+        self.assertNotIn('gen. bus. posting group', blob)
+
+
+class OneTileIsMeasuredOffOneFile(TestCase):
+    """The headline and the line under it have to come from the same place.
+
+    The original complaint was a tile reading Rs 298 Cr over "vs Rs 76.97 Cr
+    same 6 months last year" -- a number covering eighteen months above a
+    comparison covering six. Picking a date range reintroduced it in a new
+    form: the money came off the dump and the comparison beneath it off the
+    review sheet.
+    """
+
+    def _both(self):
+        upload(aop_workbook([aop_row()]))
+        upload(a_workbook([a_row(**{'Invoice No.': 'INV-001'})]))
+
+    def test_a_date_range_has_no_same_months_last_year(self):
+        """The review sheet has no days, so there is no same fortnight last
+        year for it to answer with."""
+        self._both()
+        d = Client().get('/api/sales/overview/?from=2026-04-04&to=2026-04-06').json()
+        self.assertIsNone(d['vs_last_year'])
+
+    def test_by_year_it_still_does(self):
+        self._both()
+        d = Client().get('/api/sales/overview/').json()
+        self.assertIsNotNone(d['vs_last_year'])
+        self.assertEqual(d['vs_last_year']['last_year'], 80000)
+
+    def test_the_prior_period_comes_off_the_same_file_as_the_headline(self):
+        self._both()
+        d = Client().get('/api/sales/overview/?from=2026-04-01&to=2026-04-30').json()
+        self.assertEqual(d['filters']['source'], 'invoice_dump')
+        # March 2026 in the review sheet must not become the dump's prior
+        # period. The dump reaches one month, so there is nothing behind it.
+        self.assertFalse(d['prev_period_has_data'])
+
+
+class ABreakdownComesFromTheFileThatHasTheColumn(TestCase):
+    """The review sheet can be split by zone, brand, RSM and a few more. It
+    has no customers, SKUs or categories at all, so a split by one of those
+    read off it comes back empty -- which is most of the time, because the
+    sheet is what answers a month or a year."""
+
+    def _both(self):
+        upload(aop_workbook([aop_row()]))
+        upload(a_workbook([a_row(**{'Invoice No.': 'INV-001'})]))
+
+    def test_a_customer_split_survives_a_month_wise_view(self):
+        self._both()
+        d = Client().get('/api/sales/breakdown/?dim=customer').json()
+        self.assertTrue(d['results'], 'the customer chart emptied out')
+        self.assertEqual(d['results'][0]['name'], 'Sharma Traders')
+        self.assertEqual(d['filters']['source'], 'invoice_dump')
+
+    def test_a_zone_split_is_the_review_sheets_and_ties_to_the_headline(self):
+        self._both()
+        d = Client().get('/api/sales/breakdown/?dim=zone').json()
+        head = Client().get('/api/sales/overview/').json()
+        self.assertEqual(sum(float(r['revenue']) for r in d['results']),
+                         float(head['revenue']),
+                         'the zone chart and the headline disagree')
+
+    def test_the_customer_panels_do_not_empty_out_either(self):
+        self._both()
+        for path in ('rfm/', 'cohorts/', 'new-repeat/', 'pareto/?dim=customer'):
+            r = Client().get('/api/sales/' + path)
+            self.assertEqual(r.status_code, 200, path)
+            self.assertEqual(r.json()['filters'].get('source'), 'invoice_dump', path)

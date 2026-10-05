@@ -20,6 +20,7 @@ from ..ingest import (map_headers, parse_date, parse_num, build_template,
 
 from .. import analytics as AN
 from .filters import (DIMENSIONS, apply_filters, apply_dim_filters, _period_bounds,
+                     detail_qs, qs_for_dimension, money_base,
                       with_actuals)
 
 
@@ -37,7 +38,7 @@ class SalesParetoView(SalesIQView):
         if not field:
             return Response({'error': f'Unknown dimension "{key}".',
                              'available': sorted(DIMENSIONS.keys())}, status=400)
-        qs, applied = apply_filters(SalesRecord.objects.all(), request)
+        qs, applied, _dump = qs_for_dimension(request, field)
         data = AN.pareto(qs, field)
         data.update({'dimension': key, 'filters': applied})
         return Response(data)
@@ -49,10 +50,11 @@ class SalesMatrixView(SalesIQView):
         key, field = _dim_or_400(request, 'product')
         if not field:
             return Response({'error': f'Unknown dimension "{key}".'}, status=400)
-        qs, applied = apply_filters(SalesRecord.objects.all(), request)
+        qs, applied, _dump = qs_for_dimension(request, field)
         lo, hi = _period_bounds(qs)
-        base, _ = apply_dim_filters(SalesRecord.objects.all(), request)
-        data = AN.growth_matrix(base, field, lo, hi)
+        # Source-scoped, or the window before this one counts both files for
+        # every month they describe together and every growth figure is wrong.
+        data = AN.growth_matrix(money_base(request, field), field, lo, hi)
         data.update({'dimension': key, 'filters': applied})
         return Response(data)
 
@@ -63,10 +65,9 @@ class SalesMoversView(SalesIQView):
         key, field = _dim_or_400(request, 'state')
         if not field:
             return Response({'error': f'Unknown dimension "{key}".'}, status=400)
-        qs, applied = apply_filters(SalesRecord.objects.all(), request)
+        qs, applied, _dump = qs_for_dimension(request, field)
         lo, hi = _period_bounds(qs)
-        base, _ = apply_dim_filters(SalesRecord.objects.all(), request)
-        data = AN.movers(base, field, lo, hi)
+        data = AN.movers(money_base(request, field), field, lo, hi)
         data.update({'dimension': key, 'filters': applied})
         return Response(data)
 
@@ -107,7 +108,7 @@ class SalesHeatmapView(SalesIQView):
             top = max(3, min(25, int(request.query_params.get('top', 12))))
         except (TypeError, ValueError):
             top = 12
-        qs, applied = apply_filters(SalesRecord.objects.all(), request)
+        qs, applied, _dump = qs_for_dimension(request, field)
         data = AN.heatmap(qs, field, top=top)
         data.update({'dimension': key, 'filters': applied})
         return Response(data)
@@ -115,28 +116,31 @@ class SalesHeatmapView(SalesIQView):
 
 class SalesRFMView(SalesIQView):
     """Recency / Frequency / Monetary customer segmentation."""
+    # Recency, frequency and money per CUSTOMER. The review sheet has none.
     def get(self, request):
-        qs, applied = apply_filters(SalesRecord.objects.all(), request)
+        qs = detail_qs(request)
+        applied = {'source': 'invoice_dump'}
         data = AN.rfm(qs)
         data['filters'] = applied
         return Response(data)
 
 
 class SalesCohortsView(SalesIQView):
-    # A cohort is defined by when a customer first bought, which may be before this year.
+    # A cohort is a group of customers, defined by when they first bought.
+    # The review sheet has no customers at all.
     def get(self, request):
-        qs, applied = apply_filters(SalesRecord.objects.all(), request,
-                                    default_window=False)
+        qs = detail_qs(request)
+        applied = {'source': 'invoice_dump'}
         data = AN.cohorts(qs)
         data['filters'] = applied
         return Response(data)
 
 
 class SalesNewRepeatView(SalesIQView):
-    # Whether a customer is new depends on whether they bought in an earlier year.
+    # New or repeat is a fact about a customer. Invoices only.
     def get(self, request):
-        qs, applied = apply_filters(SalesRecord.objects.all(), request,
-                                    default_window=False)
+        qs = detail_qs(request)
+        applied = {'source': 'invoice_dump'}
         data = AN.new_vs_repeat(qs)
         data['filters'] = applied
         return Response(data)
@@ -146,16 +150,19 @@ class SalesYoYView(SalesIQView):
     """Year-on-year: uses dimension filters but ignores the date window so
     prior years remain visible when the user narrows the range."""
     def get(self, request):
-        base, applied = apply_dim_filters(SalesRecord.objects.all(), request)
-        # Excluded here too: this argument is the full-history set and
-        # does not pass through apply_dim_filters, so it is the one read
-        # that would otherwise still count cancelled invoices.
-        data = AN.year_on_year(SalesRecord.objects.exclude(is_cancelled=True), base)
+        base = money_base(request)
+        applied = {}
+        # Both arguments are source-scoped. The first is the full-history set
+        # and does not pass through apply_dim_filters, so it is also the one
+        # read that would otherwise still count cancelled invoices.
+        data = AN.year_on_year(money_base(request, dims=False), base)
         data['filters'] = applied
         return Response(data)
 
 
 class SalesPacingView(SalesIQView):
+    """How far through the year's plan the business is. Plan and actual both
+    come from the review sheet, so this reads the money queryset."""
     def get(self, request):
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
         data = AN.pacing(qs)
@@ -164,8 +171,10 @@ class SalesPacingView(SalesIQView):
 
 
 class SalesPriceView(SalesIQView):
+    # Realised price is revenue over quantity, and the review sheet carries no quantity.
     def get(self, request):
-        qs, applied = apply_filters(SalesRecord.objects.all(), request)
+        qs = detail_qs(request)
+        applied = {'source': 'invoice_dump'}
         data = AN.price_realisation(qs)
         data['filters'] = applied
         return Response(data)

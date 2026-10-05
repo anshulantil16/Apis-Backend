@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
-from ..models import SalesUpload, SalesRecord
+from ..models import SalesUpload, SalesRecord, sheet_months
 from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       TEXT_FIELDS, NUM_FIELDS, TEXT_MAX)
 
@@ -269,7 +269,7 @@ def financial_year_window(qs):
             fy_label(y))
 
 
-def apply_filters(qs, request, default_window=True):
+def apply_filters(qs, request, default_window=True, money_scope=True):
     """Shared filter parsing (dates + dimensions). Returns (qs, applied dict).
 
     With no date filter given, the window defaults to the CURRENT FINANCIAL
@@ -291,11 +291,38 @@ def apply_filters(qs, request, default_window=True):
 
     `?span=all` turns it off per request, which is how the screen offers "all
     history" without having to name two dates.
+
+    money_scope=False keeps both files in scope regardless of the dates. The
+    panels built out of invoice detail -- customers, SKUs, order sizes --
+    pass it, because they are reading the dump either way and the rule above
+    would only ever take rows away from them.
     """
     qs, applied = apply_dim_filters(qs, request)
     d_from = parse_date(request.query_params.get('from'))
     d_to = parse_date(request.query_params.get('to'))
     span = (request.query_params.get('span') or '').strip().lower()
+
+    # A date range can only be answered by the dump. The review sheet has no
+    # days in it -- every one of its rows is a month, stored on the 1st -- so
+    # a question like "5th to the 12th of September" has no meaning there,
+    # and leaving its rows in scope answered that question with a whole
+    # month's sales. Asking by month or by year reads the review sheet, which
+    # is the record the business itself keeps.
+    if money_scope and (d_from or d_to):
+        qs = qs.filter(source=SalesRecord.SOURCE_INVOICE)
+        applied['source'] = 'invoice_dump'
+    elif money_scope:
+        # By month or by year the review sheet answers, for every month it
+        # speaks for. The dump's rows for those months are left out of the
+        # total rather than zeroed -- they are still the only record of who
+        # bought what, and detail_qs below reads them.
+        covered = sheet_months()
+        if covered:
+            qs = qs.exclude(source=SalesRecord.SOURCE_INVOICE, period__in=covered)
+        # Said out loud rather than left to be inferred: which of the two
+        # files a figure came from is the first thing anyone asks when a
+        # number looks wrong, and the screen could not answer it.
+        applied['source'] = 'review_sheet' if covered else 'invoice_dump'
 
     if default_window and span != 'all' and not d_from and not d_to:
         fy_from, fy_to, label = financial_year_window(qs)
@@ -314,6 +341,72 @@ def apply_filters(qs, request, default_window=True):
         qs = qs.filter(order_date__lte=d_to)
         applied['to'] = d_to.isoformat()
     return qs, applied
+
+
+# What the review sheet can be grouped by. Everything else -- customer, SKU,
+# city, batch, HSN, the rest of the dump's 70 columns -- exists only on an
+# invoice, so a breakdown by it has to be read off the dump whatever window
+# is on screen. Taken from the sheet's own column contract so the two cannot
+# drift apart.
+def sheet_fields():
+    from ..aop import DIMENSIONS as AOP_DIMENSIONS
+    return {f for f in AOP_DIMENSIONS if f != 'sfo_count'}
+
+
+def money_base(request, field=None, dims=True, dump_only=False):
+    """Dimension filters only -- no date window -- but source-scoped.
+
+    For the comparisons that deliberately reach outside the window on screen:
+    the prior period, this year against the same months last year, the growth
+    quadrant and the movers list. They all need history, and they all need it
+    counted once. Reaching for apply_dim_filters directly gave them history
+    with both files in it, so every month the two describe together was
+    counted twice -- in exactly the comparisons nobody checks by hand.
+    """
+    base, _ = apply_dim_filters(SalesRecord.objects.all(), request)
+    if not dims:
+        # Everything, still source-scoped and still minus cancelled rows --
+        # the "whole company" side of a year-on-year comparison.
+        base = (SalesRecord.objects.exclude(is_cancelled=True)
+                .exclude(is_not_sales=True).exclude(zone__in=NOT_SALES_ZONES))
+    if dump_only or (field is not None and field not in sheet_fields()):
+        return base.filter(source=SalesRecord.SOURCE_INVOICE)
+    covered = sheet_months()
+    if covered:
+        base = base.exclude(source=SalesRecord.SOURCE_INVOICE, period__in=covered)
+    return base
+
+
+def qs_for_dimension(request, field):
+    """-> (queryset, applied, from_dump) for a breakdown by `field`.
+
+    The review sheet can be split by channel, head, RSM, ASM, zone, state,
+    item and brand, and by nothing else. Customer, SKU, category, city,
+    batch, HSN and the rest of the dump's seventy columns exist only on an
+    invoice, so a breakdown by one of those has to come off the dump whatever
+    window is on screen -- otherwise it empties out the moment the money is
+    being read from the sheet, which is most of the time.
+    """
+    if field in sheet_fields():
+        qs, applied = apply_filters(SalesRecord.objects.all(), request)
+        return qs, applied, False
+    qs, applied = apply_filters(SalesRecord.objects.all(), request,
+                                money_scope=False)
+    applied['source'] = 'invoice_dump'
+    return qs.filter(source=SalesRecord.SOURCE_INVOICE), applied, True
+
+
+def detail_qs(request):
+    """The invoice dump alone, under the current filters.
+
+    Everything the review sheet has none of is read through here: customers,
+    SKUs, products below brand, invoice counts, order sizes. Those panels
+    cover only the months the dump reaches, which is why the overview reports
+    `invoiced_pct` beside them -- what share of the money on screen they
+    actually describe.
+    """
+    qs, _ = apply_filters(SalesRecord.objects.all(), request, money_scope=False)
+    return qs.filter(source=SalesRecord.SOURCE_INVOICE)
 
 
 def _period_bounds(qs):
