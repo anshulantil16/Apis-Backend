@@ -15,12 +15,42 @@ _OTP_MAX_ATTEMPTS = 5   # per issued code, then it is burned
 
 
 def _salesiq_allowed_emails():
-    """Super admin plus anyone explicitly listed in SALESIQ_ADMIN_EMAILS.
-    There is intentionally NO "any @apisindia.com" fallback here — unlike the
-    PMS Simulator — because this exposes company-wide revenue."""
+    """Who may sign in to SalesIQ.
+
+    Three sources, and the first is the one anybody actually uses:
+
+    * **anyone granted SalesIQ in the Admin Console.** The portal already has
+      a per-person switch for this tool, super-admin-only, sitting in the same
+      grid as every other tool. Until this read it, granting SalesIQ there put
+      the tile on somebody's dashboard and then this login turned them away
+      with "not authorised for SalesIQ" — two allowlists that did not know
+      about each other, and no screen anywhere that explained the second one.
+      The console is now the single place.
+    * SALESIQ_ADMIN_EMAILS, for anyone who needs this and is not in the portal
+      directory at all.
+    * the super admin, hard-coded, so there is always a way in.
+
+    There is still intentionally NO "any @apisindia.com" fallback — unlike the
+    PMS Simulator — because this exposes company-wide revenue. Every address
+    here is one a super admin chose, in the console or in the environment.
+    """
     extra = [e.strip().lower() for e in
              os.getenv('SALESIQ_ADMIN_EMAILS', '').split(',') if e.strip()]
-    return set([SALESIQ_SUPER_ADMIN] + extra)
+    allowed = set([SALESIQ_SUPER_ADMIN] + extra)
+
+    # Inactive accounts are excluded: disabling somebody's sign-in in the
+    # console has to disable it here too, or "disable sign-in" is a lie.
+    try:
+        from accounts.models import AppKey, PortalUser
+        for email, apps, is_super in PortalUser.objects.filter(
+                is_active=True).values_list('email', 'app_access', 'is_superadmin'):
+            if is_super or AppKey.SALESIQ in (apps or []):
+                allowed.add((email or '').strip().lower())
+    except Exception:
+        # The portal tables not being there must not lock out the super
+        # admin, who is in the set above regardless.
+        pass
+    return allowed
 
 
 def _mask(email):

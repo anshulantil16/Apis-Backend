@@ -1554,3 +1554,57 @@ class ADarkBreakdownSaysWhyItIsDark(TestCase):
         d = Client().get('/api/sales/filters/').json()
         self.assertEqual(sorted(x['dim'] for x in d['absent_detail']),
                          sorted(d['absent_dimensions']))
+
+
+class WhoMaySignInToSalesIQ(TestCase):
+    """Granting SalesIQ in the Admin Console put the tile on somebody's
+    dashboard and then this login turned them away: "This email is not
+    authorised for SalesIQ." Two allowlists that did not know about each
+    other, and no screen anywhere that explained the second one."""
+
+    def setUp(self):
+        from accounts.models import AppKey, PortalUser
+        self.PortalUser, self.AppKey = PortalUser, AppKey
+        self.granted = PortalUser.objects.create(
+            email='rsm@apisindia.com', name='RSM', employee_code='E1',
+            is_active=True, app_access=[AppKey.SALESIQ])
+        self.other = PortalUser.objects.create(
+            email='nobody@apisindia.com', name='Nobody', employee_code='E2',
+            is_active=True, app_access=[AppKey.HELPDESK])
+
+    def send(self, email):
+        return Client().post('/api/sales/login/',
+                             {'action': 'send_otp', 'email': email})
+
+    def test_the_console_grant_is_enough(self):
+        self.assertEqual(self.send('rsm@apisindia.com').status_code, 200)
+
+    def test_a_colleague_without_the_grant_is_still_refused(self):
+        """A company address is not access. This is company-wide revenue."""
+        r = self.send('nobody@apisindia.com')
+        self.assertEqual(r.status_code, 403)
+        self.assertIn('not authorised', r.json()['error'])
+
+    def test_disabling_sign_in_disables_it_here_too(self):
+        """Otherwise "disable sign-in" in the console is a lie."""
+        self.granted.is_active = False
+        self.granted.save(update_fields=['is_active'])
+        self.assertEqual(self.send('rsm@apisindia.com').status_code, 403)
+
+    def test_revoking_the_tool_revokes_the_login(self):
+        self.granted.app_access = []
+        self.granted.save(update_fields=['app_access'])
+        self.assertEqual(self.send('rsm@apisindia.com').status_code, 403)
+
+    def test_a_portal_superadmin_gets_in(self):
+        self.other.is_superadmin = True
+        self.other.save(update_fields=['is_superadmin'])
+        self.assertEqual(self.send('nobody@apisindia.com').status_code, 200)
+
+    def test_the_hard_coded_super_admin_always_gets_in(self):
+        """Not in the portal tables at all here, and still in."""
+        from sales.views.auth import SALESIQ_SUPER_ADMIN
+        self.assertEqual(self.send(SALESIQ_SUPER_ADMIN).status_code, 200)
+
+    def test_an_outsider_is_refused(self):
+        self.assertEqual(self.send('attacker@gmail.com').status_code, 403)
