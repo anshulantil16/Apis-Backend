@@ -10,6 +10,7 @@ import openpyxl
 from django.db.models import Sum, Count, Min, Max
 from django.http import HttpResponse
 from rest_framework.views import APIView
+from .auth import SalesIQAdminView, SalesIQView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
@@ -29,7 +30,7 @@ def _dim_or_400(request, default='state'):
     return key, field
 
 
-class SalesParetoView(APIView):
+class SalesParetoView(SalesIQView):
     """80/20 concentration with ABC classification."""
     def get(self, request):
         key, field = _dim_or_400(request, 'customer')
@@ -42,7 +43,7 @@ class SalesParetoView(APIView):
         return Response(data)
 
 
-class SalesMatrixView(APIView):
+class SalesMatrixView(SalesIQView):
     """Revenue-vs-growth quadrant (star / cash cow / rising / watch)."""
     def get(self, request):
         key, field = _dim_or_400(request, 'product')
@@ -56,7 +57,7 @@ class SalesMatrixView(APIView):
         return Response(data)
 
 
-class SalesMoversView(APIView):
+class SalesMoversView(SalesIQView):
     """Biggest absolute gainers and losers vs the prior equal window."""
     def get(self, request):
         key, field = _dim_or_400(request, 'state')
@@ -70,7 +71,7 @@ class SalesMoversView(APIView):
         return Response(data)
 
 
-class SalesAnomaliesView(APIView):
+class SalesAnomaliesView(SalesIQView):
     def get(self, request):
         try:
             z = max(1.0, min(4.0, float(request.query_params.get('z', 2.0))))
@@ -83,7 +84,7 @@ class SalesAnomaliesView(APIView):
         return Response(data)
 
 
-class SalesSeasonalityView(APIView):
+class SalesSeasonalityView(SalesIQView):
     def get(self, request):
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
         # Averaging October over a year that has run and one that has not
@@ -93,7 +94,7 @@ class SalesSeasonalityView(APIView):
         return Response(data)
 
 
-class SalesHeatmapView(APIView):
+class SalesHeatmapView(SalesIQView):
     def get(self, request):
         key, field = _dim_or_400(request, 'state')
         if not field:
@@ -108,7 +109,7 @@ class SalesHeatmapView(APIView):
         return Response(data)
 
 
-class SalesRFMView(APIView):
+class SalesRFMView(SalesIQView):
     """Recency / Frequency / Monetary customer segmentation."""
     def get(self, request):
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
@@ -117,7 +118,7 @@ class SalesRFMView(APIView):
         return Response(data)
 
 
-class SalesCohortsView(APIView):
+class SalesCohortsView(SalesIQView):
     def get(self, request):
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
         data = AN.cohorts(qs)
@@ -125,7 +126,7 @@ class SalesCohortsView(APIView):
         return Response(data)
 
 
-class SalesNewRepeatView(APIView):
+class SalesNewRepeatView(SalesIQView):
     def get(self, request):
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
         data = AN.new_vs_repeat(qs)
@@ -133,7 +134,7 @@ class SalesNewRepeatView(APIView):
         return Response(data)
 
 
-class SalesYoYView(APIView):
+class SalesYoYView(SalesIQView):
     """Year-on-year: uses dimension filters but ignores the date window so
     prior years remain visible when the user narrows the range."""
     def get(self, request):
@@ -146,7 +147,7 @@ class SalesYoYView(APIView):
         return Response(data)
 
 
-class SalesPacingView(APIView):
+class SalesPacingView(SalesIQView):
     def get(self, request):
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
         data = AN.pacing(qs)
@@ -154,7 +155,7 @@ class SalesPacingView(APIView):
         return Response(data)
 
 
-class SalesPriceView(APIView):
+class SalesPriceView(SalesIQView):
     def get(self, request):
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
         data = AN.price_realisation(qs)

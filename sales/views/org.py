@@ -11,6 +11,7 @@ RSM and ASM but no head, and an empty root labelled "" is noise, not structure.
 from django.db.models import Count, Max, Sum
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from .auth import SalesIQAdminView, SalesIQView
 
 from ..ingest import is_vacant
 from ..models import SalesRecord
@@ -54,7 +55,7 @@ def _finish(node):
     return node
 
 
-class SalesOrgView(APIView):
+class SalesOrgView(SalesIQView):
     """GET — the reporting tree with each level's sales rolled up into it.
 
     `?levels=sales_head,rsm,asm` to change the shape; the default is the full

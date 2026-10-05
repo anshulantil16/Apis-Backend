@@ -10,7 +10,27 @@ import io
 import openpyxl
 from datetime import date, datetime
 
-from django.test import Client, TestCase
+from django.test import Client as RawClient, TestCase as _TestCase
+
+
+class Client(RawClient):
+    """A signed-in SalesIQ owner.
+
+    Every endpoint in this app now requires a session (see
+    views/auth.SalesIQView); these tests are about what the figures say, not
+    about the gate, so they get one by default. The two classes that ARE
+    about the gate use RawClient, which carries no session.
+    """
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        from sales.views.auth import SALESIQ_SUPER_ADMIN, issue_session
+        self.defaults['HTTP_X_SALESIQ_SESSION'] = issue_session(SALESIQ_SUPER_ADMIN)
+
+
+class TestCase(_TestCase):
+    """so `self.client` is signed in too."""
+    client_class = Client
 
 from sales import aop as AOP
 
@@ -1608,3 +1628,92 @@ class WhoMaySignInToSalesIQ(TestCase):
 
     def test_an_outsider_is_refused(self):
         self.assertEqual(self.send('attacker@gmail.com').status_code, 403)
+
+
+class SalesIQIsNotOpenToTheInternet(TestCase):
+    """Every endpoint inherited APIView, which is no check at all: revenue,
+    customers, the sales hierarchy and every invoice line answered anyone who
+    knew the URL. The login screen gated the page, and a page is not a gate."""
+
+    READS = ['overview', 'breakdown', 'trend', 'forecast', 'filters', 'insights',
+             'uploads', 'pareto', 'matrix', 'movers', 'anomalies', 'seasonality',
+             'heatmap', 'rfm', 'cohorts', 'new-repeat', 'yoy', 'pacing', 'price',
+             'org', 'export', 'template']
+
+    def test_not_one_of_them_answers_a_stranger(self):
+        c = RawClient()
+        for e in self.READS:
+            self.assertEqual(c.get(f'/api/sales/{e}/').status_code, 401,
+                             f'/{e}/ answered without a session')
+
+    def test_nor_do_the_two_that_change_things(self):
+        c = RawClient()
+        self.assertEqual(c.post('/api/sales/upload/', {}).status_code, 401)
+        self.assertEqual(c.delete('/api/sales/uploads/?id=1').status_code, 401)
+
+    def test_a_made_up_token_is_not_a_session(self):
+        c = RawClient()
+        r = c.get('/api/sales/overview/', HTTP_X_SALESIQ_SESSION='not-a-real-token')
+        self.assertEqual(r.status_code, 401)
+
+
+class OnlyTheOwnerChangesTheData(TestCase):
+    """Verifying an OTP answered 'role': 'super_admin' to everybody, hard-
+    coded — the one person who owns this data and anybody granted read access
+    in the console got the same string, so the page handed both of them the
+    upload and delete controls."""
+
+    def setUp(self):
+        from accounts.models import AppKey, PortalUser
+        from sales.views.auth import SALESIQ_SUPER_ADMIN, issue_session
+        self.owner_email = SALESIQ_SUPER_ADMIN
+        PortalUser.objects.create(
+            email='reader@apisindia.com', name='Reader', employee_code='E1',
+            is_active=True, app_access=[AppKey.SALESIQ])
+        self.owner = {'HTTP_X_SALESIQ_SESSION': issue_session(SALESIQ_SUPER_ADMIN)}
+        self.reader = {'HTTP_X_SALESIQ_SESSION': issue_session('reader@apisindia.com')}
+
+    def test_a_reader_reads(self):
+        self.assertEqual(
+            Client().get('/api/sales/overview/', **self.reader).status_code, 200)
+
+    def test_a_reader_cannot_upload(self):
+        r = Client().post('/api/sales/upload/', {}, **self.reader)
+        self.assertEqual(r.status_code, 403)
+        self.assertIn('read-only', r.json()['error'])
+
+    def test_a_reader_cannot_delete(self):
+        r = Client().delete('/api/sales/uploads/?id=1', **self.reader)
+        self.assertEqual(r.status_code, 403)
+
+    def test_a_reader_may_still_see_which_files_are_loaded(self):
+        """That is the provenance of every figure on the screen."""
+        self.assertEqual(
+            Client().get('/api/sales/uploads/', **self.reader).status_code, 200)
+
+    def test_the_owner_may_upload(self):
+        """Reaches the view rather than the gate -- 400 for an empty body."""
+        r = Client().post('/api/sales/upload/', {}, **self.owner)
+        self.assertNotIn(r.status_code, (401, 403))
+
+    def test_the_login_hands_back_the_real_role(self):
+        from django.core.cache import cache
+        for email, expected in ((self.owner_email, 'super_admin'),
+                                ('reader@apisindia.com', 'viewer')):
+            cache.set(f'salesiq_otp_{email}', {'code': '123456', 'attempts': 0}, 300)
+            d = Client().post('/api/sales/login/', {
+                'action': 'verify_otp', 'email': email, 'otp': '123456'}).json()
+            self.assertEqual(d['role'], expected, email)
+            self.assertEqual(d['can_edit'], expected == 'super_admin')
+            self.assertTrue(d['token'])
+
+    def test_the_token_it_issues_actually_works(self):
+        from django.core.cache import cache
+        cache.set('salesiq_otp_reader@apisindia.com',
+                  {'code': '123456', 'attempts': 0}, 300)
+        d = Client().post('/api/sales/login/', {
+            'action': 'verify_otp', 'email': 'reader@apisindia.com',
+            'otp': '123456'}).json()
+        r = Client().get('/api/sales/overview/',
+                         HTTP_X_SALESIQ_SESSION=d['token'])
+        self.assertEqual(r.status_code, 200)

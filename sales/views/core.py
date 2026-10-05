@@ -7,6 +7,7 @@ import openpyxl
 from django.db.models import Count, Max, Min, Q, Sum
 from django.http import HttpResponse
 from rest_framework.views import APIView
+from .auth import SalesIQAdminView, SalesIQView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
@@ -26,7 +27,7 @@ from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters,
                       NOT_SALES_ZONES, with_actuals, comparable_window,
                       same_months_last_year)
 
-class SalesTemplateView(APIView):
+class SalesTemplateView(SalesIQView):
     def get(self, request):
         buf = build_template()
         resp = HttpResponse(
@@ -285,7 +286,7 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
     })
 
 
-class SalesUploadView(APIView):
+class SalesUploadView(SalesIQAdminView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
@@ -724,7 +725,7 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
     })
 
 
-class SalesOverviewView(APIView):
+class SalesOverviewView(SalesIQView):
     """Headline KPIs + comparison against the preceding equal-length window."""
 
     def get(self, request):
@@ -857,7 +858,7 @@ class SalesOverviewView(APIView):
         })
 
 
-class SalesBreakdownView(APIView):
+class SalesBreakdownView(SalesIQView):
     """Group by any whitelisted dimension. `?dim=state&metric=revenue&limit=10`"""
 
     def get(self, request):
@@ -933,7 +934,7 @@ class SalesBreakdownView(APIView):
         })
 
 
-class SalesTrendView(APIView):
+class SalesTrendView(SalesIQView):
     """Monthly time series, with target and a cumulative running total."""
 
     def get(self, request):
@@ -986,7 +987,7 @@ class SalesTrendView(APIView):
         })
 
 
-class SalesForecastView(APIView):
+class SalesForecastView(SalesIQView):
     """Forecast future monthly revenue from the filtered history."""
 
     def get(self, request):
@@ -1024,7 +1025,7 @@ class SalesForecastView(APIView):
         return Response(result)
 
 
-class SalesFiltersView(APIView):
+class SalesFiltersView(SalesIQView):
     """Distinct values for every filter, so the UI can populate its dropdowns."""
 
     def get(self, request):
@@ -1088,7 +1089,7 @@ def _declared_dimension_keys():
     return out
 
 
-class SalesInsightsView(APIView):
+class SalesInsightsView(SalesIQView):
     """Auto-generated written observations — the 'so what' the numbers imply.
 
     Kept server-side so the same wording appears everywhere the data is shown."""
@@ -1232,7 +1233,7 @@ class SalesInsightsView(APIView):
         return Response({'insights': insights, 'filters': applied})
 
 
-class SalesUploadsView(APIView):
+class SalesUploadsView(SalesIQView):
     """List uploads; delete one (rolls back a bad file) or all."""
 
     def get(self, request):
@@ -1250,6 +1251,10 @@ class SalesUploadsView(APIView):
             'count': SalesUpload.objects.count()})
 
     def delete(self, request):
+        # The one destructive action in SalesIQ. Readers may see which files
+        # are loaded -- that is the provenance of every figure on the screen
+        # -- but not remove them.
+        self.require_owner(request)
         up_id = request.query_params.get('id')
         if up_id:
             try:
@@ -1270,7 +1275,7 @@ class SalesUploadsView(APIView):
         return Response({'message': f'Cleared all sales data ({n:,} row(s)).', 'deleted': n})
 
 
-class SalesExportView(APIView):
+class SalesExportView(SalesIQView):
     """Export the current filtered view as Excel — summary + per-dimension sheets."""
 
     def get(self, request):
