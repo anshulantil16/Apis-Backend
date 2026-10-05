@@ -239,11 +239,74 @@ def apply_dim_filters(qs, request):
     return qs, applied
 
 
-def apply_filters(qs, request):
-    """Shared filter parsing (dates + dimensions). Returns (qs, applied dict)."""
+def latest_financial_year(qs):
+    """The financial year the data actually reaches, as its opening year.
+
+    Read from the newest month carrying a measured figure rather than from
+    today's clock. A file exported in March and opened in April still
+    describes the year it describes, and a test fixture does not change
+    meaning depending on the day it is run.
+    """
+    from django.db.models import Max as _Max
+    from ..analytics import financial_year
+
+    newest = qs.exclude(measured_amount=0).aggregate(d=_Max('period'))['d']
+    return financial_year(newest) if newest else None
+
+
+def financial_year_window(qs):
+    """-> (1 April, 31 March, label) for the year the data reaches.
+
+    (None, None, None) when nothing is loaded.
+    """
+    from ..analytics import FY_START_MONTH, fy_label
+
+    y = latest_financial_year(qs)
+    if y is None:
+        return None, None, None
+    return (date(y, FY_START_MONTH, 1),
+            date(y + 1, FY_START_MONTH, 1) - timedelta(days=1),
+            fy_label(y))
+
+
+def apply_filters(qs, request, default_window=True):
+    """Shared filter parsing (dates + dimensions). Returns (qs, applied dict).
+
+    With no date filter given, the window defaults to the CURRENT FINANCIAL
+    YEAR rather than to everything in the table.
+
+    Both files hold more than one year -- the review sheet carries last year's
+    actuals beside this year's so the dashboard can show growth -- and summing
+    the lot gave a headline of Rs 298 crore labelled "revenue", under a
+    subtitle comparing it with six months of last year. It was eighteen
+    months of two financial years standing where the business reads its year
+    to date, and it did not match the figure the business has in front of it:
+    the review sheet's own YTD ACH column.
+
+    The point is that one default reaches every endpoint at once -- the
+    headline, the breakdowns, the rankings, the export -- so they all describe
+    the same stretch of time. Views that exist to look ACROSS years (the trend
+    line, the forecast, growth and seasonality) pass default_window=False,
+    because for them history is the subject rather than noise.
+
+    `?span=all` turns it off per request, which is how the screen offers "all
+    history" without having to name two dates.
+    """
     qs, applied = apply_dim_filters(qs, request)
     d_from = parse_date(request.query_params.get('from'))
     d_to = parse_date(request.query_params.get('to'))
+    span = (request.query_params.get('span') or '').strip().lower()
+
+    if default_window and span != 'all' and not d_from and not d_to:
+        fy_from, fy_to, label = financial_year_window(qs)
+        if fy_from:
+            d_from, d_to = fy_from, fy_to
+            # Flagged so the screen can say which year it is showing and
+            # offer to widen it. A default nobody can see is a default
+            # nobody can correct.
+            applied['window'] = {'basis': 'financial_year', 'label': label,
+                                 'from': fy_from.isoformat(),
+                                 'to': fy_to.isoformat()}
     if d_from:
         qs = qs.filter(order_date__gte=d_from)
         applied['from'] = d_from.isoformat()
@@ -254,7 +317,20 @@ def apply_filters(qs, request):
 
 
 def _period_bounds(qs):
-    agg = qs.aggregate(lo=models_min('order_date'), hi=models_max('order_date'))
+    """The window the data actually covers: months something happened in.
+
+    A financial year is loaded with twelve months of plan the day it opens,
+    so from April the table holds rows for months still ahead of the
+    business -- a target, and nothing else. Those rows carry an order_date,
+    so max() over them put the end of "the current window" in February 2027.
+
+    Everything measured from these bounds then compared unlike things. The
+    prior-period figure under the revenue tile ran eleven months back
+    against six months of sales and called the difference growth; the growth
+    quadrant and the movers list split the same way.
+    """
+    agg = (qs.exclude(period__in=pending_months(qs))
+             .aggregate(lo=models_min('order_date'), hi=models_max('order_date')))
     return agg['lo'], agg['hi']
 
 

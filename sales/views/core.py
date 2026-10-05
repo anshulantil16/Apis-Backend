@@ -937,8 +937,10 @@ class SalesBreakdownView(SalesIQView):
 class SalesTrendView(SalesIQView):
     """Monthly time series, with target and a cumulative running total."""
 
+    # The whole point of a trend line is the months before this year.
     def get(self, request):
-        qs, applied = apply_filters(SalesRecord.objects.all(), request)
+        qs, applied = apply_filters(SalesRecord.objects.all(), request,
+                                    default_window=False)
         rows = (qs.values('period')
                   .annotate(revenue=Sum('net_amount'), quantity=Sum('quantity'),
                             measured=Sum('measured_amount'),
@@ -990,6 +992,7 @@ class SalesTrendView(SalesIQView):
 class SalesForecastView(SalesIQView):
     """Forecast future monthly revenue from the filtered history."""
 
+    # A forecast is fitted on history; six months of it is not enough.
     def get(self, request):
         try:
             periods = max(1, min(24, int(request.query_params.get('periods', 6))))
@@ -998,7 +1001,8 @@ class SalesForecastView(SalesIQView):
         metric = (request.query_params.get('metric') or 'revenue').strip().lower()
         agg_field = 'quantity' if metric == 'quantity' else 'net_amount'
 
-        qs, applied = apply_filters(SalesRecord.objects.all(), request)
+        qs, applied = apply_filters(SalesRecord.objects.all(), request,
+                                    default_window=False)
         rows = (with_actuals(qs).values('period')
                 .annotate(v=Sum(agg_field)).order_by('period'))
         points = [(r['period'], float(r['v'] or 0)) for r in rows]

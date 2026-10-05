@@ -620,7 +620,9 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
         # avoid double counting.
         upload(aop_workbook([aop_row(cy=20000)]))
         upload(a_workbook([a_row()]))           # 20,000 taxable, April 2026
-        d = Client().get('/api/sales/overview/').json()
+        # span=all because this is a claim about the whole file, and the
+        # dashboard now defaults to the current financial year.
+        d = Client().get('/api/sales/overview/?span=all').json()
         rev = float(d.get('total_revenue') or d.get('revenue') or 0)
         self.assertEqual(rev, 100000, f'not 20,000 (April 26) + 80,000 (April 25): {rev}')
 
@@ -672,7 +674,7 @@ class TheSheetChecksItself(TestCase):
         d = upload(aop_workbook([aop_row(**{'MTD SEC SALES': 45000})])).json()
         blob = ' '.join(d['notes'])
         self.assertIn('SEC SALES', blob)
-        rev = float(Client().get('/api/sales/overview/').json()['revenue'])
+        rev = float(Client().get('/api/sales/overview/?span=all').json()['revenue'])
         self.assertEqual(rev, 170000, 'secondary sales were added to primary')
 
 
@@ -805,13 +807,19 @@ class AchievementIsComparedLikeForLike(TestCase):
         b = Client().get('/api/sales/overview/').json()['achievement_basis']
         self.assertNotIn('2026-05', str(b['to']), 'an unstarted month was compared')
 
-    def test_the_headline_totals_are_still_the_real_totals(self):
-        """The revenue and target KPIs keep their full values -- they are
-        just no longer each other's denominator."""
+    def test_the_headline_is_this_year_not_both_years(self):
+        """Revenue reads the current financial year. Last year is loaded so
+        growth can be shown, not so it can be added to this year's sales."""
         self._two_years()
         d = Client().get('/api/sales/overview/').json()
-        self.assertEqual(float(d['revenue']), 560000)      # 500k last yr + 60k this
+        self.assertEqual(float(d['revenue']), 60000,
+                         "last year's 500,000 was added to this year")
         self.assertEqual(float(d['target']), 200000)       # Apr + May plan
+
+    def test_the_whole_file_is_still_reachable(self):
+        self._two_years()
+        d = Client().get('/api/sales/overview/?span=all').json()
+        self.assertEqual(float(d['revenue']), 560000)      # 500k last yr + 60k this
 
     def test_the_basis_says_which_months_were_compared(self):
         self._two_years()
@@ -1717,3 +1725,81 @@ class OnlyTheOwnerChangesTheData(TestCase):
         r = Client().get('/api/sales/overview/',
                          HTTP_X_SALESIQ_SESSION=d['token'])
         self.assertEqual(r.status_code, 200)
+
+
+class RevenueMeansThisYear(TestCase):
+    """What "revenue" is, when the file holds more than one year of it.
+
+    Both primary files reach back further than the year in progress: the
+    review sheet carries last year's actuals beside this year's so the
+    dashboard can show growth. Every endpoint totalled the lot, so the
+    headline read Rs 298 crore -- eighteen months of two financial years --
+    under a subtitle comparing it with six months of last year, and it
+    matched nothing in the review sheet the business actually reads.
+    """
+
+    def _two_years(self):
+        # 500,000 last year, 60,000 this April against a 100,000 plan.
+        upload(aop_workbook([aop_row(aop=100000, cy=60000, ly=500000)]))
+
+    def test_the_window_defaults_to_the_financial_year(self):
+        self._two_years()
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(float(d['revenue']), 60000)
+
+    def test_the_screen_is_told_which_year_it_is_showing(self):
+        """A default nobody can see is a default nobody can correct."""
+        self._two_years()
+        w = Client().get('/api/sales/overview/').json()['filters']['window']
+        self.assertEqual(w['basis'], 'financial_year')
+        self.assertEqual(w['label'], 'FY26-27')
+        self.assertEqual(w['from'], '2026-04-01')
+        self.assertEqual(w['to'], '2027-03-31')
+
+    def test_an_explicit_date_wins_over_the_default(self):
+        self._two_years()
+        d = Client().get('/api/sales/overview/?from=2025-04-01').json()
+        self.assertEqual(float(d['revenue']), 560000)
+        self.assertNotIn('window', d['filters'])
+
+    def test_the_same_window_reaches_the_breakdowns(self):
+        """The headline and the tables under it have to describe the same
+        stretch of time, or one of them is lying about the other."""
+        self._two_years()
+        d = Client().get('/api/sales/breakdown/?dim=zone').json()
+        self.assertEqual(sum(float(r['revenue']) for r in d['results']), 60000)
+
+    def test_the_trend_line_still_sees_last_year(self):
+        """History is the subject of a trend chart, not noise around it."""
+        self._two_years()
+        d = Client().get('/api/sales/trend/').json()
+        months = [r['period'] for r in d['results']]
+        self.assertIn('2025-04-01', str(months), f'last year fell off the chart: {months}')
+
+    def test_growth_against_last_year_survives_the_default(self):
+        self._two_years()
+        ly = Client().get('/api/sales/overview/').json()['vs_last_year']
+        self.assertEqual(ly['this_year'], 60000)
+        self.assertEqual(ly['last_year'], 500000)
+
+    def test_an_empty_table_does_not_invent_a_window(self):
+        d = Client().get('/api/sales/overview/').json()
+        self.assertNotIn('window', d['filters'])
+
+
+class ThePriorPeriodIsTheSameLength(TestCase):
+    """A month that has only a plan is not a month that has happened.
+
+    A financial year is loaded with twelve months of plan the day it opens,
+    and those rows carry a date. Measuring the current window off them put
+    its end in the following February, so "the preceding window of equal
+    length" ran eleven months back and was compared against six months of
+    sales -- reported as growth.
+    """
+
+    def test_an_unstarted_month_does_not_stretch_the_window(self):
+        upload(aop_workbook([aop_row(aop=100000, cy=60000, ly=500000,
+                                     **{'Mar-27 AOP': 100000})]))
+        p = Client().get('/api/sales/overview/').json()['period']
+        self.assertLess(p['to'], '2026-05-01',
+                        f"the window runs to {p['to']}, months nothing happened in")
