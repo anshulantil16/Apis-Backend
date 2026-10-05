@@ -1519,3 +1519,38 @@ class OneQuestionGetsOneAnswer(TestCase):
         though it is missing target."""
         self.assertEqual(
             Client().get('/api/sales/overview/').json()['achievement_pct'], 70.0)
+
+
+class ADarkBreakdownSaysWhyItIsDark(TestCase):
+    """Two reasons a breakdown has nothing in it, and they want opposite
+    actions. Area and Salesperson are in neither file, so adding the column
+    is exactly right. Sub Category and Variant ARE columns in the dump — they
+    arrive on every row and are blank on every row — so "add this column and
+    re-upload" sends somebody to add a column that is already there, and
+    nothing changes when they do."""
+
+    def setUp(self):
+        upload(a_workbook([a_row(**{'Invoice No.': 'INV-1'})]))
+
+    def detail(self):
+        d = Client().get('/api/sales/filters/').json()
+        return {x['dim']: x['reason'] for x in d['absent_detail']}
+
+    def test_a_column_the_file_does_not_have_reads_as_missing(self):
+        self.assertEqual(self.detail().get('salesperson'), 'missing')
+        self.assertEqual(self.detail().get('area'), 'missing')
+
+    def test_a_column_that_is_there_but_blank_reads_as_empty(self):
+        """The dump declares both; a_row leaves them blank, as the real
+        export does."""
+        self.assertEqual(self.detail().get('variant'), 'empty')
+        self.assertEqual(self.detail().get('sub_category'), 'empty')
+
+    def test_a_column_that_is_filled_in_is_not_listed_at_all(self):
+        SalesRecord.objects.update(variant='Organic')
+        self.assertNotIn('variant', self.detail())
+
+    def test_every_absent_dimension_is_accounted_for(self):
+        d = Client().get('/api/sales/filters/').json()
+        self.assertEqual(sorted(x['dim'] for x in d['absent_detail']),
+                         sorted(d['absent_dimensions']))

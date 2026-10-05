@@ -1051,7 +1051,41 @@ class SalesFiltersView(APIView):
             (available if qs.exclude(**{field: ''}).exists() else absent).append(key)
         out['available_dimensions'] = sorted(available)
         out['absent_dimensions'] = sorted(absent)
+        # Why each absent one is absent, because the two reasons want
+        # opposite actions and the screen was giving one answer to both.
+        #
+        # Area, Region, Territory and Salesperson are in neither file: adding
+        # the column is exactly right. Sub Category and Variant ARE columns in
+        # the Pre-Sales Dump -- they come through on every row and are blank
+        # on every row -- so "add this column and re-upload" sends somebody to
+        # add a column that is already there, and nothing changes when they
+        # do. That one wants filling in upstream, in the ERP.
+        declared = _declared_dimension_keys()
+        out['absent_detail'] = [
+            {'dim': k,
+             'reason': 'empty' if k in declared else 'missing'}
+            for k in sorted(absent)
+        ]
         return Response(out)
+
+
+def _declared_dimension_keys():
+    """Dimension keys the Pre-Sales Dump has a column for, whether or not
+    anybody fills it in.
+
+    Read off the file contract rather than hard-coded, so a column added to
+    PRE_SALES_DUMP is accounted for here without anyone remembering to.
+    """
+    from ..ingest import COLUMN_ALIASES, PRE_SALES_DUMP, _norm
+
+    headers = {_norm(h.rstrip(' *')) for h, _ in PRE_SALES_DUMP}
+    out = set()
+    for key, field in DIMENSIONS.items():
+        for alias in COLUMN_ALIASES.get(field, []):
+            if _norm(alias) in headers:
+                out.add(key)
+                break
+    return out
 
 
 class SalesInsightsView(APIView):
