@@ -608,7 +608,7 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
     def test_the_order_the_files_arrive_in_does_not_matter(self):
         upload(a_workbook([a_row()]))           # dump first this time
         upload(aop_workbook([aop_row(cy=20000)]))
-        d = Client().get('/api/sales/overview/?span=all').json()
+        d = Client().get('/api/sales/overview/?month_from=2025-04&month_to=2027-03').json()
         # 20,000 for April 2026 from the review sheet, 80,000 for April 2025.
         # The dump's April 2026 is the same money and is not added again.
         self.assertEqual(float(d['revenue']), 100000)
@@ -630,7 +630,7 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
         upload(a_workbook([a_row()]))           # 20,000 taxable, April 2026
         # span=all because this is a claim about the whole file, and the
         # dashboard now defaults to the current financial year.
-        d = Client().get('/api/sales/overview/?span=all').json()
+        d = Client().get('/api/sales/overview/?month_from=2025-04&month_to=2027-03').json()
         rev = float(d.get('total_revenue') or d.get('revenue') or 0)
         self.assertEqual(rev, 100000, f'not 20,000 (April 26) + 80,000 (April 25): {rev}')
 
@@ -646,7 +646,7 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
         upload(a_workbook([a_row()]))
         # The sheet has April 2025 at 80,000 and April 2026 at 20,000. The
         # dump has the same April 2026 at 20,000. Counted once: 100,000.
-        d = Client().get('/api/sales/overview/?span=all').json()
+        d = Client().get('/api/sales/overview/?month_from=2025-04&month_to=2027-03').json()
         self.assertEqual(float(d['revenue']), 100000,
                          'April 2026 is being counted from both files')
         # And per month, so a single wrong month cannot hide inside a right
@@ -694,7 +694,7 @@ class TheSheetChecksItself(TestCase):
         d = upload(aop_workbook([aop_row(**{'MTD SEC SALES': 45000})])).json()
         blob = ' '.join(d['notes'])
         self.assertIn('SEC SALES', blob)
-        rev = float(Client().get('/api/sales/overview/?span=all').json()['revenue'])
+        rev = float(Client().get('/api/sales/overview/?month_from=2025-04&month_to=2027-03').json()['revenue'])
         self.assertEqual(rev, 170000, 'secondary sales were added to primary')
 
 
@@ -843,7 +843,7 @@ class AchievementIsComparedLikeForLike(TestCase):
 
     def test_the_whole_file_is_still_reachable(self):
         self._two_years()
-        d = Client().get('/api/sales/overview/?span=all').json()
+        d = Client().get('/api/sales/overview/?month_from=2025-04&month_to=2027-03').json()
         self.assertEqual(float(d['revenue']), 560000)      # 500k last yr + 60k this
 
     def test_the_basis_says_which_months_were_compared(self):
@@ -2212,3 +2212,45 @@ class BothFilesCallTheChannelTheSameThing(TestCase):
         ]))
         self.assertEqual(
             list(SalesRecord.objects.values_list('channel', flat=True)), ['GT'])
+
+
+class TheWindowOffersOnlyMonthsThatExist(TestCase):
+    """The pickers are filled from the files, not from a calendar.
+
+    A free month input let somebody choose a month neither file covers, and
+    the empty dashboard that came back looks exactly like a bad month of
+    trading. A list of the months actually present cannot say that.
+
+    "All history" is gone from the same control. What it showed was both
+    financial years of the review sheet added together -- eighteen months of
+    two years standing where the business reads its year to date, which is
+    the figure that appears in neither file. The same width is still
+    reachable by naming the months, where the screen says which ones.
+    """
+
+    def test_the_filters_endpoint_lists_the_months_present(self):
+        upload(aop_workbook([aop_row()]))
+        months = Client().get('/api/sales/filters/').json()['months']
+        self.assertIn('2026-04', months)
+        self.assertIn('2025-04', months, "last year's months are selectable too")
+
+    def test_every_month_offered_is_one_a_file_covers(self):
+        upload(aop_workbook([aop_row()]))
+        upload(a_workbook([a_row()]))
+        months = set(Client().get('/api/sales/filters/').json()['months'])
+        real = {d.strftime('%Y-%m') for d in
+                SalesRecord.objects.exclude(period=None)
+                                   .values_list('period', flat=True)}
+        self.assertEqual(months, real, 'a month was offered that no file has')
+
+    def test_there_is_no_way_to_turn_the_window_off(self):
+        """span=all used to do it. The parameter is gone, so a stray one in a
+        saved link must be ignored rather than quietly widening the figure to
+        both financial years."""
+        upload(aop_workbook([aop_row()]))
+        plain = Client().get('/api/sales/overview/').json()
+        stray = Client().get('/api/sales/overview/?span=all').json()
+        self.assertEqual(float(stray['revenue']), float(plain['revenue']),
+                         'span=all still widened the window')
+        self.assertEqual(float(plain['revenue']), 90000,
+                         'the default window is not the financial year')

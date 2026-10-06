@@ -1091,6 +1091,13 @@ class SalesFiltersView(SalesIQView):
         lo, hi = _period_bounds(qs)
         out['date_range'] = {'from': lo.isoformat() if lo else None,
                              'to': hi.isoformat() if hi else None}
+        # The months the data actually has, newest first, for the window
+        # pickers. A free month input let somebody choose a month no file
+        # covers and read the empty dashboard as a bad month of trading;
+        # offering only what is here cannot say that.
+        out['months'] = [d.strftime('%Y-%m') for d in
+                         qs.exclude(period=None).order_by('-period')
+                           .values_list('period', flat=True).distinct()]
         out['dimensions'] = sorted(DIMENSIONS.keys())
         # Which of them this upload can actually answer. Neither primary file
         # carries Area, Region, Territory or Salesperson at all, and Sub

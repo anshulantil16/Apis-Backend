@@ -316,8 +316,12 @@ def apply_filters(qs, request, default_window=True, money_scope=True):
     line, the forecast, growth and seasonality) pass default_window=False,
     because for them history is the subject rather than noise.
 
-    `?span=all` turns it off per request, which is how the screen offers "all
-    history" without having to name two dates.
+    There is no way to turn the window off. An "all history" option used to
+    do it, and what it actually showed was both financial years of the review
+    sheet added together -- eighteen months of two years standing where the
+    business reads its year to date, which is the Rs 298 crore figure that
+    appears in neither file. A window that wide is still available by naming
+    the months, where at least the screen says which ones.
 
     money_scope=False keeps both files in scope regardless of the dates. The
     panels built out of invoice detail -- customers, SKUs, order sizes --
@@ -341,7 +345,6 @@ def apply_filters(qs, request, default_window=True, money_scope=True):
                          or request.query_params.get('from'))
     m_to = month_end(request.query_params.get('month_to')
                      or request.query_params.get('to'))
-    span = (request.query_params.get('span') or '').strip().lower()
 
     if money_scope:
         # The review sheet answers for every month it speaks for, whatever
@@ -356,7 +359,7 @@ def apply_filters(qs, request, default_window=True, money_scope=True):
         # number looks wrong, and the screen could not answer it.
         applied['source'] = 'review_sheet' if covered else 'invoice_dump'
 
-    if default_window and span != 'all' and not m_from and not m_to:
+    if default_window and not m_from and not m_to:
         fy_from, fy_to, label = financial_year_window(qs)
         if fy_from:
             m_from, m_to = fy_from, fy_to
