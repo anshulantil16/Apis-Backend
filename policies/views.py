@@ -13,10 +13,10 @@ from rest_framework import status as http
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
-from accounts.auth import PortalScopedAPIView, optional_user, require_user
+from accounts.auth import PortalScopedAPIView, optional_user, require_superadmin, require_user
 from accounts.moderation import ModerationStatus, log_activity
 
-from .models import PolicyDocument
+from .models import BuiltInRemoval, PolicyDocument
 
 MAX_BYTES = 25 * 1024 * 1024        # 25 MB — a scanned policy, not an archive
 
@@ -184,3 +184,38 @@ class PolicyDocumentDetailView(PortalScopedAPIView):
                      summary=f'{category}: {title}',
                      detail={'uploaded_by': by}, request=request)
         return Response({'message': f'{title} removed.'})
+
+
+class BuiltInRemovalView(PortalScopedAPIView):
+    """GET — which built-in PDFs are hidden, and whether the caller may hide
+    more. POST {file, title} — a superadmin hides one.
+
+    Superadmin only: nobody uploaded these, so there is no uploader to take
+    one back, and they are the company's standing policies.
+    """
+
+    def get(self, request):
+        viewer = optional_user(request)
+        return Response({
+            'removed': list(BuiltInRemoval.objects.values_list('file', flat=True)),
+            'canRemove': bool(viewer and viewer.is_superadmin),
+        })
+
+    def post(self, request):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        name = str(request.data.get('file') or '').strip()
+        # A bare filename under public/Policies/, never a path.
+        if not name or len(name) > 255 or '/' in name or '\\' in name:
+            return Response({'error': 'Which document?'}, status=http.HTTP_400_BAD_REQUEST)
+        title = str(request.data.get('title') or '').strip()[:200]
+
+        row, created = BuiltInRemoval.objects.get_or_create(
+            file=name, defaults={'title': title, 'removed_by': user,
+                                 'removed_by_name': user.name or ''})
+        if created:
+            log_activity(user, 'deleted', object_type='builtinpolicy', object_id=row.id,
+                         summary=f'Built-in policy: {title or name}',
+                         detail={'file': name}, request=request)
+        return Response({'message': f'{title or name} removed.'})

@@ -111,3 +111,29 @@ class PolicyDocument(ModeratedContent):
     @classmethod
     def published(cls):
         return cls.objects.filter(moderation_status=ModerationStatus.APPROVED)
+
+
+class BuiltInRemoval(models.Model):
+    """One of the PDFs that ship in the frontend's public/Policies/, taken
+    off the page.
+
+    Those files are part of the build, so nothing here can delete them; the
+    page hides any whose filename is listed. Kept as a row rather than a
+    flag so the register still says who took a policy down and when, and
+    deleting the row (Django admin) puts it back.
+    """
+
+    file = models.CharField(max_length=255, unique=True)
+    title = models.CharField(max_length=200, blank=True)
+    removed_by = models.ForeignKey(
+        'accounts.PortalUser', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='+')
+    removed_by_name = models.CharField(max_length=200, blank=True)
+    removed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-removed_at']
+        verbose_name = 'removed built-in policy'
+
+    def __str__(self):
+        return self.title or self.file

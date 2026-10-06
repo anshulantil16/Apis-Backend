@@ -241,7 +241,9 @@ the frontend's `PoliciesPage.tsx`. It goes through the moderation gate above.
   business. They are not `reviewed_by`, the superadmin who let it onto the
   intranet.
 - The 11 PDFs in the frontend's `public/Policies/` are part of the build and
-  are not rows here.
+  are not rows here. A superadmin can still take one off the page: that
+  writes a `BuiltInRemoval` (filename, who, when) and the page hides it.
+  Delete that row in Django admin to put the policy back.
 
 ## Daily News (`noticeboard.NewsItem`)
 

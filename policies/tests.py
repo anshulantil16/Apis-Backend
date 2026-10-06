@@ -8,7 +8,7 @@ from django.test import TestCase, override_settings
 from accounts.models import PortalSession, PortalUser
 from accounts.moderation import ModerationStatus
 
-from .models import PolicyDocument
+from .models import BuiltInRemoval, PolicyDocument
 
 URL = '/api/policies/documents/'
 TMP_MEDIA = tempfile.mkdtemp()
@@ -113,3 +113,26 @@ class PolicyDocuments(TestCase):
         payload = PolicyDocument.objects.get().moderation_payload()
         self.assertTrue(payload['link'].endswith('.pdf'))
         self.assertEqual(payload['type'], 'policydocument')
+
+    # ── built-in PDFs (public/Policies/) ────────────────────────────────────
+    BUILTIN = '/api/policies/built-in/removed/'
+
+    def test_only_a_superadmin_can_remove_a_built_in_policy(self):
+        body = {'file': 'LOAN POLICY 2025.pdf', 'title': 'Loan Policy'}
+        self.assertEqual(self.client.post(self.BUILTIN, body).status_code, 401)
+        self.assertEqual(self.client.post(self.BUILTIN, body, **self._auth(self.alice)).status_code, 403)
+        self.assertFalse(BuiltInRemoval.objects.exists())
+
+        self.assertEqual(self.client.post(self.BUILTIN, body, **self._auth(self.admin)).status_code, 200)
+        # Twice is harmless.
+        self.assertEqual(self.client.post(self.BUILTIN, body, **self._auth(self.admin)).status_code, 200)
+
+        listed = self.client.get(self.BUILTIN).json()
+        self.assertEqual(listed, {'removed': ['LOAN POLICY 2025.pdf'], 'canRemove': False})
+        self.assertTrue(self.client.get(self.BUILTIN, **self._auth(self.admin)).json()['canRemove'])
+        self.assertEqual(BuiltInRemoval.objects.get().removed_by, self.admin)
+
+    def test_built_in_removal_takes_a_filename_not_a_path(self):
+        for bad in ('../settings.py', 'a/b.pdf', 'a\\b.pdf', ''):
+            r = self.client.post(self.BUILTIN, {'file': bad}, **self._auth(self.admin))
+            self.assertEqual(r.status_code, 400, bad)
