@@ -21,8 +21,14 @@ from ..ingest import (map_headers, parse_date, parse_num, build_template,
 
 # Dimensions a client is allowed to group/filter by. Whitelisted rather than
 # passed straight through so a query param can never reach an arbitrary column.
+# NOTE on `region`: there is deliberately no such dimension. The review
+# sheet's REGION column is read into `zone`, which the screen labels Region,
+# and its Sub-Region into `state`, labelled Sub-Region. A separate `region`
+# dimension existed for a column neither file has, so the dashboard offered
+# Region twice -- once populated from the sheet, and once in the "no column
+# for these" list telling the reader to add a column their file already has.
 DIMENSIONS = {
-    'state': 'state', 'zone': 'zone', 'area': 'area', 'city': 'city', 'region': 'region',
+    'state': 'state', 'zone': 'zone', 'area': 'area', 'city': 'city',
     'category': 'category', 'sub_category': 'sub_category', 'product': 'product_name',
     'product_name': 'product_name', 'sku': 'sku', 'brand': 'brand', 'pack_size': 'pack_size',
     'channel': 'channel', 'customer': 'customer_name', 'customer_name': 'customer_name',
@@ -52,7 +58,7 @@ DIMENSIONS = {
     # grouping by in its own right -- how much came back, and on what.
     'transaction_type': 'remarks',
 }
-FILTERABLE = ['state', 'zone', 'area', 'city', 'region', 'category', 'sub_category',
+FILTERABLE = ['state', 'zone', 'area', 'city', 'category', 'sub_category',
               'brand', 'channel', 'salesperson', 'asm', 'rsm', 'customer_name', 'sku',
               'sales_head', 'subzone', 'customer_district', 'business_type',
               'warehouse_type', 'location', 'variant', 'prod_group',

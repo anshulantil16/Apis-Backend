@@ -2451,3 +2451,35 @@ class TheFourTilesAreCountedOffTheColumnsTheBusinessNamed(TestCase):
         self.assertEqual(d['customers'], 1)
         self.assertEqual(d['skus'], 1)
         self.assertEqual(float(d['quantity']), 10)
+
+
+class RegionIsNotOfferedTwice(TestCase):
+    """The sheet's REGION is read into `zone` and labelled Region on screen.
+
+    A separate `region` dimension existed for a column neither primary file
+    has, so the dashboard showed Region in the filter row, populated from the
+    sheet, AND in the "no column for these" list telling the reader to add a
+    column their file already has. One name, two answers, both on screen at
+    once.
+    """
+
+    def test_region_is_not_offered_as_its_own_breakdown(self):
+        upload(aop_workbook([aop_row()]))
+        d = Client().get('/api/sales/filters/').json()
+        self.assertNotIn('region', d['dimensions'],
+                         'Region is offered separately from Zone again')
+        self.assertNotIn('region', d.get('absent_dimensions', []),
+                         'Region is still being reported as a missing column')
+
+    def test_the_sheets_region_is_reachable_as_zone(self):
+        """Removing the duplicate must not lose the column -- it is the one
+        the sheet actually fills."""
+        upload(aop_workbook([aop_row()]))
+        d = Client().get('/api/sales/filters/').json()
+        self.assertIn('zone', d['available_dimensions'])
+        self.assertTrue(d['zone'], 'the sheet REGION values are not offered')
+
+    def test_a_breakdown_by_zone_still_answers(self):
+        upload(aop_workbook([aop_row()]))
+        rows = Client().get('/api/sales/breakdown/?dim=zone').json()['results']
+        self.assertTrue(rows, 'the Region breakdown came back empty')
