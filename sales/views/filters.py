@@ -117,16 +117,19 @@ def sheet_zones():
 
 
 def in_plan_scope(qs):
-    """Keep the dump to the zones the plan is set against.
+    """Drop the zones that are not primary sales: B2B and EXPORT.
 
     The single statement of the rule. The headline, the comparisons behind
     it and the figure an upload reports all have to apply it identically --
     when they did not, a comparison counted a zone the headline above it had
     dropped, and the growth between them was an artefact of the difference.
+
+    This was briefly a whitelist derived from the review sheet, which also
+    dropped CPC because the sheet has no plan for it. That is defensible and
+    it is not what the business counts: CPC sales are sales. The rule is the
+    two zones named, and only those -- so a figure here is the one the
+    business arrives at by hand, which is the only test that matters.
     """
-    keep = sheet_zones()
-    if keep:
-        return qs.filter(Q(source=SalesRecord.SOURCE_PLAN) | Q(zone__in=keep))
     return qs.exclude(_not_sales_zone_q())
 
 
