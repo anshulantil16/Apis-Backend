@@ -74,10 +74,18 @@ COLUMN_ALIASES = {
     # DOMESTIC / EXPORT, an accounting classification -- and reading it as the
     # sales channel put "Domestic" on the channel filter beside the review
     # sheet's GT and OT, two vocabularies in one list describing different
-    # things. The dump's own channel split is Customer Type (General Trade,
-    # Modern Trade, Super Stockiest, Export, CPC, B2B), which is stored and
-    # filterable under that name.
-    'channel':       ['channel', 'sales channel', 'trade channel', 'route to market'],
+    # things. The dump's real channel column is CHANEL TYPE, which holds GT
+    # and OT exactly as the review sheet does -- so the two files agree and
+    # no mapping between vocabularies is needed. Customer Type (General
+    # Trade, Modern Trade, Super Stockiest, Export, CPC, B2B) is a different
+    # cut of the business and stays filterable under its own name.
+    # 'chanel type' is the dump's own spelling, and the review sheet's too --
+    # one column name, one vocabulary, GT and OT in both files. Without it the
+    # dump had NO channel column at all: every invoice row carried a blank
+    # channel, so filtering by GT on a date range returned nothing and the
+    # channel breakdown was empty on exactly the view that reads the dump.
+    'channel':       ['chanel type', 'channel type', 'channel', 'sales channel',
+                      'trade channel', 'route to market'],
     'customer_code': ['customer code', 'customer no', 'party code', 'distributor code',
                       'dealer code', 'buyer code', 'account code'],
     'customer_name': ['customer', 'customer name', 'party name', 'distributor',
@@ -193,14 +201,42 @@ RETURN_TYPES = {'credit memo', 'credit note', 'return', 'sales credit memo',
 # or reported on, and a month of nothing but credit notes looked like a month
 # of trading. NOT A PART OF SALES is freight, packaging and spares -- real
 # money on the invoice, but the business has already ruled it out of sales.
+# Two of those verdicts mean "leave this out of the sales figure entirely",
+# and they are not the same thing as a return:
+#
+#   NOT A PART OF SALES  freight, packaging and spares -- real money on the
+#                        invoice, but the business has ruled it out of sales
+#   SCHEME CN            a scheme credit note. It was being counted as a
+#                        return, which nets it off by sign rather than
+#                        dropping it, so every date-wise figure came out
+#                        lower than the sheet by the value of these lines.
+#
+# A return is different: SR and GOOD SR are stock genuinely coming back, they
+# belong in the figure, and their minus sign is the point. So returns stay in
+# and these two come out -- which is the rule the business stated.
+# Both spellings of the first one: the file says SALES, the business says
+# "not a part of sale" when describing the rule out loud, and a one-letter
+# mismatch here silently puts the lines back into the figure.
+EXCLUDED_REMARKS = {'not a part of sales', 'not a part of sale',
+                    'not part of sales', 'not part of sale',
+                    'scheme cn'}
+# Kept for the message the upload prints and for anything still naming it.
 NOT_SALES_REMARK = 'not a part of sales'
-RETURN_REMARKS = {'sr', 'good sr', 'scheme cn', 'cn', 'credit note',
+# SCHEME CN is deliberately NOT here any more. A line is classified once: it
+# is either excluded from sales or it is a return, never filed as both.
+RETURN_REMARKS = {'sr', 'good sr', 'cn', 'credit note',
                   'sales return', 'bad sr'}
 
 
 def is_not_a_sale(remark):
-    """Has the business marked this line as outside sales entirely?"""
-    return _norm(remark) == _norm(NOT_SALES_REMARK)
+    """Has the business marked this line as outside sales entirely?
+
+    The single predicate behind SalesRecord.is_not_sales, which every money
+    query excludes via apply_dim_filters -- so widening it here corrects the
+    headline, the breakdowns and every comparison together, rather than in
+    twenty places that would drift apart.
+    """
+    return _norm(remark) in {_norm(r) for r in EXCLUDED_REMARKS}
 
 
 def is_return_remark(remark):
@@ -510,7 +546,8 @@ def parse_num(v, default=0.0):
 # the point: the export is pasted in whole, and a column listed as ignored is
 # a decision somebody can argue with, where a column silently dropped is not.
 PRE_SALES_DUMP = [
-    ('Customer Type', True), ('Type', True), ('Order Date *', True),
+    ('Customer Type', True), ('Chanel Type', True), ('Type', True),
+    ('Order Date *', True),
     ('Customer No.', True), ('Customer Name', True), ('Cust.State Code', True),
     ('Customer City', True), ('Customer District', True), ('Key', False),
     ('Zone', True), ('Subzone', True), ('RSM Name', True), ('ASM Name', True),
@@ -550,7 +587,7 @@ PRE_SALES_DUMP = [
 # One filled line, so the shape of a row is obvious. Values follow the header
 # order above exactly.
 _SAMPLE = [
-    'Distributor', 'Invoice', '2026-04-05', 'CUST-001', 'Sharma Traders', '07',
+    'Distributor', 'GT', 'Invoice', '2026-04-05', 'CUST-001', 'Sharma Traders', '07',
     'New Delhi', 'Central Delhi', '', 'North', 'Delhi NCR', 'Anil Mehra',
     'Vikas Gupta', '2026-04-05', 'INV-1001', '2026-04-05', 'PO-9981',
     '07AABCA1234A1Z5', 'Delhi Depot', 'Delhi', '', '', 'Jar', 'Honey', 'INR',

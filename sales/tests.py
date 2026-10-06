@@ -701,8 +701,12 @@ class TheSheetChecksItself(TestCase):
 class GroupingByWhatTheLineActuallyIs(TestCase):
 
     def test_v_remars_can_be_broken_down(self):
-        """SALES, SR and GOOD SR (stock came back), SCHEME CN (an offer
-        settled later by credit note) -- worth seeing split out."""
+        """SALES and the returns that belong in the figure -- SR and GOOD SR,
+        stock that came back -- are worth seeing split out.
+
+        SCHEME CN is not among them: the business excludes it from sales, so
+        it is not a revenue bucket at all. See TheLinesTheBusinessExcludes.
+        """
         upload(a_workbook([
             a_row(**{'V-REMARS': 'SALES'}),
             a_row(**{'V-REMARS': 'SR', 'Taxable Amount': -3000}),
@@ -712,7 +716,8 @@ class GroupingByWhatTheLineActuallyIs(TestCase):
                 Client().get('/api/sales/breakdown/?dim=transaction_type').json()['results']}
         self.assertEqual(float(rows['SALES']['revenue']), 20000)
         self.assertEqual(float(rows['SR']['revenue']), -3000)
-        self.assertEqual(float(rows['SCHEME CN']['revenue']), -1000)
+        self.assertNotIn('SCHEME CN', rows,
+                         'an excluded line was offered as a revenue bucket')
 
 
 class TheYearRunsAprilToMarch(TestCase):
@@ -932,8 +937,12 @@ class TheVRemarsColumn(TestCase):
             a_row(**{'V-REMARS': 'GOOD SR', 'Taxable Amount': -2000}),
             a_row(**{'V-REMARS': 'SCHEME CN', 'Taxable Amount': -1000}),
         ]))
-        self.assertEqual(SalesRecord.objects.filter(is_return=True).count(), 3,
+        # SR and GOOD SR only. SCHEME CN is excluded from sales rather than
+        # netted off as a return, so a line is never filed as both.
+        self.assertEqual(SalesRecord.objects.filter(is_return=True).count(), 2,
                          'returns came through as ordinary negative sales')
+        self.assertEqual(SalesRecord.objects.filter(is_not_sales=True).count(), 1,
+                         'SCHEME CN was not excluded from sales')
 
     def test_returns_still_reduce_sales(self):
         upload(a_workbook([a_row(),
@@ -1983,3 +1992,190 @@ class ABreakdownComesFromTheFileThatHasTheColumn(TestCase):
             r = Client().get('/api/sales/' + path)
             self.assertEqual(r.status_code, 200, path)
             self.assertEqual(r.json()['filters'].get('source'), 'invoice_dump', path)
+
+
+class TheLinesTheBusinessExcludes(TestCase):
+    """Which V-REMARS verdicts leave the sales figure, and which stay in.
+
+    The rule as the business states it: NOT A PART OF SALES and SCHEME CN are
+    not sales. Everything else is, returns included.
+
+    SCHEME CN used to be filed as a return, which nets it off by sign rather
+    than dropping it -- so a date-wise figure came out lower than the sheet by
+    the value of those lines. That mismatch is the reason this class exists,
+    and the arithmetic below is what distinguishes netting off from excluding:
+    a 1,000 credit note netted off gives 19,000, excluded gives 20,000.
+    """
+
+    def test_a_scheme_credit_note_is_dropped_not_netted_off(self):
+        upload(a_workbook([
+            a_row(),
+            a_row(**{'V-REMARS': 'SCHEME CN', 'Taxable Amount': -1000}),
+        ]))
+        rev = float(Client().get('/api/sales/overview/').json()['revenue'])
+        self.assertEqual(rev, 20000,
+                         f'19,000 means the credit note was netted off instead '
+                         f'of excluded; got {rev}')
+
+    def test_it_is_dropped_on_a_date_range_too(self):
+        """The date-wise view reads the invoice dump, which is where the
+        mismatch against the sheet was actually seen."""
+        upload(a_workbook([
+            a_row(**{'Order Date': '2026-04-05'}),
+            a_row(**{'Order Date': '2026-04-05', 'V-REMARS': 'SCHEME CN',
+                     'Taxable Amount': -1000}),
+        ]))
+        r = Client().get('/api/sales/overview/?from=2026-04-01&to=2026-04-30').json()
+        self.assertEqual(float(r['revenue']), 20000, r.get('applied'))
+
+    def test_both_spellings_of_not_a_part_of_sale_are_excluded(self):
+        """The file writes SALES, the rule is spoken as "sale". A one-letter
+        mismatch would silently put freight back into revenue."""
+        upload(a_workbook([
+            a_row(),
+            a_row(**{'V-REMARS': 'NOT A PART OF SALES', 'Taxable Amount': 50000}),
+            a_row(**{'V-REMARS': 'Not a part of sale', 'Taxable Amount': 40000}),
+        ]))
+        self.assertEqual(SalesRecord.objects.filter(is_not_sales=True).count(), 3 - 1)
+        rev = float(Client().get('/api/sales/overview/').json()['revenue'])
+        self.assertEqual(rev, 20000, f'freight reached revenue: {rev}')
+
+    def test_a_real_return_still_reduces_the_figure(self):
+        """The counterpart to the rule: SR and GOOD SR are stock genuinely
+        coming back, they belong in the figure, and the minus sign is the
+        point. Excluding them too would overstate sales."""
+        upload(a_workbook([
+            a_row(),
+            a_row(**{'V-REMARS': 'SR', 'Taxable Amount': -5000}),
+            a_row(**{'V-REMARS': 'GOOD SR', 'Taxable Amount': -2000}),
+        ]))
+        rev = float(Client().get('/api/sales/overview/').json()['revenue'])
+        self.assertEqual(rev, 13000,
+                         f'20,000 less returns of 7,000 is 13,000, not {rev}')
+        self.assertEqual(SalesRecord.objects.filter(is_not_sales=True).count(), 0,
+                         'a genuine return was excluded from sales')
+
+    def test_an_excluded_line_is_kept_in_the_table(self):
+        """Excluded from the figure, not deleted: the file still has to
+        reconcile line for line with the ERP."""
+        upload(a_workbook([
+            a_row(),
+            a_row(**{'V-REMARS': 'SCHEME CN', 'Taxable Amount': -1000}),
+        ]))
+        self.assertEqual(SalesRecord.objects.count(), 2)
+
+
+class TheMigrationThatRefiledTheOldRows(TestCase):
+    """The flags are decided at import, so fixing the importer fixes nothing
+    already loaded. Migration 0012 re-runs the rule over what is there.
+
+    Tests apply migrations to an empty database, so the suite passing proves
+    only that the migration runs. This proves it does something.
+
+    The rows come through the real importer and are then forced back to the
+    OLD classification, which is exactly the state the live tables are in:
+    real rows, stale flags.
+    """
+
+    def setUp(self):
+        from django.apps import apps
+        import importlib
+        self.apps = apps
+        self.mig = importlib.import_module('sales.migrations.0012_exclude_scheme_cn')
+
+        upload(a_workbook([
+            a_row(**{'V-REMARS': 'SALES'}),
+            a_row(**{'V-REMARS': 'SCHEME CN', 'Taxable Amount': -1000}),
+            a_row(**{'V-REMARS': 'NOT A PART OF SALES', 'Taxable Amount': 5000}),
+            a_row(**{'V-REMARS': 'SR', 'Taxable Amount': -500}),
+        ]))
+        # Undo the new rule, leaving the table as the old importer left it:
+        # SCHEME CN filed as a return, nothing excluded from sales.
+        SalesRecord.objects.filter(remarks='SCHEME CN').update(
+            is_not_sales=False, is_return=True)
+        SalesRecord.objects.filter(remarks='NOT A PART OF SALES').update(
+            is_not_sales=False)
+
+    def _flags(self, remark):
+        r = SalesRecord.objects.get(remarks=remark)
+        return r.is_not_sales, r.is_return
+
+    def test_it_refiles_a_credit_note_and_spares_a_genuine_return(self):
+        self.mig.apply_rule(self.apps, None)
+        self.assertEqual(self._flags('SCHEME CN'), (True, False),
+                         'SCHEME CN must be excluded and not also a return')
+        self.assertEqual(self._flags('NOT A PART OF SALES')[0], True,
+                         'freight was not excluded')
+        self.assertEqual(self._flags('SR'), (False, True),
+                         'a genuine return was refiled')
+        self.assertEqual(self._flags('SALES')[0], False,
+                         'an ordinary sale was excluded')
+
+    def test_the_figure_moves_by_the_value_of_the_excluded_lines(self):
+        """What the mismatch looked like: a credit note netted off and freight
+        counted, so 19,500 of real sales reported as 23,500."""
+        before = float(Client().get('/api/sales/overview/').json()['revenue'])
+        self.assertEqual(before, 23500, f'fixture is not as assumed: {before}')
+        self.mig.apply_rule(self.apps, None)
+        after = float(Client().get('/api/sales/overview/').json()['revenue'])
+        self.assertEqual(after, 19500,
+                         f'20,000 of sales less a 500 return is 19,500, not {after}')
+
+    def test_the_reverse_puts_a_credit_note_back(self):
+        self.mig.apply_rule(self.apps, None)
+        self.mig.restore(self.apps, None)
+        self.assertEqual(self._flags('SCHEME CN'), (False, True),
+                         'reverse did not restore the old filing')
+
+
+class BothFilesCallTheChannelTheSameThing(TestCase):
+    """GT and OT, from a column both files spell CHANEL TYPE.
+
+    The dump's channel aliases used to list `channel`, `sales channel`,
+    `trade channel` and `route to market` -- none of which the file has. So
+    every invoice row carried a blank channel, and because a date range reads
+    the dump, filtering by GT on a date range returned nothing at all while
+    the same filter on a month returned the sheet's figure. Two views of one
+    business disagreeing because of a column name.
+    """
+
+    def test_the_dump_reads_its_channel_column(self):
+        upload(a_workbook([
+            a_row(**{'Chanel Type': 'GT'}),
+            a_row(**{'Chanel Type': 'OT', 'Taxable Amount': 5000}),
+        ]))
+        self.assertEqual(
+            sorted(SalesRecord.objects.values_list('channel', flat=True)),
+            ['GT', 'OT'], 'the dump did not read CHANEL TYPE')
+
+    def test_filtering_by_gt_on_a_date_range_returns_the_gt_figure(self):
+        """The failure as it was seen: a date range plus channel=GT gave 0."""
+        upload(a_workbook([
+            a_row(**{'Chanel Type': 'GT'}),
+            a_row(**{'Chanel Type': 'OT', 'Taxable Amount': 5000}),
+        ]))
+        r = Client().get('/api/sales/overview/'
+                         '?from=2026-04-01&to=2026-04-30&channel=GT').json()
+        self.assertEqual(float(r['revenue']), 20000,
+                         f'GT on a date range gave {r["revenue"]}, not 20,000')
+
+    def test_the_channel_breakdown_is_not_empty_on_a_date_range(self):
+        upload(a_workbook([
+            a_row(**{'Chanel Type': 'GT'}),
+            a_row(**{'Chanel Type': 'OT', 'Taxable Amount': 5000}),
+        ]))
+        rows = {r['name']: float(r['revenue']) for r in
+                Client().get('/api/sales/breakdown/'
+                             '?dim=channel&from=2026-04-01&to=2026-04-30')
+                .json()['results']}
+        self.assertEqual(rows.get('GT'), 20000, rows)
+        self.assertEqual(rows.get('OT'), 5000, rows)
+
+    def test_the_posting_group_still_does_not_reach_the_channel(self):
+        """DOMESTIC / EXPORT is an accounting posting group. It was once read
+        as the channel and must not come back now that a real one exists."""
+        upload(a_workbook([
+            a_row(**{'Chanel Type': 'GT', 'Gen. Bus. Posting Group': 'DOMESTIC'}),
+        ]))
+        self.assertEqual(
+            list(SalesRecord.objects.values_list('channel', flat=True)), ['GT'])
