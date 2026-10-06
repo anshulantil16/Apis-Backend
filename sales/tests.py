@@ -2254,3 +2254,53 @@ class TheWindowOffersOnlyMonthsThatExist(TestCase):
                          'span=all still widened the window')
         self.assertEqual(float(plain['revenue']), 90000,
                          'the default window is not the financial year')
+
+
+class TheFilterListComesFromTheFileThatAnswers(TestCase):
+    """Region and Sub-Region are the sheet's words for two columns the dump
+    also writes to, in its own vocabulary.
+
+    The sheet heads them REGION and Sub-Region and fills them with GTR01 and
+    CHD (TRI). The dump's Zone and state columns land in the same two fields
+    as North and a state code. Offering both at once put two vocabularies in
+    one dropdown -- the same fault the channel had when DOMESTIC sat beside
+    GT -- and picking a dump value filtered money that comes off the sheet,
+    emptying the dashboard with nothing to say why.
+
+    So the file that answers a figure supplies the values you may filter it
+    by. Customer, SKU and city exist only on an invoice and still read the
+    dump.
+    """
+
+    def _both(self):
+        upload(aop_workbook([aop_row()]))
+        upload(a_workbook([a_row(**{'Invoice No.': 'INV-001'})]))
+
+    def test_region_offers_the_sheets_words_not_the_dumps(self):
+        self._both()
+        opts = Client().get('/api/sales/filters/').json()
+        sheet_zones = set(SalesRecord.objects
+                          .exclude(source=SalesRecord.SOURCE_INVOICE)
+                          .exclude(zone='').values_list('zone', flat=True))
+        self.assertTrue(sheet_zones, 'fixture has no sheet zone to check')
+        self.assertEqual(set(opts['zone']), sheet_zones,
+                         "the dump's zone vocabulary reached the Region list")
+
+    def test_a_dump_only_dimension_still_reads_the_dump(self):
+        """Customers are on no sheet, so scoping them to it would empty a
+        dropdown that was working."""
+        self._both()
+        opts = Client().get('/api/sales/filters/').json()
+        self.assertIn('Sharma Traders', opts['customer_name'])
+
+    def test_every_value_offered_actually_filters_to_something(self):
+        """The point of the rule: nothing in a dropdown returns an empty
+        dashboard."""
+        self._both()
+        opts = Client().get('/api/sales/filters/').json()
+        for field in ('zone', 'state', 'channel'):
+            for value in opts[field]:
+                d = Client().get(f'/api/sales/overview/?{field}={value}').json()
+                self.assertGreater(
+                    float(d['revenue']), 0,
+                    f'{field}={value} was offered but returns no revenue')

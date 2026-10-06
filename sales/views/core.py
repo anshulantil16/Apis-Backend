@@ -11,7 +11,7 @@ from .auth import SalesIQAdminView, SalesIQView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
-from ..models import (SalesUpload, SalesRecord, sync_actual_source,
+from ..models import (SalesUpload, SalesRecord, sync_actual_source, sheet_months,
                       elected_sources)
 from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       NAME_FIELDS, normalise_name, clean_cell,
@@ -23,7 +23,7 @@ from .. import aop as AOP
 
 from ..forecasting import forecast_series
 from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters, detail_qs,
-                      qs_for_dimension, money_base,
+                      qs_for_dimension, money_base, sheet_fields,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
                       NOT_SALES_ZONES, with_actuals, comparable_window,
                       same_months_last_year)
@@ -1083,10 +1083,30 @@ class SalesFiltersView(SalesIQView):
         # values here would put a customer in the dropdown that returns an
         # empty dashboard when picked.
         qs = SalesRecord.objects.exclude(is_cancelled=True)
+
+        # The file that answers a figure also supplies the values you may
+        # filter it by.
+        #
+        # Region and Sub-Region are stored in the same two columns the dump
+        # writes North and a state code into, so the dropdowns listed both
+        # vocabularies at once -- GTR01 beside North, CHD (TRI) beside 07.
+        # Picking a dump value then filtered money that comes off the sheet
+        # and emptied the dashboard. Same fault the channel had, where
+        # DOMESTIC sat beside GT.
+        #
+        # So for the dimensions the sheet carries, offer the sheet's values
+        # wherever it speaks for the months on screen. Everything else --
+        # customer, SKU, city, invoice -- exists only on an invoice, and
+        # reads the dump as before.
+        covered = sheet_months()
+        from_sheet = sheet_fields() if covered else set()
+        sheet_qs = qs.exclude(source=SalesRecord.SOURCE_INVOICE)
+
         out = {}
         for f in FILTERABLE:
-            vals = (qs.exclude(**{f: ''}).values_list(f, flat=True)
-                      .order_by(f).distinct()[:500])
+            base = sheet_qs if f in from_sheet else qs
+            vals = (base.exclude(**{f: ''}).values_list(f, flat=True)
+                        .order_by(f).distinct()[:500])
             out[f] = list(vals)
         lo, hi = _period_bounds(qs)
         out['date_range'] = {'from': lo.isoformat() if lo else None,
