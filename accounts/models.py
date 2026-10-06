@@ -15,6 +15,7 @@ sync (see HrmsSyncService for exactly which fields a sync is allowed to
 touch).
 """
 import hashlib
+import os
 import secrets
 from datetime import timedelta
 
@@ -54,7 +55,26 @@ class AppKey(models.TextChoices):
 # What a brand-new employee can open before anyone grants them more. The
 # dashboard and the read-only reference pages only — never a tool that moves
 # money or writes records.
-DEFAULT_APPS = [AppKey.HOME, AppKey.APIS_TREE, AppKey.POLICIES, AppKey.APIS_WALL]
+#
+# Settable per environment, because the answer is not the same everywhere.
+# A server opening to the whole company for the first time may want every
+# new account to start with nothing at all, so that access is a decision
+# somebody made rather than a default nobody chose.
+#
+#   PORTAL_DEFAULT_APPS=                  nobody starts with anything
+#   PORTAL_DEFAULT_APPS=home,policies     just those two
+#   (unset)                               the list below
+#
+# Unknown keys are dropped rather than stored: a typo in a server's .env
+# must not put a grant in the database for a tool that does not exist.
+def _default_apps():
+    raw = os.getenv('PORTAL_DEFAULT_APPS')
+    if raw is None:
+        return [AppKey.HOME, AppKey.APIS_TREE, AppKey.POLICIES, AppKey.APIS_WALL]
+    return [k for k in (p.strip() for p in raw.split(',')) if k in AppKey.values]
+
+
+DEFAULT_APPS = _default_apps()
 
 
 class PortalUser(models.Model):

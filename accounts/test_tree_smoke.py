@@ -175,3 +175,51 @@ class EditingACardIsNotTheSameAsRemovingSomebody(TestCase):
         # Revoking the bigger grant leaves the smaller one alone: they can
         # still correct a card, which is what they had before.
         self.assertTrue(self.editor.can_edit_tree)
+
+
+class WhatANewAccountStartsWith(TestCase):
+    """DEFAULT_APPS is read from the environment, because the answer differs
+    between a server the team is testing on and one the whole company is
+    about to sign in to for the first time.
+
+    On the day the portal opens, every grant should be a decision somebody
+    made. A default that quietly hands four tools to 500 people is not that.
+    """
+
+    def _reload(self, value):
+        """Re-evaluate the module-level list under a given env var."""
+        import os
+        from accounts import models as m
+        old = os.environ.get('PORTAL_DEFAULT_APPS')
+        if value is None:
+            os.environ.pop('PORTAL_DEFAULT_APPS', None)
+        else:
+            os.environ['PORTAL_DEFAULT_APPS'] = value
+        try:
+            return m._default_apps()
+        finally:
+            if old is None:
+                os.environ.pop('PORTAL_DEFAULT_APPS', None)
+            else:
+                os.environ['PORTAL_DEFAULT_APPS'] = old
+
+    def test_unset_keeps_the_reference_pages(self):
+        from accounts.models import AppKey
+        apps = self._reload(None)
+        self.assertIn(AppKey.HOME, apps)
+        self.assertIn(AppKey.POLICIES, apps)
+
+    def test_empty_means_nobody_starts_with_anything(self):
+        self.assertEqual(self._reload(''), [])
+
+    def test_a_named_list_is_honoured(self):
+        self.assertEqual(self._reload('home,policies'), ['home', 'policies'])
+
+    def test_a_typo_is_dropped_not_stored(self):
+        """A misspelt key in a server's .env must not put a grant in the
+        database for a tool that does not exist."""
+        self.assertEqual(self._reload('home,salesiq-typo,policies'),
+                         ['home', 'policies'])
+
+    def test_whitespace_is_forgiven(self):
+        self.assertEqual(self._reload(' home , policies '), ['home', 'policies'])

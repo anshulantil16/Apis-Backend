@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 # pyrefly: ignore [missing-import]
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 import os
 load_dotenv()
@@ -110,6 +111,31 @@ elif os.getenv('DB_NAME'):
         }
     }
 else:
+    # Local development only. On a server this fallback is a trap: a .env
+    # missing DB_NAME does not fail, it quietly starts on an empty SQLite
+    # file next to the code. Everything works -- migrations apply, people
+    # sign in, records save -- against a database nobody meant to create,
+    # until somebody notices the real one has been idle for a week.
+    #
+    # QA and production run on the same machine, so each environment is kept
+    # apart purely by what its own .env names. Worth knowing what that one
+    # file separates:
+    #
+    #   the database   DB_NAME, below
+    #   the cache      DatabaseCache, a table INSIDE that database, which is
+    #                  also where Help Desk and SalesIQ sessions live
+    #   uploads        MEDIA_ROOT = BASE_DIR/media, and BASE_DIR differs
+    #   static files   STATIC_ROOT = BASE_DIR/staticfiles, likewise
+    #
+    # So naming a different DB_NAME separates everything. Getting it wrong
+    # separates nothing -- hence the guard.
+    if not DEBUG:
+        raise ImproperlyConfigured(
+            'DEBUG is off, so this is a server, but neither DATABASE_URL nor '
+            'DB_NAME is set. Refusing to start on the local SQLite fallback: '
+            'it would work, which is the problem. Set DB_NAME, DB_USER and '
+            'DB_PASSWORD in the .env for THIS environment -- and make sure '
+            'DB_NAME is not the one the other environment on this machine uses.')
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
