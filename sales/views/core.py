@@ -25,7 +25,7 @@ from ..forecasting import forecast_series
 from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters, detail_qs,
                       qs_for_dimension, money_base, sheet_fields,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
-                      NOT_SALES_ZONES, with_actuals, comparable_window,
+                      NOT_SALES_ZONES, _not_sales_zone_q, with_actuals, comparable_window,
                       same_months_last_year)
 
 class SalesTemplateView(SalesIQView):
@@ -368,7 +368,7 @@ class SalesUploadView(SalesIQAdminView):
         # are the same claim, so they have to be counted the same way.
         earned = (upload.records.exclude(is_cancelled=True)
                   .exclude(is_not_sales=True)
-                  .exclude(zone__in=NOT_SALES_ZONES)
+                  .exclude(_not_sales_zone_q())
                   .aggregate(rev=Sum('net_amount'))['rev'])
         upload.row_count = agg['n'] or 0
         upload.skipped_rows = sum(r.data.get('skipped', 0) for _, r in good)
@@ -747,6 +747,12 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
     })
 
 
+# Finished goods carry an Item Code beginning FG. Everything else in that
+# column -- raw material, packaging, consumables -- can appear on a sales
+# invoice without being a product the company sells.
+FINISHED_GOODS_PREFIX = 'FG'
+
+
 class SalesOverviewView(SalesIQView):
     """Headline KPIs + comparison against the preceding equal-length window."""
 
@@ -773,10 +779,14 @@ class SalesOverviewView(SalesIQView):
                            lines=Count('id'))
         inv = detail.aggregate(
             revenue=Sum('measured_amount'),
-            # Only rows that actually carry an invoice. Counting distinct
-            # invoice_no across everything also counted the empty string --
-            # one phantom order standing in for every row without one.
-            orders=Count('invoice_no', distinct=True, filter=~Q(invoice_no='')),
+            # An order is a Sales Order No., not an invoice number. One order
+            # can be invoiced more than once, so counting invoices counted
+            # the same order twice and made the average order value smaller
+            # than it is. The empty-string filter stays: counting distinct
+            # across everything also counts '' -- one phantom order standing
+            # in for every row without one.
+            orders=Count('sales_order_no', distinct=True,
+                         filter=~Q(sales_order_no='')),
             qty=Sum('quantity'), discount=Sum('discount'),
             weight=Sum('net_weight_kg'))
         invoiced = {'revenue': inv['revenue'], 'orders': inv['orders']}
@@ -820,8 +830,17 @@ class SalesOverviewView(SalesIQView):
                        .aggregate(revenue=Sum('net_amount'), qty=Sum('quantity')))
 
         prev_rev = _money(prev['revenue']) if prev else 0.0
-        customers = detail.exclude(customer_name='').values('customer_name').distinct().count()
-        skus = detail.exclude(sku='').values('sku').distinct().count()
+        # Customers are counted by code, not by name. Two branches of one
+        # distributor write their name two ways and counted as two
+        # customers; the code is the identity the ERP actually keys on.
+        customers = (detail.exclude(customer_code='')
+                     .values('customer_code').distinct().count())
+        # SKUs are the finished goods only. The Item Code column also carries
+        # raw material, packaging and consumable codes that ride on a sales
+        # invoice without being something anyone sells, and counting them
+        # inflated the SKU tile well past the number of products that exist.
+        skus = (detail.filter(sku__istartswith=FINISHED_GOODS_PREFIX)
+                .values('sku').distinct().count())
         orders = invoiced['orders'] or 0
 
         return Response({

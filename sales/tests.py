@@ -65,7 +65,10 @@ def a_row(**over):
         'Order Date': '2026-04-05', 'Type': 'Invoice', 'Cancelled': 'No',
         'Customer No.': 'CUST-001', 'Customer Name': 'Sharma Traders',
         'Zone': 'North', 'Cust.State Code': '07', 'Customer City': 'New Delhi',
-        'Item Code': 'APS-HNY-500', 'Item Name': 'APIS Honey 500g',
+        # Finished-goods code: the SKU tile counts only FG-prefixed codes,
+        # because the same column also carries raw material and packaging.
+        'Item Code': 'FG-HNY-500', 'Item Name': 'APIS Honey 500g',
+        'Sales Order No.': 'SO-1001',
         'Item Category': 'Honey', 'Quantity': 100, 'Unit Price': 250,
         'Taxable Amount': 20000,
         'Invoice Disc.Amt': 1000, 'Retail Scheme Amt': 500, 'Wholesale Scheme Amt': 500,
@@ -1084,6 +1087,8 @@ class OnePersonOneRow(TestCase):
         upload(a_workbook([a_row(**{'Item Code': 'APS-HNY-500',
                                     'Item Name': 'APIS Honey 500g'})]))
         r = SalesRecord.objects.first()
+        # Stored exactly as written, FG prefix or not. The SKU tile counts
+        # only FG codes, but the importer does not edit what it was given.
         self.assertEqual(r.sku, 'APS-HNY-500')
         self.assertEqual(r.product_name, 'APIS Honey 500g')
 
@@ -1475,33 +1480,39 @@ class TheSellingOrganisation(TestCase):
 # ── what an audit against the real file turned up ────────────────────────
 class PerOrderFiguresOnlyCountInvoicedRows(TestCase):
     """Two thirds of the money on this dashboard arrives from the review
-    sheet, which is monthly aggregates: no invoice, no customer, no SKU.
-    Dividing all the revenue by the invoices that do exist is a ratio between
+    sheet, which is monthly aggregates: no order, no customer, no SKU.
+    Dividing all the revenue by the orders that do exist is a ratio between
     two different populations, and on the real file it reported an average
-    order of Rs 30 lakh against a true Rs 1.8 lakh."""
+    order of Rs 30 lakh against a true Rs 1.8 lakh.
+
+    An order is a Sales Order No. One order can be invoiced more than once,
+    so counting invoices counted the same order twice.
+    """
 
     def setUp(self):
         upload(a_workbook([
-            a_row(**{'Invoice No.': 'INV-1', 'Taxable Amount': 10000}),
-            a_row(**{'Invoice No.': 'INV-2', 'Taxable Amount': 10000}),
+            a_row(**{'Sales Order No.': 'SO-1', 'Invoice No.': 'INV-1',
+                     'Taxable Amount': 10000}),
+            a_row(**{'Sales Order No.': 'SO-2', 'Invoice No.': 'INV-2',
+                     'Taxable Amount': 10000}),
         ]))
-        # A row with no invoice on it, standing for a review-sheet month.
+        # A row with no order on it, standing for a review-sheet month.
         SalesRecord.objects.create(
             upload=SalesUpload.objects.first(),
             order_date=date(2026, 4, 1), period=date(2026, 4, 1),
-            invoice_no='', net_amount=980000, quantity=0)
+            sales_order_no='', invoice_no='', net_amount=980000, quantity=0)
 
     def overview(self):
         return Client().get('/api/sales/overview/').json()
 
-    def test_a_row_with_no_invoice_is_not_an_order(self):
-        """Counting distinct invoice numbers across everything also counts
-        the empty string: one phantom order standing in for every aggregate
-        row in the file."""
+    def test_a_row_with_no_order_number_is_not_an_order(self):
+        """Counting distinct order numbers across everything also counts the
+        empty string: one phantom order standing in for every aggregate row
+        in the file."""
         self.assertEqual(self.overview()['orders'], 2)
 
-    def test_average_order_value_ignores_rows_with_no_invoice(self):
-        """20,000 over two invoices, not 1,000,000 over two."""
+    def test_average_order_value_ignores_rows_with_no_order(self):
+        """20,000 over two orders, not 1,000,000 over two."""
         self.assertEqual(self.overview()['avg_order_value'], 10000)
 
     def test_the_headline_still_counts_every_rupee(self):
@@ -1512,6 +1523,26 @@ class PerOrderFiguresOnlyCountInvoicedRows(TestCase):
         d = self.overview()
         self.assertEqual(d['invoiced_revenue'], 20000)
         self.assertEqual(d['invoiced_pct'], 2.0)
+
+
+class OneOrderInvoicedTwiceIsStillOneOrder(TestCase):
+    """The order count is distinct Sales Order No., which is what the
+    business means by an order. Counting invoice numbers instead split one
+    order into as many orders as it had invoices, and made the average order
+    value smaller than it really is."""
+
+    def test_two_invoices_against_one_order_count_once(self):
+        upload(a_workbook([
+            a_row(**{'Sales Order No.': 'SO-1', 'Invoice No.': 'INV-1',
+                     'Taxable Amount': 10000}),
+            a_row(**{'Sales Order No.': 'SO-1', 'Invoice No.': 'INV-2',
+                     'Taxable Amount': 10000}),
+        ]))
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(d['orders'], 1, 'one order was counted as two')
+        self.assertEqual(d['avg_order_value'], 20000,
+                         'the order value was halved across its two invoices')
+
 
 
 class MomentumNeedsSomethingToCompareWith(TestCase):
@@ -2304,3 +2335,119 @@ class TheFilterListComesFromTheFileThatAnswers(TestCase):
                 self.assertGreater(
                     float(d['revenue']), 0,
                     f'{field}={value} was offered but returns no revenue')
+
+
+class TheFourTilesAreCountedOffTheColumnsTheBusinessNamed(TestCase):
+    """SKUs, Customers, Orders and Quantity, each from one named column of
+    the dump, each counted distinct, and all of them after the same
+    exclusions the money gets.
+
+    Every one of these was counted off something close but not equal:
+    customers by name rather than code, SKUs over the whole Item Code column
+    rather than finished goods, orders by invoice rather than by order. Each
+    difference is small on one row and large over a file, which is why the
+    tiles never agreed with what the business counts by hand.
+    """
+
+    def rows(self):
+        return [
+            # Two orders, one customer, two finished goods.
+            a_row(**{'Sales Order No.': 'SO-1', 'Customer No.': 'C-1',
+                     'Item Code': 'FG-001', 'Quantity': 10}),
+            a_row(**{'Sales Order No.': 'SO-2', 'Customer No.': 'C-1',
+                     'Item Code': 'FG-002', 'Quantity': 5}),
+            # Same order invoiced twice -- still one order.
+            a_row(**{'Sales Order No.': 'SO-2', 'Customer No.': 'C-1',
+                     'Invoice No.': 'INV-9', 'Item Code': 'FG-002',
+                     'Quantity': 1}),
+            # Not a finished good: packaging riding on a sales invoice.
+            a_row(**{'Sales Order No.': 'SO-3', 'Customer No.': 'C-2',
+                     'Item Code': 'PKG-500', 'Quantity': 100}),
+        ]
+
+    def test_skus_count_finished_goods_only(self):
+        upload(a_workbook(self.rows()))
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(d['skus'], 2, 'a non-FG item code was counted as a SKU')
+
+    def test_customers_are_counted_by_code_not_by_name(self):
+        upload(a_workbook([
+            a_row(**{'Customer No.': 'C-1', 'Customer Name': 'Sharma Traders'}),
+            a_row(**{'Customer No.': 'C-1', 'Customer Name': 'SHARMA TRADERS '}),
+        ]))
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(d['customers'], 1,
+                         'one customer spelt two ways counted twice')
+
+    def test_orders_are_distinct_sales_order_numbers(self):
+        upload(a_workbook(self.rows()))
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(d['orders'], 3, 'SO-2 was counted once per invoice')
+
+    def test_quantity_is_the_quantity_column_added_up(self):
+        upload(a_workbook(self.rows()))
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(float(d['quantity']), 116)
+
+    # -- the exclusions apply to all four --------------------------------
+
+    def test_b2b_and_export_are_left_out(self):
+        """Neither is primary sales, and the sheet that carries the plan has
+        neither in it -- so counting them put customers and orders on screen
+        the target beside them was never set against."""
+        upload(a_workbook([
+            a_row(**{'Sales Order No.': 'SO-1', 'Customer No.': 'C-1',
+                     'Item Code': 'FG-001'}),
+            a_row(**{'Sales Order No.': 'SO-2', 'Customer No.': 'C-2',
+                     'Item Code': 'FG-002', 'Zone': 'B2B'}),
+            a_row(**{'Sales Order No.': 'SO-3', 'Customer No.': 'C-3',
+                     'Item Code': 'FG-003', 'Zone': 'EXPORT'}),
+        ]))
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(d['orders'], 1, 'B2B or Export reached the order count')
+        self.assertEqual(d['customers'], 1)
+        self.assertEqual(d['skus'], 1)
+
+    def test_the_zone_match_does_not_care_about_case(self):
+        """The dump writes these by hand. An exact match let one row reading
+        "Export" through while excluding "EXPORT" beside it."""
+        upload(a_workbook([
+            a_row(**{'Sales Order No.': 'SO-1', 'Customer No.': 'C-1',
+                     'Item Code': 'FG-001'}),
+            a_row(**{'Sales Order No.': 'SO-2', 'Customer No.': 'C-2',
+                     'Item Code': 'FG-002', 'Zone': 'Export'}),
+            a_row(**{'Sales Order No.': 'SO-3', 'Customer No.': 'C-3',
+                     'Item Code': 'FG-003', 'Zone': 'b2b'}),
+        ]))
+        self.assertEqual(Client().get('/api/sales/overview/').json()['orders'], 1)
+
+    def test_an_excluded_remark_is_left_out_of_the_tiles_too(self):
+        upload(a_workbook([
+            a_row(**{'Sales Order No.': 'SO-1', 'Customer No.': 'C-1',
+                     'Item Code': 'FG-001'}),
+            a_row(**{'Sales Order No.': 'SO-2', 'Customer No.': 'C-2',
+                     'Item Code': 'FG-002', 'V-REMARS': 'SCHEME CN'}),
+            a_row(**{'Sales Order No.': 'SO-3', 'Customer No.': 'C-3',
+                     'Item Code': 'FG-003', 'V-REMARS': 'NOT A PART OF SALES'}),
+        ]))
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(d['orders'], 1, 'an excluded line reached the tiles')
+        self.assertEqual(d['customers'], 1)
+
+    # -- and they move with the filters ----------------------------------
+
+    def test_the_tiles_narrow_with_a_filter(self):
+        """The whole point: filter the screen and these have to agree with
+        what is left, or the tiles describe a different population from the
+        revenue above them."""
+        upload(a_workbook([
+            a_row(**{'Sales Order No.': 'SO-1', 'Customer No.': 'C-1',
+                     'Item Code': 'FG-001', 'Zone': 'North', 'Quantity': 10}),
+            a_row(**{'Sales Order No.': 'SO-2', 'Customer No.': 'C-2',
+                     'Item Code': 'FG-002', 'Zone': 'South', 'Quantity': 7}),
+        ]))
+        d = Client().get('/api/sales/overview/?zone=North').json()
+        self.assertEqual(d['orders'], 1)
+        self.assertEqual(d['customers'], 1)
+        self.assertEqual(d['skus'], 1)
+        self.assertEqual(float(d['quantity']), 10)

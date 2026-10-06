@@ -8,7 +8,7 @@ import io
 from datetime import date, timedelta
 
 import openpyxl
-from django.db.models import Sum, Count, Min, Max
+from django.db.models import Sum, Count, Min, Max, Q
 from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -68,7 +68,24 @@ FILTERABLE = ['state', 'zone', 'area', 'city', 'region', 'category', 'sub_catego
 # Rs 15.9 lakh of "NOT A PART OF SALES" sitting beside Delhi and Maharashtra.
 # Excluded here rather than at import so the rows stay in the table and the
 # file still reconciles line for line against the ERP.
-NOT_SALES_ZONES = ['NOT A PART OF SALES']
+# Zones whose rows are not primary sales, per the business.
+#
+# B2B and EXPORT are a different book of business: the review sheet that
+# carries the plan is general trade only and has neither in it, so counting
+# them on the invoice side put customers, SKUs and orders on screen that the
+# target they sit beside was never set against.
+#
+# Matched case-insensitively, because the dump writes these by hand and
+# `zone__in` is exact: one row reading "Export" rather than "EXPORT" would
+# have walked straight through.
+NOT_SALES_ZONES = ['NOT A PART OF SALES', 'B2B', 'EXPORT']
+
+
+def _not_sales_zone_q():
+    q = Q()
+    for z in NOT_SALES_ZONES:
+        q |= Q(zone__iexact=z)
+    return q
 
 
 def _multi(request, key):
@@ -229,7 +246,7 @@ def apply_dim_filters(qs, request):
     """
     qs = (qs.exclude(is_cancelled=True)
             .exclude(is_not_sales=True)
-            .exclude(zone__in=NOT_SALES_ZONES))
+            .exclude(_not_sales_zone_q()))
     applied = {}
     for f in FILTERABLE:
         vals = _multi(request, f)
@@ -405,7 +422,7 @@ def money_base(request, field=None, dims=True, dump_only=False):
         # Everything, still source-scoped and still minus cancelled rows --
         # the "whole company" side of a year-on-year comparison.
         base = (SalesRecord.objects.exclude(is_cancelled=True)
-                .exclude(is_not_sales=True).exclude(zone__in=NOT_SALES_ZONES))
+                .exclude(is_not_sales=True).exclude(_not_sales_zone_q()))
     if dump_only or (field is not None and field not in sheet_fields()):
         return base.filter(source=SalesRecord.SOURCE_INVOICE)
     covered = sheet_months()
