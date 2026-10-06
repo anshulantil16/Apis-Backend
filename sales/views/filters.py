@@ -269,6 +269,33 @@ def financial_year_window(qs):
             fy_label(y))
 
 
+def month_start(value):
+    """'2026-04', '2026-04-15' or a date -> the 1st of that month, or None.
+
+    The screen asks by month now, not by day. Both spellings are accepted so
+    that a link someone saved with a full date still resolves to the month it
+    falls in rather than failing.
+    """
+    if not value:
+        return None
+    raw = str(value).strip()
+    d = parse_date(raw if len(raw) > 7 else raw + '-01')
+    return d.replace(day=1) if d else None
+
+
+def month_end(value):
+    """Same, but the LAST day of that month.
+
+    A month range that ended on the 1st would take in only the sheet rows,
+    which are stored on the 1st, and none of the invoices after them.
+    """
+    d = month_start(value)
+    if not d:
+        return None
+    nxt = d.replace(year=d.year + 1, month=1) if d.month == 12 else d.replace(month=d.month + 1)
+    return nxt - timedelta(days=1)
+
+
 def apply_filters(qs, request, default_window=True, money_scope=True):
     """Shared filter parsing (dates + dimensions). Returns (qs, applied dict).
 
@@ -298,22 +325,27 @@ def apply_filters(qs, request, default_window=True, money_scope=True):
     would only ever take rows away from them.
     """
     qs, applied = apply_dim_filters(qs, request)
-    d_from = parse_date(request.query_params.get('from'))
-    d_to = parse_date(request.query_params.get('to'))
+    # The window is a RANGE OF MONTHS, not of days. `month_from`/`month_to`
+    # are what the screen sends; `from`/`to` are still read so that a saved
+    # link keeps working, and they are snapped to whole months too.
+    #
+    # Day-level ranges are gone deliberately. They could only ever be
+    # answered by the invoice dump, which covers one month, while the review
+    # sheet -- the record the business actually keeps, and the one the
+    # targets live in -- has no days in it at all: every row is a month,
+    # stored on the 1st. So a day range quietly swapped which file answered
+    # and left the target behind, and the same question asked by month and by
+    # day came back with two different numbers. One grain, one file, one
+    # answer.
+    m_from = month_start(request.query_params.get('month_from')
+                         or request.query_params.get('from'))
+    m_to = month_end(request.query_params.get('month_to')
+                     or request.query_params.get('to'))
     span = (request.query_params.get('span') or '').strip().lower()
 
-    # A date range can only be answered by the dump. The review sheet has no
-    # days in it -- every one of its rows is a month, stored on the 1st -- so
-    # a question like "5th to the 12th of September" has no meaning there,
-    # and leaving its rows in scope answered that question with a whole
-    # month's sales. Asking by month or by year reads the review sheet, which
-    # is the record the business itself keeps.
-    if money_scope and (d_from or d_to):
-        qs = qs.filter(source=SalesRecord.SOURCE_INVOICE)
-        applied['source'] = 'invoice_dump'
-    elif money_scope:
-        # By month or by year the review sheet answers, for every month it
-        # speaks for. The dump's rows for those months are left out of the
+    if money_scope:
+        # The review sheet answers for every month it speaks for, whatever
+        # the window. The dump's rows for those months are left out of the
         # total rather than zeroed -- they are still the only record of who
         # bought what, and detail_qs below reads them.
         covered = sheet_months()
@@ -324,22 +356,24 @@ def apply_filters(qs, request, default_window=True, money_scope=True):
         # number looks wrong, and the screen could not answer it.
         applied['source'] = 'review_sheet' if covered else 'invoice_dump'
 
-    if default_window and span != 'all' and not d_from and not d_to:
+    if default_window and span != 'all' and not m_from and not m_to:
         fy_from, fy_to, label = financial_year_window(qs)
         if fy_from:
-            d_from, d_to = fy_from, fy_to
+            m_from, m_to = fy_from, fy_to
             # Flagged so the screen can say which year it is showing and
             # offer to widen it. A default nobody can see is a default
             # nobody can correct.
             applied['window'] = {'basis': 'financial_year', 'label': label,
                                  'from': fy_from.isoformat(),
                                  'to': fy_to.isoformat()}
-    if d_from:
-        qs = qs.filter(order_date__gte=d_from)
-        applied['from'] = d_from.isoformat()
-    if d_to:
-        qs = qs.filter(order_date__lte=d_to)
-        applied['to'] = d_to.isoformat()
+    if m_from:
+        qs = qs.filter(order_date__gte=m_from)
+        applied['from'] = m_from.isoformat()
+        applied['month_from'] = m_from.strftime('%Y-%m')
+    if m_to:
+        qs = qs.filter(order_date__lte=m_to)
+        applied['to'] = m_to.isoformat()
+        applied['month_to'] = m_to.strftime('%Y-%m')
     return qs, applied
 
 

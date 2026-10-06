@@ -1837,16 +1837,18 @@ class ThePriorPeriodIsTheSameLength(TestCase):
 
 
 class WhichFileAnswersTheQuestionAsked(TestCase):
-    """Two files, two different questions, and the filter decides which.
+    """Two files, and the review sheet answers for every month it covers.
 
-    The review sheet is month-wise and year-wise: twelve columns a year, no
-    days in it at all, and its YTD ACH column is the figure the business
-    reads. The invoice dump is date-wise: one row per invoice line, dated to
-    the day, but only the month it was extracted in.
+    The sheet is month-wise and year-wise: twelve columns a year, no days in
+    it at all, and its YTD ACH column is the figure the business reads. It is
+    also the only file carrying the target. The invoice dump is one row per
+    invoice line, dated to the day, but covering a single month.
 
-    So asking by month or by year reads the sheet, and asking for a date
-    range reads the dump. Letting both answer either question is what put a
-    year-to-date figure on screen that appears in neither file.
+    The window is a range of MONTHS, so the sheet can always answer it. Day
+    ranges used to be offered and quietly swapped which file replied -- the
+    same stretch of time asked by month and by day came back with two
+    different figures, and the day version had no target at all. A month
+    range asked of one file gives one answer.
     """
 
     def _both(self):
@@ -1862,19 +1864,41 @@ class WhichFileAnswersTheQuestionAsked(TestCase):
                          "the dump's April was added to or swapped for the sheet's")
         self.assertEqual(d['filters']['source'], 'review_sheet')
 
-    def test_a_date_range_is_answered_by_the_dump(self):
+    def test_a_month_range_is_answered_by_the_review_sheet(self):
         self._both()
-        d = Client().get('/api/sales/overview/?from=2026-04-01&to=2026-04-30').json()
-        self.assertEqual(float(d['revenue']), 20000,
-                         'the review sheet answered a question about days')
-        self.assertEqual(d['filters']['source'], 'invoice_dump')
+        d = Client().get('/api/sales/overview/'
+                         '?month_from=2026-04&month_to=2026-04').json()
+        self.assertEqual(float(d['revenue']), 90000,
+                         "the dump answered a month the sheet speaks for")
+        self.assertEqual(d['filters']['source'], 'review_sheet')
 
-    def test_a_date_range_inside_the_month_is_not_a_whole_month(self):
-        """The sheet's rows all sit on the 1st, so leaving them in scope
-        answered "the 4th to the 6th" with the entire month's sales."""
+    def test_a_month_range_carries_the_target_with_it(self):
+        """The point of reading the sheet: the dump has no target at all, so
+        a window it answered could show achievement against nothing."""
+        self._both()
+        d = Client().get('/api/sales/overview/'
+                         '?month_from=2026-04&month_to=2026-04').json()
+        self.assertGreater(float(d['target']), 0,
+                           'a month range came back with no target')
+
+    def test_a_saved_link_with_full_dates_still_resolves_to_its_months(self):
+        """Links were shared while the screen asked by day. They must not
+        break, and they must answer as the month they fall in."""
         self._both()
         d = Client().get('/api/sales/overview/?from=2026-04-04&to=2026-04-06').json()
-        self.assertEqual(float(d['revenue']), 20000)
+        self.assertEqual(float(d['revenue']), 90000,
+                         'a day range did not widen to its month')
+        self.assertEqual(d['filters']['month_from'], '2026-04')
+        self.assertEqual(d['filters']['month_to'], '2026-04')
+
+    def test_the_window_is_reported_as_months(self):
+        self._both()
+        f = Client().get('/api/sales/overview/'
+                         '?month_from=2026-04&month_to=2026-09').json()['filters']
+        self.assertEqual((f['month_from'], f['month_to']), ('2026-04', '2026-09'))
+        # Still given as dates too, so anything reading the old keys keeps
+        # working -- and the end is the LAST day of the month, not the 1st.
+        self.assertEqual((f['from'], f['to']), ('2026-04-01', '2026-09-30'))
 
     def test_the_invoice_panels_survive_a_month_wise_view(self):
         """The sheet has no customers, SKUs or invoices. Measured over the
@@ -1930,21 +1954,28 @@ class OneTileIsMeasuredOffOneFile(TestCase):
 
     The original complaint was a tile reading Rs 298 Cr over "vs Rs 76.97 Cr
     same 6 months last year" -- a number covering eighteen months above a
-    comparison covering six. Picking a date range reintroduced it in a new
-    form: the money came off the dump and the comparison beneath it off the
-    review sheet.
+    comparison covering six. A day range reintroduced it in a new form: the
+    money came off the dump and the comparison beneath it off the sheet.
+
+    Asking by month settles it. One file answers the headline AND the
+    comparison, and because the sheet carries last year's months beside this
+    year's, a month window has a real year-on-year figure instead of none.
     """
 
     def _both(self):
         upload(aop_workbook([aop_row()]))
         upload(a_workbook([a_row(**{'Invoice No.': 'INV-001'})]))
 
-    def test_a_date_range_has_no_same_months_last_year(self):
-        """The review sheet has no days, so there is no same fortnight last
-        year for it to answer with."""
+    def test_a_month_window_does_have_same_months_last_year(self):
+        """What asking by month buys: the sheet holds Apr-25 beside Apr-26,
+        so April against last April is a figure both files agree on. A day
+        range could not answer this at all."""
         self._both()
-        d = Client().get('/api/sales/overview/?from=2026-04-04&to=2026-04-06').json()
-        self.assertIsNone(d['vs_last_year'])
+        d = Client().get('/api/sales/overview/'
+                         '?month_from=2026-04&month_to=2026-04').json()
+        self.assertIsNotNone(d['vs_last_year'],
+                             'a month window came back with no year-on-year')
+        self.assertEqual(d['vs_last_year']['last_year'], 80000)
 
     def test_by_year_it_still_does(self):
         self._both()
@@ -1953,12 +1984,14 @@ class OneTileIsMeasuredOffOneFile(TestCase):
         self.assertEqual(d['vs_last_year']['last_year'], 80000)
 
     def test_the_prior_period_comes_off_the_same_file_as_the_headline(self):
+        """Both read the sheet now, so there is no file boundary for the
+        comparison to fall across."""
         self._both()
-        d = Client().get('/api/sales/overview/?from=2026-04-01&to=2026-04-30').json()
-        self.assertEqual(d['filters']['source'], 'invoice_dump')
-        # March 2026 in the review sheet must not become the dump's prior
-        # period. The dump reaches one month, so there is nothing behind it.
-        self.assertFalse(d['prev_period_has_data'])
+        d = Client().get('/api/sales/overview/'
+                         '?month_from=2026-04&month_to=2026-04').json()
+        self.assertEqual(d['filters']['source'], 'review_sheet')
+        self.assertEqual(float(d['revenue']), 90000,
+                         'the headline did not come off the sheet')
 
 
 class ABreakdownComesFromTheFileThatHasTheColumn(TestCase):
