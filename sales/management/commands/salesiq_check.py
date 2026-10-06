@@ -16,7 +16,8 @@ from django.db.models import Count, Sum, Q
 
 from sales.models import SalesRecord, sheet_months
 from sales.views.core import FINISHED_GOODS_PREFIX
-from sales.views.filters import NOT_SALES_ZONES, _not_sales_zone_q
+from sales.views.filters import (NOT_SALES_ZONES, _not_sales_zone_q,
+                                 in_plan_scope, sheet_zones)
 
 
 def tiles(qs):
@@ -61,8 +62,10 @@ class Command(BaseCommand):
         steps.append(('minus NOT A PART OF SALES + SCHEME CN',
                       a.exclude(is_not_sales=True)))
         b = steps[-1][1]
-        steps.append((f'minus zones {NOT_SALES_ZONES}',
-                      b.exclude(_not_sales_zone_q())))
+        keep = sheet_zones()
+        label = ('keep only zones the review sheet has'
+                 if keep else f'minus zones {NOT_SALES_ZONES} (no sheet loaded)')
+        steps.append((label, in_plan_scope(b)))
         final = steps[-1][1]
 
         for label, qs in steps:
@@ -107,10 +110,16 @@ class Command(BaseCommand):
         w('  ' + (', '.join(skipped) if skipped else '(none)'))
 
         w('')
-        w('ZONE VALUES PRESENT (so an unexpected spelling shows up)')
-        zones = (dump.exclude(zone='').order_by()
-                     .values_list('zone', flat=True).distinct()[:25])
-        w('  ' + (', '.join(zones) if zones else '(none)'))
+        w('ZONES: WHAT THE PLAN COVERS, AND WHAT IT DOES NOT')
+        in_dump = sorted({z for z in dump.exclude(zone='').order_by()
+                          .values_list('zone', flat=True).distinct()})
+        plan_zones = sorted(sheet_zones())
+        w('  the review sheet has : ' + (', '.join(plan_zones) or '(none)'))
+        w('  the dump has         : ' + (', '.join(in_dump) or '(none)'))
+        dropped = [z for z in in_dump if z not in plan_zones]
+        w('  DROPPED, no plan for : ' + (', '.join(dropped) or '(none)'))
+        if not plan_zones:
+            w('  no sheet loaded, so the named-zone fallback is in use')
 
         w('')
         w('CHANNEL VALUES PRESENT (blank means the dump needs re-uploading)')

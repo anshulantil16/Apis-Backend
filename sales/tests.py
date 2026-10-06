@@ -2519,3 +2519,80 @@ class SubRegionKeepsTheSheetsOwnWords(TestCase):
         self.assertEqual(offered, from_sheet)
         self.assertNotIn('Delhi NCR', offered,
                          "the dump's subzone vocabulary reached Sub-Region")
+
+
+class ThePlanDecidesWhatCountsAsSales(TestCase):
+    """The dump carries zones the plan was never set against, and counting
+    them put revenue, customers and orders on screen beside a target that
+    does not cover them.
+
+    The rule is a whitelist derived from the review sheet, not a list of
+    things to drop. A hand-written list needs maintaining -- a zone added to
+    the ERP next month is counted until somebody remembers it, and nothing
+    on screen says so -- and it gets the judgement call wrong: the sheet
+    carries MT, E-COM and Govt. Bus., so those ARE in the plan and belong in
+    the figure, however little they look like general trade.
+    """
+
+    def _sheet_and_dump(self):
+        # The sheet's zone is North, so North is the whole of the plan.
+        upload(aop_workbook([aop_row(**{'REGION': 'North'})]))
+        upload(a_workbook([
+            a_row(**{'Zone': 'North', 'Sales Order No.': 'SO-1',
+                     'Customer No.': 'C-1', 'Item Code': 'FG-1'}),
+            a_row(**{'Zone': 'EXPORT', 'Sales Order No.': 'SO-2',
+                     'Customer No.': 'C-2', 'Item Code': 'FG-2'}),
+            a_row(**{'Zone': 'CPC', 'Sales Order No.': 'SO-3',
+                     'Customer No.': 'C-3', 'Item Code': 'FG-3'}),
+        ]))
+
+    def test_a_zone_the_plan_does_not_cover_is_not_counted(self):
+        self._sheet_and_dump()
+        d = Client().get('/api/sales/overview/'
+                         '?month_from=2026-04&month_to=2026-04').json()
+        self.assertEqual(d['orders'], 1, 'a zone outside the plan was counted')
+        self.assertEqual(d['customers'], 1)
+        self.assertEqual(d['skus'], 1)
+
+    def test_cpc_goes_without_having_been_named(self):
+        """CPC was never on anyone's list of exclusions. It is dropped
+        because the plan does not cover it, which is the whole point."""
+        self._sheet_and_dump()
+        self.assertNotIn(
+            'CPC', Client().get('/api/sales/filters/').json()['zone'])
+
+    def test_a_zone_the_sheet_does_carry_is_kept(self):
+        """MT and E-COM look like something other than general trade, and
+        are in the sheet, so they are in the plan and in the figure."""
+        upload(aop_workbook([aop_row(**{'REGION': 'MT'})]))
+        upload(a_workbook([
+            a_row(**{'Zone': 'MT', 'Sales Order No.': 'SO-1',
+                     'Customer No.': 'C-1', 'Item Code': 'FG-1'}),
+        ]))
+        d = Client().get('/api/sales/overview/'
+                         '?month_from=2026-04&month_to=2026-04').json()
+        self.assertEqual(d['orders'], 1, 'a zone the plan covers was dropped')
+
+    def test_with_no_sheet_loaded_it_falls_back_to_the_named_zones(self):
+        """A dump-only install has nothing to derive the list from. It must
+        not then drop everything -- an empty whitelist excluding the whole
+        file is the worst possible reading of "no plan"."""
+        upload(a_workbook([
+            a_row(**{'Zone': 'North', 'Sales Order No.': 'SO-1',
+                     'Customer No.': 'C-1', 'Item Code': 'FG-1'}),
+            a_row(**{'Zone': 'B2B', 'Sales Order No.': 'SO-2',
+                     'Customer No.': 'C-2', 'Item Code': 'FG-2'}),
+        ]))
+        d = Client().get('/api/sales/overview/').json()
+        self.assertEqual(d['orders'], 1, 'the fallback dropped or kept wrongly')
+
+    def test_the_comparison_uses_the_same_rule_as_the_headline(self):
+        """money_base feeds the prior period and the year-on-year line. When
+        it applied a different zone rule, the comparison counted a zone the
+        headline had dropped and the growth between them was an artefact."""
+        from sales.views.filters import in_plan_scope, sheet_zones
+        self._sheet_and_dump()
+        self.assertTrue(sheet_zones())
+        scoped = in_plan_scope(SalesRecord.objects.filter(source='invoice'))
+        self.assertEqual(
+            set(scoped.values_list('zone', flat=True).distinct()), {'North'})

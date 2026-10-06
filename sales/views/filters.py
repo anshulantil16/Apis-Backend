@@ -94,6 +94,42 @@ def _not_sales_zone_q():
     return q
 
 
+def sheet_zones():
+    """The zones the review sheet carries -- the business the plan is set for.
+
+    A whitelist, derived from the sheet itself, rather than a hand-written
+    list of what to drop. The dump carries rows the plan was never set
+    against -- EXPORT, B2B, CPC -- and counting them put customers, orders
+    and revenue on screen beside a target that does not cover them.
+
+    Derived rather than listed because the list would need maintaining: a
+    zone added to the ERP next month is counted until somebody remembers to
+    exclude it, and nothing on screen would say so. This way the question is
+    always "does the plan cover it", which is the question that matters.
+
+    It also keeps what a hand-written list would have got wrong: the sheet
+    carries MT, E-COM and Govt. Bus., so they ARE part of the plan and
+    belong in the figure, however little they look like general trade.
+    """
+    return {z for z in
+            SalesRecord.objects.filter(source=SalesRecord.SOURCE_PLAN)
+            .exclude(zone='').values_list('zone', flat=True).distinct()}
+
+
+def in_plan_scope(qs):
+    """Keep the dump to the zones the plan is set against.
+
+    The single statement of the rule. The headline, the comparisons behind
+    it and the figure an upload reports all have to apply it identically --
+    when they did not, a comparison counted a zone the headline above it had
+    dropped, and the growth between them was an artefact of the difference.
+    """
+    keep = sheet_zones()
+    if keep:
+        return qs.filter(Q(source=SalesRecord.SOURCE_PLAN) | Q(zone__in=keep))
+    return qs.exclude(_not_sales_zone_q())
+
+
 def _multi(request, key):
     """Collect a repeatable / comma-separated query param into a list."""
     vals = []
@@ -250,9 +286,7 @@ def apply_dim_filters(qs, request):
     one that got forgotten would quietly report a cancelled invoice as
     revenue.
     """
-    qs = (qs.exclude(is_cancelled=True)
-            .exclude(is_not_sales=True)
-            .exclude(_not_sales_zone_q()))
+    qs = in_plan_scope(qs.exclude(is_cancelled=True).exclude(is_not_sales=True))
     applied = {}
     for f in FILTERABLE:
         vals = _multi(request, f)
@@ -433,8 +467,8 @@ def money_base(request, field=None, dims=True, dump_only=False):
     if not dims:
         # Everything, still source-scoped and still minus cancelled rows --
         # the "whole company" side of a year-on-year comparison.
-        base = (SalesRecord.objects.exclude(is_cancelled=True)
-                .exclude(is_not_sales=True).exclude(_not_sales_zone_q()))
+        base = in_plan_scope(SalesRecord.objects.exclude(is_cancelled=True)
+                             .exclude(is_not_sales=True))
     if dump_only or (field is not None and field not in sheet_fields()):
         return base.filter(source=SalesRecord.SOURCE_INVOICE)
     covered = sheet_months()

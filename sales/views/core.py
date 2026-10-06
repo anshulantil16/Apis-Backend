@@ -25,7 +25,8 @@ from ..forecasting import forecast_series
 from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters, detail_qs,
                       qs_for_dimension, money_base, sheet_fields,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
-                      NOT_SALES_ZONES, _not_sales_zone_q, with_actuals, comparable_window,
+                      NOT_SALES_ZONES, _not_sales_zone_q, in_plan_scope,
+                      with_actuals, comparable_window,
                       same_months_last_year)
 
 class SalesTemplateView(SalesIQView):
@@ -366,9 +367,8 @@ class SalesUploadView(SalesIQAdminView):
         # The same two exclusions the dashboard applies. The number printed
         # beside a file in the uploads list and the number on the dashboard
         # are the same claim, so they have to be counted the same way.
-        earned = (upload.records.exclude(is_cancelled=True)
-                  .exclude(is_not_sales=True)
-                  .exclude(_not_sales_zone_q())
+        earned = (in_plan_scope(upload.records.exclude(is_cancelled=True)
+                                .exclude(is_not_sales=True))
                   .aggregate(rev=Sum('net_amount'))['rev'])
         upload.row_count = agg['n'] or 0
         upload.skipped_rows = sum(r.data.get('skipped', 0) for _, r in good)
