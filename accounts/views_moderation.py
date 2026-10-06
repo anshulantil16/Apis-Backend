@@ -19,6 +19,7 @@ CONTENT_TYPES = {
     'announcement': {'model': ('noticeboard', 'Announcement'), 'label': 'Announcements'},
     'news':      {'model': ('noticeboard', 'NewsItem'),   'label': 'Daily News'},
     'referral':  {'model': ('referrals', 'EmployeeReferral'), 'label': 'Referrals'},
+    'policydocument': {'model': ('policies', 'PolicyDocument'), 'label': 'Policies'},
 }
 
 PAGE_SIZE = 100

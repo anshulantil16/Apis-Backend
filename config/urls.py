@@ -36,6 +36,7 @@ urlpatterns = [
     path('api/vacancies/',   include('vacancies.urls')),
     path('api/wall/',        include('wall.urls')),
     path('api/noticeboard/', include('noticeboard.urls')),
+    path('api/policies/',    include('policies.urls')),
     # Always serve media files (works in both DEBUG and production mode)
     re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
 ]

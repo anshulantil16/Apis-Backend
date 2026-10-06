@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     'vacancies',
     'wall',
     'noticeboard',
+    'policies',
 ]
 
 MIDDLEWARE = [

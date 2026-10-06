@@ -99,10 +99,16 @@ class ModeratedContent(models.Model):
         """
         return ''
 
+    def moderation_link(self, request=None):
+        """A URL the reviewer can open, for content that is a file but not an
+        image — a PDF is as opaque as a photo, and cannot be shown inline."""
+        return ''
+
     def moderation_payload(self, request=None):
         """The common envelope every queue row carries."""
         return {
             'preview': self.moderation_preview(request),
+            'link': self.moderation_link(request),
             'id': self.id,
             'type': self._meta.model_name,
             'type_label': self._meta.verbose_name.title(),

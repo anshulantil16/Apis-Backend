@@ -222,6 +222,27 @@ A superadmin's own submission is auto-approved: they are the approving
 authority, so queueing work for themselves adds a step without adding control.
 The activity log still records that they created it.
 
+Content that is a file but not an image (a PDF, a spreadsheet) overrides
+`moderation_link()` instead of `moderation_preview()`; the console shows it as
+"Open file". A reviewer approving a document they cannot open is not reviewing
+it.
+
+## Policies & Guidelines (`policies.PolicyDocument`)
+
+One table for SOPs, manual policies, templates, work instructions and formats;
+`category` holds the label the page shows, and must match `CATEGORY_LABELS` in
+the frontend's `PoliciesPage.tsx`. It goes through the moderation gate above.
+
+- The uploader can delete their own document (the "added by accident" case);
+  a superadmin can delete any. `PolicyDocument.can_delete` is the one rule.
+- Files are allowlisted by extension **and** checked against their opening
+  bytes (`MAGIC_FOR_EXT`) — they are served from `MEDIA_URL` on our origin.
+- `doc_approved_by` / `doc_reviewed_by` are who signed the document off in the
+  business. They are not `reviewed_by`, the superadmin who let it onto the
+  intranet.
+- The 11 PDFs in the frontend's `public/Policies/` are part of the build and
+  are not rows here.
+
 ## Daily News (`noticeboard.NewsItem`)
 
 The strip under Your Tools. Stories about the market APIS sells into — APIs,
