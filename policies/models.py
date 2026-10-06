@@ -91,12 +91,18 @@ class PolicyDocument(ModeratedContent):
         return self.file.url if self.file else ''
 
     def can_delete(self, user):
-        """The uploader can take back their own upload — the "added it by
-        accident" case — and a superadmin can remove anything."""
-        if user is None:
-            return False
-        return user.is_superadmin or (self.submitted_by_id is not None
-                                      and self.submitted_by_id == user.id)
+        """Only a super admin removes a document. Nobody else, including
+        whoever uploaded it.
+
+        It was the uploader as well, for the "added it by accident" case.
+        But this register is the company's standing policies and SOPs: a
+        document here is something people are expected to follow, and once
+        it is published, taking it down is not the uploader's call to make
+        any more than it was theirs to publish it. The accident case is
+        covered by asking an administrator, which costs a message and leaves
+        a trail.
+        """
+        return bool(user and user.is_superadmin)
 
     def delete(self, *args, **kwargs):
         """Take the file with the row, or it stays served by its media URL

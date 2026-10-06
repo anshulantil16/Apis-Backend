@@ -165,7 +165,7 @@ class PolicyDocumentListView(PortalScopedAPIView):
 
 
 class PolicyDocumentDetailView(PortalScopedAPIView):
-    """DELETE — the uploader takes back their own; a superadmin removes any."""
+    """DELETE — a super admin only. See PolicyDocument.can_delete."""
 
     def delete(self, request, pk):
         user, err = require_user(request)
@@ -175,8 +175,9 @@ class PolicyDocumentDetailView(PortalScopedAPIView):
         if not d:
             return Response({'error': 'Document not found.'}, status=http.HTTP_404_NOT_FOUND)
         if not d.can_delete(user):
-            return Response({'error': 'Only the person who added this document, '
-                                      'or an administrator, can remove it.'},
+            return Response({'error': 'Only an administrator can remove a '
+                                      'document from Policies & Guidelines. '
+                                      'Ask one if this was added by mistake.'},
                             status=http.HTTP_403_FORBIDDEN)
 
         title, did, category, by = d.title, d.id, d.category, d.submitted_by_name

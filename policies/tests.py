@@ -70,7 +70,10 @@ class PolicyDocuments(TestCase):
         self.assertEqual(self.client.get(URL, **self._auth(self.bob)).json(), [])
         mine = self.client.get(URL, **self._auth(self.alice)).json()
         self.assertEqual(len(mine), 1)
-        self.assertTrue(mine[0]['isMine'] and mine[0]['canDelete'])
+        # Still theirs to see while it waits for approval -- but not theirs
+        # to remove; only an administrator does that.
+        self.assertTrue(mine[0]['isMine'])
+        self.assertFalse(mine[0]['canDelete'])
 
     def test_rejects_unknown_category(self):
         r = self._upload(self.admin, category='Memes')
@@ -90,16 +93,43 @@ class PolicyDocuments(TestCase):
         self.assertEqual(r.status_code, 201, r.content)
         self.assertIsNone(r.json()['pages'])
 
-    def test_uploader_can_delete_own_and_file_goes_with_it(self):
+    def test_the_uploader_cannot_delete_their_own(self):
+        """It used to be allowed, for the "added it by accident" case.
+
+        This register is the company's standing policies: a document here is
+        something people are expected to follow, and taking it down is not
+        the uploader's call any more than publishing it was. The accident
+        case goes through an administrator, which leaves a trail.
+        """
+        self._upload(self.alice)
+        doc = PolicyDocument.objects.get()
+        r = self.client.delete(f'{URL}{doc.id}/', **self._auth(self.alice))
+        self.assertEqual(r.status_code, 403, r.content[:200])
+        self.assertTrue(PolicyDocument.objects.exists(),
+                        'the uploader removed a published policy')
+
+    def test_an_admin_deletes_and_the_file_goes_with_it(self):
         self._upload(self.alice)
         doc = PolicyDocument.objects.get()
         storage, name = doc.file.storage, doc.file.name
         self.assertTrue(storage.exists(name))
 
-        r = self.client.delete(f'{URL}{doc.id}/', **self._auth(self.alice))
+        r = self.client.delete(f'{URL}{doc.id}/', **self._auth(self.admin))
         self.assertEqual(r.status_code, 200)
         self.assertFalse(PolicyDocument.objects.exists())
-        self.assertFalse(storage.exists(name))
+        self.assertFalse(storage.exists(name),
+                         'the row went but the file stayed served')
+
+    def test_nobody_but_an_admin_is_offered_the_delete_control(self):
+        """canDelete drives the icon on the page, so an employee who cannot
+        delete must not be shown a button that will refuse them."""
+        self._upload(self.alice)
+        for who in (self.alice, self.bob):
+            rows = self.client.get(URL, **self._auth(who)).json()
+            for row in rows:
+                self.assertFalse(row['canDelete'], f'{who.email} was offered delete')
+        admin_rows = self.client.get(URL, **self._auth(self.admin)).json()
+        self.assertTrue(all(r['canDelete'] for r in admin_rows))
 
     def test_someone_else_cannot_delete_but_admin_can(self):
         self._upload(self.alice)
