@@ -410,7 +410,13 @@ def apply_filters(qs, request, default_window=True, money_scope=True):
 # drift apart.
 def sheet_fields():
     from ..aop import DIMENSIONS as AOP_DIMENSIONS
-    return {f for f in AOP_DIMENSIONS if f != 'sfo_count'}
+    # `subzone` is not one of the sheet's own column names, so it is added
+    # here rather than taken from the contract above. The sheet's Sub-Region
+    # is stored there verbatim -- MH-1, KA-5, Lulu -- while `state` holds a
+    # state name derived from that code so the two files name states alike.
+    # The dump fills subzone too, with its own vocabulary (Delhi NCR), so
+    # without this the Sub-Region list would hold both at once.
+    return {f for f in AOP_DIMENSIONS if f != 'sfo_count'} | {'subzone'}
 
 
 def money_base(request, field=None, dims=True, dump_only=False):

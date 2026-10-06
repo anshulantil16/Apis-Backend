@@ -2483,3 +2483,39 @@ class RegionIsNotOfferedTwice(TestCase):
         upload(aop_workbook([aop_row()]))
         rows = Client().get('/api/sales/breakdown/?dim=zone').json()['results']
         self.assertTrue(rows, 'the Region breakdown came back empty')
+
+
+class SubRegionKeepsTheSheetsOwnWords(TestCase):
+    """The sheet's Sub-Region is MH-1, KA-5, Lulu, More -- selling
+    territories, not states.
+
+    The importer keeps them verbatim in `subzone` and puts a state name
+    DERIVED from the code into `state` (MH-1 -> Maharashtra), so that this
+    sheet and the invoice dump name states the same way. Labelling `state`
+    Sub-Region therefore showed the derivation in place of the sheet's own
+    words -- Andhra Pradesh where the file says AP-1.
+    """
+
+    def test_the_sheets_sub_region_is_stored_verbatim(self):
+        # A code where the territory and the state it derives to are plainly
+        # different -- the fixture's default 'Delhi' is both, which would
+        # pass this test without proving anything.
+        upload(aop_workbook([aop_row(**{'Sub-Region': 'MH-1'})]))
+        row = SalesRecord.objects.filter(source='plan').first()
+        self.assertEqual(row.subzone, 'MH-1',
+                         'the sheet Sub-Region was not kept as written')
+        self.assertNotEqual(row.state, 'MH-1',
+                            'state should hold the derived state name')
+
+    def test_the_sub_region_list_holds_no_dump_vocabulary(self):
+        """subzone is filled by BOTH files -- the dump writes Delhi NCR into
+        it -- so without scoping the list would mix the two."""
+        upload(aop_workbook([aop_row()]))
+        upload(a_workbook([a_row(**{'Subzone': 'Delhi NCR'})]))
+        offered = set(Client().get('/api/sales/filters/').json()['subzone'])
+        from_sheet = set(SalesRecord.objects.filter(source='plan')
+                         .exclude(subzone='')
+                         .values_list('subzone', flat=True))
+        self.assertEqual(offered, from_sheet)
+        self.assertNotIn('Delhi NCR', offered,
+                         "the dump's subzone vocabulary reached Sub-Region")
