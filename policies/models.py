@@ -86,11 +86,9 @@ class PolicyDocument(ModeratedContent):
 
     def moderation_link(self, request=None):
         """The document itself. Its title says nothing about what it says,
-        so the reviewer has to be able to open it."""
-        if not self.file:
-            return ''
-        url = self.file.url
-        return request.build_absolute_uri(url) if request is not None else url
+        so the reviewer has to be able to open it. Root-relative, never
+        build_absolute_uri — see roompulse/attachments.py url_for."""
+        return self.file.url if self.file else ''
 
     def can_delete(self, user):
         """The uploader can take back their own upload — the "added it by
