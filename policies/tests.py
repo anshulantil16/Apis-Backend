@@ -108,6 +108,15 @@ class PolicyDocuments(TestCase):
         self.assertEqual(self.client.delete(f'{URL}{doc.id}/').status_code, 401)
         self.assertEqual(self.client.delete(f'{URL}{doc.id}/', **self._auth(self.admin)).status_code, 200)
 
+    def test_file_link_is_root_relative_not_the_host_django_was_reached_on(self):
+        # Behind the QA proxy Django is reached as 127.0.0.1:8001; a link
+        # carrying that host sends the browser to the viewer's own machine.
+        r = self.client.post(URL, {'title': 'x', 'category': 'SOP', 'file': _pdf()},
+                             HTTP_HOST='127.0.0.1:8001', **self._auth(self.admin))
+        self.assertTrue(r.json()['file'].startswith('/media/policies/'), r.json()['file'])
+        listed = self.client.get(URL, HTTP_HOST='127.0.0.1:8001').json()
+        self.assertTrue(listed[0]['file'].startswith('/media/policies/'))
+
     def test_pending_upload_reaches_the_approval_queue_with_a_link(self):
         self._upload(self.alice)
         payload = PolicyDocument.objects.get().moderation_payload()

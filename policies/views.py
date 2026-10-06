@@ -32,9 +32,10 @@ CATEGORIES = {c[0] for c in PolicyDocument.CATEGORY_CHOICES}
 
 
 def _serialize(d, request=None, viewer=None):
+    # Root-relative on purpose — see roompulse/attachments.py url_for. Behind
+    # the QA proxy build_absolute_uri answered with 127.0.0.1:8001, which the
+    # browser read as the viewer's own machine.
     url = d.file.url if d.file else ''
-    if request is not None and url:
-        url = request.build_absolute_uri(url)
     return {
         'id': d.id, 'title': d.title, 'category': d.category,
         'department': d.department, 'version': d.version, 'pages': d.pages,

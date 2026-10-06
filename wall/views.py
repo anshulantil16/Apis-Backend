@@ -19,9 +19,10 @@ CATEGORIES = {c[0] for c in WallPhoto.CATEGORY_CHOICES}
 
 
 def _serialize(p, request=None, viewer=None):
+    # Root-relative on purpose — see roompulse/attachments.py url_for. Behind
+    # the QA proxy build_absolute_uri answered with 127.0.0.1:8001, which the
+    # browser read as the viewer's own machine.
     url = p.image.url if p.image else ''
-    if request is not None and url:
-        url = request.build_absolute_uri(url)
     return {
         'id': p.id, 'title': p.title, 'category': p.category, 'caption': p.caption,
         'src': url,
