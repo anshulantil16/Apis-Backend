@@ -4,13 +4,27 @@ Deliberately dependency-free: statsmodels/prophet are not installed on the
 servers and adding them for one endpoint is not worth the deployment risk.
 Everything here is standard exponential smoothing implemented directly.
 
-Method is chosen from how much history actually exists, because fitting a
+Method is chosen from what is actually available, because fitting a
 seasonal model to eight months of data produces confident nonsense:
 
-  >= 24 months  Holt-Winters (level + trend + multiplicative seasonality)
-  >= 6  months  Holt's linear trend (level + trend, no seasonality)
-  >= 2  months  drift from the average period-over-period change
-  <  2  months  flat carry-forward of the last value
+  AOP loaded     run rate against plan -- the plan carries the month shape,
+                 the business's own achievement rate carries the level
+  >= 24 months   Holt-Winters (level + trend + multiplicative seasonality)
+  >= 6  months   Holt's linear trend (level + trend, no seasonality)
+  >= 2  months   drift from the average period-over-period change
+  <  2  months   flat carry-forward of the last value
+
+The plan-anchored method is preferred wherever the plan reaches, and the
+statistical models below it are the fallback for when it does not. The
+reason is that a pure extrapolation has nothing holding it down: it reads
+the slope of the months it was given and keeps going, so a strong first
+half projects a second half the business never planned for and nobody in
+the review recognises. The AOP is the company's own month-by-month shape
+for the year -- built from the sales plan, the launch calendar and the
+festive quarter -- and it is a far better carrier of that shape than a
+slope fitted to a handful of months. What the model still has to supply is
+the LEVEL: plans are not met exactly, and the honest question is what rate
+this business has actually been running at against its own plan.
 
 Every forecast returns a confidence band derived from the model's own fit
 residuals, so a series the model tracks badly is visibly uncertain rather
@@ -126,6 +140,72 @@ def _drift(series, periods):
     step = _mean(steps)
     last = series[-1]
     return [_clamp0(last + step * (i + 1)) for i in range(periods)], list(series)
+
+
+def _stdev(xs):
+    if len(xs) < 2:
+        return 0.0
+    m = _mean(xs)
+    return math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1))
+
+
+# How hard to favour recent months when reading the run rate. 0.85 means a
+# month counts about 15% less than the one after it, so half the weight sits
+# in the last four or five months: recent enough to follow a business that
+# has picked up or slowed, long enough not to swing on one odd month.
+RUN_RATE_DECAY = 0.85
+
+# Below this many months with BOTH an actual and a plan there is no rate to
+# read -- three points is already thin, and two would make the forecast an
+# echo of whichever month happened to be last.
+MIN_OVERLAP = 3
+
+
+def run_rate_against_plan(overlap):
+    """-> (rate, spread, [(month, ratio)]) from months that have both figures.
+
+    The rate is what the business has been achieving against its own plan,
+    recent months weighted heaviest. The spread is how much that rate has
+    varied month to month, and it is what the high and low lines are built
+    from -- not from a model's fit residuals, because the forecast is no
+    longer a fitted curve.
+
+    A month with no plan, or a plan of zero, is skipped rather than counted
+    as a miss: there is no rate to read off a month nobody set a target for.
+    """
+    ratios = [(m, a / t) for m, a, t in overlap if t > 0]
+    if not ratios:
+        return None, 0.0, []
+    weights = [RUN_RATE_DECAY ** i for i in range(len(ratios) - 1, -1, -1)]
+    total = sum(weights)
+    rate = sum(w * r for w, (_, r) in zip(weights, ratios)) / total
+    spread = _stdev([r for _, r in ratios])
+    return rate, spread, ratios
+
+
+def _plan_anchored(plan_months, rate, spread):
+    """-> [(month, value, lower, upper)] for each planned month.
+
+    Every figure is that month's AOP scaled by the run rate, so the forecast
+    keeps the plan's own shape -- its festive quarter, its launches, its
+    quiet months -- and only moves the level to where the business has
+    actually been running.
+
+    The band is the run rate's own variability, applied to the same AOP. It
+    does NOT widen with the horizon the way an extrapolated trend's band
+    does, and that is deliberate: the uncertainty here is "what rate will we
+    run at", which is a level, not a random walk compounding month on month.
+    Widening it would be borrowing a correction from a model that is not
+    being used.
+    """
+    # A floor, for the same reason the statistical band has one: a business
+    # that happened to track its plan closely for a few months has not
+    # thereby made the rest of the year certain.
+    spread = max(spread, 0.05)
+    lo_rate = max(0.0, rate - 1.96 * spread)
+    hi_rate = rate + 1.96 * spread
+    return [(m, _clamp0(t * rate), _clamp0(t * lo_rate), _clamp0(t * hi_rate))
+            for m, t in plan_months]
 
 
 # ── public API ───────────────────────────────────────────────────────────
@@ -281,4 +361,114 @@ def forecast_series(points, periods=6):
         'spec': spec,
         'points': out,
         'forecast_total': round(sum(p['value'] for p in out), 2),
+    }
+
+
+def forecast_from_plan(points, plan, periods=6):
+    """Forecast the months the AOP reaches, anchored to it.
+
+    `points`: chronological [(month, actual)] -- the history.
+    `plan`:   {month: AOP} for every month the plan covers, past and future.
+
+    Returns the same shape as forecast_series(), or None when there is not
+    enough overlap between the two to read a run rate -- in which case the
+    caller falls back to the statistical models.
+    """
+    points = [(d, float(v or 0)) for d, v in points if d is not None]
+    points.sort(key=lambda p: p[0])
+    if not points or not plan:
+        return None
+
+    last = points[-1][0]
+    overlap = [(d, v, plan[d]) for d, v in points if d in plan and plan[d] > 0]
+    if len(overlap) < MIN_OVERLAP:
+        return None
+
+    ahead = sorted(m for m in plan if m > last and plan[m] > 0)[:periods]
+    if not ahead:
+        return None
+
+    rate, spread, ratios = run_rate_against_plan(overlap)
+    if rate is None:
+        return None
+
+    rows = _plan_anchored([(m, plan[m]) for m in ahead], rate, spread)
+
+    out = []
+    for m, v, lo, hi in rows:
+        out.append({
+            'period': m.isoformat(),
+            'value': round(v, 2),
+            'lower': round(lo, 2),
+            'upper': round(hi, 2),
+            'aop': round(plan[m], 2),
+            'calendar': MONTH_CALENDAR.get(m.month, []),
+        })
+
+    # How well the rate describes the months it was read from: the average
+    # distance between what the plan said times the rate, and what actually
+    # happened. It is the same quantity the statistical models report as
+    # MAE, measured the same way, so the two are comparable on screen.
+    resid = [abs(a - t * rate) for _, a, t in overlap]
+    mae = _mean(resid)
+    base = _mean([a for _, a, _ in overlap]) or 1.0
+
+    worst = min(ratios, key=lambda r: r[1])
+    best = max(ratios, key=lambda r: r[1])
+
+    return {
+        'method': 'plan-anchored',
+        'confidence': 'high' if len(overlap) >= 6 else 'medium',
+        'note': ('Built on the AOP: the plan sets each month\'s shape, and the '
+                 'rate this business has been running at against it sets the '
+                 'level.'),
+        'history_months': len(points),
+        'mae': round(mae, 2),
+        'mape': round((mae / base) * 100, 1),
+        'points': out,
+        'forecast_total': round(sum(p['value'] for p in out), 2),
+        'run_rate': {
+            'rate_pct': round(rate * 100, 1),
+            'spread_pct': round(max(spread, 0.05) * 100, 1),
+            'low_pct': round(max(0.0, rate - 1.96 * max(spread, 0.05)) * 100, 1),
+            'high_pct': round((rate + 1.96 * max(spread, 0.05)) * 100, 1),
+            'months': len(overlap),
+            'best': {'month': best[0].strftime('%b %Y'), 'pct': round(best[1] * 100, 1)},
+            'worst': {'month': worst[0].strftime('%b %Y'), 'pct': round(worst[1] * 100, 1)},
+            'by_month': [{'month': m.strftime('%b %Y'), 'pct': round(r * 100, 1)}
+                         for m, r in ratios],
+        },
+        'spec': {
+            'name': 'Run rate against AOP',
+            'why': ('The AOP is the company\'s own month-by-month shape for the '
+                    'year — the sales plan, the launch calendar, the festive '
+                    'quarter — and it is a better carrier of that shape than a '
+                    'slope fitted to a few months of history. A pure '
+                    'extrapolation has nothing holding it down: it reads the '
+                    'slope it was given and keeps going, which is how a strong '
+                    'first half projects a second half nobody planned for.'),
+            'reads': [
+                f'The AOP for each month ahead, as uploaded',
+                f'What this business achieved against plan in the '
+                f'{len(overlap)} months that have both figures',
+                'Recent months weighted heaviest, so the rate follows a '
+                'business that has picked up or slowed',
+            ],
+            'params': {'decay': RUN_RATE_DECAY, 'min_overlap': MIN_OVERLAP},
+            'seasonality': 'from the AOP',
+            'seasonality_why': ('Not fitted from history at all. The month-on-month '
+                                'shape is the plan\'s own, which already carries '
+                                'the festive quarter and the launch calendar.'),
+            'band': (f'The high and low are the same AOP scaled by how much the '
+                     f'achievement rate has VARIED month to month — between '
+                     f'{round(max(0.0, rate - 1.96 * max(spread, 0.05)) * 100, 1)}% '
+                     f'and {round((rate + 1.96 * max(spread, 0.05)) * 100, 1)}% of '
+                     f'plan, a 95% range. They do not widen further out, because '
+                     f'the uncertainty is what rate we will run at — that is a '
+                     f'level, not an error compounding month on month.'),
+            'floor': ('The range never narrows below 5% of plan. Tracking the plan '
+                      'closely for a few months does not make the rest of the year '
+                      'certain.'),
+            'history_months': len(points),
+        },
     }

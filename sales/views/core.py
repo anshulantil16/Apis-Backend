@@ -21,7 +21,7 @@ from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       state_from_code, state_from_subregion, find_header_row)
 from .. import aop as AOP
 
-from ..forecasting import forecast_series
+from ..forecasting import forecast_series, forecast_from_plan
 from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters, detail_qs,
                       qs_for_dimension, money_base, sheet_fields,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
@@ -1088,21 +1088,10 @@ class SalesForecastView(SalesIQView):
                 .annotate(v=Sum(agg_field)).order_by('period'))
         points = [(r['period'], float(r['v'] or 0)) for r in rows]
 
-        result = forecast_series(points, periods=periods)
-        result['metric'] = metric
-
-        # ── the AOP line ──────────────────────────────────────────────────
-        # The plan is already loaded for the whole financial year, months
-        # ahead of the business, so it can be drawn across the forecast as
-        # well as across the history. It is not an input to the model and
-        # never has been: the forecast says what this business looks like it
-        # will do, the AOP says what it undertook to do, and the distance
-        # between the two lines is the thing worth looking at. Feeding the
-        # plan into the model would collapse that distance to nothing and
-        # the chart would agree with the plan by construction.
-        #
-        # Only on revenue. A plan column in rupees has nothing to say about
-        # a quantity forecast in cases.
+        # ── the plan ──────────────────────────────────────────────────────
+        # Loaded for the whole financial year, so it is known for months the
+        # history has not reached. Only on revenue: a plan column in rupees
+        # has nothing to say about a quantity forecast in cases.
         plan = {}
         if metric != 'quantity':
             plan = {r['period']: float(r['t'] or 0) for r in
@@ -1111,6 +1100,24 @@ class SalesForecastView(SalesIQView):
                       .values('period').annotate(t=Sum('target_amount'))
                     if r['period']}
 
+        # Anchored to the AOP wherever the plan reaches, and only falling
+        # back to extrapolating the history where it does not.
+        #
+        # This reverses an earlier decision, and the reason is worth keeping:
+        # the argument for holding the plan out was that the two lines should
+        # be independent so the gap between them means something. What that
+        # produced was a forecast with nothing holding it down -- it read the
+        # slope of the months it was given and kept going, projecting a
+        # second half well clear of anything the business had planned for,
+        # which nobody in a review recognised as their own company. The gap
+        # has not gone: it is now the run rate, stated as a percentage of
+        # plan, with the months it was read from and the best and worst of
+        # them. That is a gap somebody can argue with, which the old one was
+        # not.
+        result = forecast_from_plan(points, plan, periods=periods) \
+            or forecast_series(points, periods=periods)
+        result['metric'] = metric
+
         result['history'] = [{'period': d.isoformat(), 'label': d.strftime('%b %Y'),
                               'value': round(v, 2),
                               'aop': round(plan[d], 2) if d in plan else None}
@@ -1118,7 +1125,7 @@ class SalesForecastView(SalesIQView):
         for pt in result.get('points') or []:
             month = date.fromisoformat(pt['period'])
             pt['label'] = month.strftime('%b %Y')
-            pt['aop'] = round(plan[month], 2) if month in plan else None
+            pt.setdefault('aop', round(plan[month], 2) if month in plan else None)
 
         # Forecast against plan, over the months the plan actually reaches.
         # Totalled over those months alone -- comparing a six-month forecast
@@ -1148,6 +1155,11 @@ class SalesForecastView(SalesIQView):
             'a forecast has to learn from the full history and start where '
             'the actuals stop. Region, channel and the other filters do '
             'apply.')
+        if result.get('method') == 'plan-anchored':
+            result['window_note'] += (
+                ' It runs to the end of the AOP and no further: past the '
+                'plan there is no month shape to anchor to, and a straight '
+                'line drawn out of the end of the year is not a forecast.')
 
         hist_total = sum(v for _, v in points)
         if points and result.get('points'):

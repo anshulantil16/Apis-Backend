@@ -10,6 +10,7 @@ import io
 import openpyxl
 from datetime import date, datetime
 
+from django.db.models import F
 from django.test import Client as RawClient, TestCase as _TestCase
 
 
@@ -2716,43 +2717,93 @@ class TheForecastExplainsItself(TestCase):
         self.assertEqual([p['label'] for p in future],
                          ['Nov 2026', 'Dec 2026', 'Jan 2027', 'Feb 2027', 'Mar 2027'])
 
-    def test_the_plan_is_not_an_input_to_the_model(self):
-        """The forecast says what the business looks like it will do; the AOP
-        says what it undertook to do. Feeding one into the other would make
-        the two lines agree by construction and the chart would say nothing."""
-        before = [p['value'] for p in self.fc(periods=6)['points']]
-        SalesRecord.objects.filter(target_amount__gt=0).update(target_amount=999999)
-        after = [p['value'] for p in self.fc(periods=6)['points']]
-        self.assertEqual(before, after)
+    def test_the_forecast_stays_with_the_plan_instead_of_running_off(self):
+        """The whole point of anchoring. A pure extrapolation reads the slope
+        of the months it was given and keeps going; against a rising half
+        year that projected a second half well clear of anything the business
+        had planned for. Every month now sits within touching distance of its
+        own AOP."""
+        for p in self.fc(periods=6)['points']:
+            self.assertIsNotNone(p['aop'])
+            ratio = p['value'] / p['aop']
+            self.assertGreater(ratio, 0.5, f"{p['label']} is miles under plan")
+            self.assertLess(ratio, 1.5, f"{p['label']} has run away from plan")
+
+    def test_the_plan_carries_the_month_shape(self):
+        """A month the plan puts higher than its neighbour is forecast
+        higher. That shape is the plan's own -- the festive quarter, the
+        launch calendar -- not a curve fitted to a few months of history."""
+        pts = self.fc(periods=6)['points']
+        aop_order = [p['label'] for p in sorted(pts, key=lambda x: x['aop'])]
+        fc_order = [p['label'] for p in sorted(pts, key=lambda x: x['value'])]
+        self.assertEqual(aop_order, fc_order)
+
+    def test_the_level_is_the_rate_we_have_been_running_at(self):
+        """Not the plan copied back. If the business has been achieving 90%
+        of plan, the forecast is 90% of plan -- and halving every actual
+        halves it."""
+        rate = self.fc(periods=6)['run_rate']['rate_pct']
+        SalesRecord.objects.filter(source=SalesRecord.SOURCE_INVOICE).delete()
+        SalesRecord.objects.filter(measured_amount__gt=0).update(
+            measured_amount=F('measured_amount') / 2,
+            net_amount=F('net_amount') / 2)
+        halved = self.fc(periods=6)['run_rate']['rate_pct']
+        self.assertAlmostEqual(halved, rate / 2, places=0)
+
+    def test_the_rate_is_shown_with_the_months_it_was_read_from(self):
+        """A percentage nobody can check is not usable in a review."""
+        rr = self.fc(periods=6)['run_rate']
+        self.assertEqual(rr['months'], len(rr['by_month']))
+        self.assertGreaterEqual(rr['high_pct'], rr['rate_pct'])
+        self.assertLessEqual(rr['low_pct'], rr['rate_pct'])
+        self.assertGreaterEqual(rr['best']['pct'], rr['worst']['pct'])
+
+    def test_a_month_nobody_set_a_plan_for_is_not_counted_as_a_miss(self):
+        from sales.forecasting import run_rate_against_plan
+        from datetime import date as _d
+        rate, _, ratios = run_rate_against_plan([
+            (_d(2026, 4, 1), 90.0, 100.0),
+            (_d(2026, 5, 1), 50.0, 0.0),      # no plan set -- skipped
+            (_d(2026, 6, 1), 90.0, 100.0),
+        ])
+        self.assertEqual(len(ratios), 2)
+        self.assertAlmostEqual(rate, 0.9, places=6)
+
+    def test_without_a_plan_it_falls_back_to_extrapolating_the_history(self):
+        SalesRecord.objects.filter(target_amount__gt=0).update(target_amount=0)
+        d = self.fc(periods=6)
+        self.assertNotEqual(d['method'], 'plan-anchored')
+        self.assertIn('Holt', d['spec']['name'])
 
     def test_forecast_and_plan_are_totalled_over_the_same_months(self):
-        """The plan stops in March. Totalling six months of forecast against
-        five months of plan reads as a shortfall that is really a plan
-        running out."""
+        """The plan stops in March, and so does the forecast: past the plan
+        there is no month shape to anchor to, and a straight line drawn out
+        of the end of the year is not a forecast."""
         d = self.fc(periods=6)
         v = d['vs_aop']
         self.assertEqual(v['months'], 5)
-        self.assertTrue(v['partial'])
+        self.assertEqual(len(d['points']), 5, 'forecast ran past the plan')
         covered = [p for p in d['points'] if p['aop'] is not None]
         self.assertAlmostEqual(v['aop_total'], sum(p['aop'] for p in covered), places=2)
         self.assertAlmostEqual(v['forecast_total'], sum(p['value'] for p in covered), places=2)
         self.assertAlmostEqual(v['gap'], v['forecast_total'] - v['aop_total'], places=2)
 
     def test_a_quantity_forecast_carries_no_plan_line(self):
-        """The plan is in rupees. Drawn against a forecast in cases it would
-        be a line with no meaning on that axis."""
+        """The plan is in rupees. Anchoring a forecast in cases to it would
+        be scaling one unit by another, and drawing it beside one would be a
+        line with no meaning on that axis."""
         d = self.fc(periods=6, metric='quantity')
+        self.assertNotEqual(d['method'], 'plan-anchored')
         self.assertTrue(all(p['aop'] is None for p in d['points']))
         self.assertNotIn('vs_aop', d)
 
     def test_the_panel_can_say_which_model_ran_and_why(self):
         d = self.fc(periods=6)
         spec = d['spec']
-        self.assertIn("Holt", spec['name'])
-        self.assertIn('19', spec['why'])          # the history it was given
+        self.assertEqual(spec['name'], 'Run rate against AOP')
+        self.assertTrue(spec['why'])
         self.assertTrue(spec['reads'])
-        self.assertEqual(spec['seasonality'], 'none')
-        self.assertIn('24 months', spec['seasonality_why'])
+        self.assertEqual(spec['seasonality'], 'from the AOP')
         self.assertIn('95%', spec['band'])
 
     def test_every_forecast_month_names_what_is_in_it(self):
@@ -2802,6 +2853,11 @@ class TheForecastExplainsItself(TestCase):
         self.assertIn('not on the months selected', self.fc(periods=6)['window_note'])
 
     def test_the_band_is_explained_rather_than_just_drawn(self):
+        """And explained for the model that actually ran. The plan-anchored
+        band is the run rate's own variability, which does not compound with
+        the horizon -- borrowing the widening from a model that is not being
+        used would be a correction for an error this one does not make."""
         spec = self.fc(periods=6)['spec']
-        self.assertIn('widens', spec['band'])
+        self.assertIn('95%', spec['band'])
+        self.assertIn('do not widen', spec['band'])
         self.assertIn('5%', spec['floor'])
