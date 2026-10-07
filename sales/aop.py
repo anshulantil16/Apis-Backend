@@ -38,7 +38,6 @@ DIMENSIONS = {
                       'reporting incharge'],
     'zone':          ['region'],
     'state':         ['sub region'],
-    'item_alt_code': ['i code', 'icode'],
     'product_name':  ['item name'],
     'brand':         ['brand'],
     'sfo_count':     ['no of sfo', 'no of sfo s', 'number of sfo'],
@@ -105,8 +104,21 @@ def map_person_codes(header_row, dims):
     return found
 
 
+# What the sheet writes where there is no ID to give. An unfilled territory
+# carries VACANT-TRI in the name column and literally "NA" in both of its ID
+# columns, and the sheet has many of them.
+#
+# Read as an ID, "NA" is catastrophic rather than untidy: every vacant
+# territory in the company shares it, so counting distinct IDs collapses all
+# of them into a single ASM. The headcount then falls by however many
+# vacancies there are, minus one, and the error grows as the company leaves
+# more positions open -- the opposite direction from the truth.
+PLACEHOLDER_IDS = {'na', 'n a', 'nil', 'none', 'nan', 'null',
+                   'not available', 'tbd', 'vacant', '-', '--', '.'}
+
+
 def _id_text(value):
-    """An ID cell as the string it was typed as.
+    """An ID cell as the string it was typed as, or '' if it is not an ID.
 
     Excel hands back a whole-numbered ID as a float, and 10432.0 and 10432
     are the same person -- counted as written they would be two.
@@ -114,8 +126,15 @@ def _id_text(value):
     if value is None:
         return ''
     if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value).strip()
+        text = str(int(value))
+    else:
+        text = str(value).strip()
+    # An ID made only of punctuation normalises to nothing, which is the
+    # same statement as NA: the sheet writes a bare "-" in these columns too.
+    key = _norm(text)
+    if not text or not key or key in PLACEHOLDER_IDS:
+        return ''
+    return text
 
 
 def read_person_codes(row, code_cols):
@@ -147,8 +166,23 @@ SUMMARY_COLUMNS = [
     'YTD AOP', 'YTD ACH', 'LYTD ACH', "FY'26-27 AOP", "FY'26-27 ACH",
     'LMTD', 'MTD SEC SALES',
 ]
-# 'Key' is a concatenation of the columns either side of it.
-IGNORED = ['Key'] + SUMMARY_COLUMNS
+# Read, and deliberately not stored.
+#
+# 'Key' is a concatenation of the columns either side of it: Sub-Region and
+# I-CODE, so "CHD (TRI)1".
+#
+# 'I-CODE' is not an item code despite the name. Its values run 1, 2, 3 down
+# each territory's block -- it is the line number within the territory, which
+# is why Key can be built out of it. It was being stored as item_alt_code,
+# which is a trap rather than a bug today: nothing displays that field, but
+# the day somebody adds it to the filter list the product dropdown fills with
+# "1.00, 2.00, 3.00". ITEM NAME is what names the product on this sheet.
+#
+# 'Yesterday Billing' is a single day's figure. It is new on the sheet and
+# was being reported back as a column the importer did not understand. It is
+# understood and not loaded: every other money column here is a month, and a
+# day's billing added among them would be counted as one.
+IGNORED = ['Key', 'I-CODE', 'Yesterday Billing'] + SUMMARY_COLUMNS
 
 # ── the summary columns, used as a check rather than as data ──────────────
 #

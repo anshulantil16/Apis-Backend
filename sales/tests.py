@@ -527,7 +527,9 @@ class ReadingTheWideSheet(TestCase):
         self.assertEqual(r.sales_head, 'Naagesh Mishra')
         self.assertEqual(r.channel, 'General Trade')
         self.assertEqual(r.brand, 'APIS')
-        self.assertEqual(r.item_alt_code, 'IC-4412')
+        # I-CODE is the line number within the territory, not a product
+        # code -- read, and deliberately not stored. See aop.IGNORED.
+        self.assertEqual(r.item_alt_code, '')
         self.assertEqual(r.sfo_count, 4)
 
     def test_each_persons_id_columns_are_the_ones_beside_them(self):
@@ -3099,3 +3101,91 @@ class TheControlTowerRules(TestCase):
         self.assertIsNotNone(fresh['at'])
         self.assertTrue(fresh['file'])
         self.assertEqual(fresh['uploads'], 1)
+
+
+# ── read against the real sheet ─────────────────────────────────────────────
+class TheRealReviewSheet(TestCase):
+    """Written from screenshots of the live YTD AOP vs ACH file rather than
+    from an idealised fixture. Everything here is a row shape that is
+    actually in it."""
+
+    def test_a_vacant_territory_writes_NA_in_both_id_columns(self):
+        """And NA is not an ID. The sheet has many unfilled territories and
+        every one of them carries the same literal "NA", so read as an ID
+        they collapse into a single ASM -- the headcount falls by however
+        many vacancies there are, minus one, and the error grows as more
+        seats are left open. Exactly backwards."""
+        hdr = ['CHANEL TYPE', 'HEAD', 'GTR HEAD', 'BIZOM ID', 'APIS ID',
+               'REPORT.INCHARGE', 'BIZOM ID.', 'APIS ID.', 'REGION', 'Sub-Region']
+        dims, _, _ = AOP.map_columns(hdr)
+        cols = AOP.map_person_codes(hdr, dims)
+        row = ['GT', 'ARUN MISHRA', 'MOHINDER SHARMA', 2298, 'SL04492',
+               'VACANT-TRI', 'NA', 'NA', 'GTR01', 'CHD (TRI)']
+        codes = AOP.read_person_codes(row, cols)
+        self.assertEqual(codes['rsm_code'], 'SL04492')
+        self.assertEqual(codes['asm_code'], '')
+
+    def test_the_other_ways_the_sheet_says_nothing_here(self):
+        for blank in ('NA', 'n/a', 'NIL', '-', '--', 'None', '', '  ', None):
+            self.assertEqual(AOP._id_text(blank), '', repr(blank))
+
+    def test_a_bizom_id_arrives_as_a_number_and_an_apis_id_as_text(self):
+        """2298 and SL04492, side by side in the same row."""
+        self.assertEqual(AOP._id_text(2298), '2298')
+        self.assertEqual(AOP._id_text(2298.0), '2298')
+        self.assertEqual(AOP._id_text('SL04492'), 'SL04492')
+
+    def test_an_unfilled_territory_is_not_counted_as_a_manager(self):
+        """Counting VACANT-TRI made the ASM figure the number of
+        TERRITORIES, which rises as the company leaves more seats open."""
+        SalesRecord.objects.all().delete()
+        upload(aop_workbook([
+            aop_row(**{'REPORT.INCHARGE': 'Vikas Gupta', 'APIS ID.': 'SL01'}),
+            aop_row(**{'REPORT.INCHARGE': 'VACANT-TRI', 'APIS ID.': 'NA',
+                       'BIZOM ID.': 'NA', 'Sub-Region': 'CHD (TRI)'}),
+            aop_row(**{'REPORT.INCHARGE': 'VACANT-DL', 'APIS ID.': 'NA',
+                       'BIZOM ID.': 'NA', 'Sub-Region': 'DL-1'}),
+        ]))
+        d = self.client.get('/api/sales/org/').json()
+        asm = next(c for c in d['level_counts'] if c['level'] == 'asm')
+        self.assertEqual(asm['count'], 1)       # one actual manager
+        self.assertEqual(asm['vacant'], 2)      # two seats open, said separately
+
+    def test_the_sheets_own_newer_columns_are_known_rather_than_unread(self):
+        """Yesterday Billing appeared on the sheet after this importer was
+        written, and was being reported back as a column it did not
+        understand. It is understood and not loaded: every other money column
+        here is a month, and a single day's billing added among them would be
+        counted as one."""
+        hdr = AOP_HEADERS + ['Yesterday Billing']
+        _, _, unknown = AOP.map_columns(hdr)
+        self.assertIn('Yesterday Billing', unknown)
+        self.assertIn('Yesterday Billing', AOP.IGNORED)
+
+    def test_yesterday_billing_is_never_read_as_a_month(self):
+        self.assertIsNone(AOP.parse_month_header('Yesterday Billing'))
+
+    def test_i_code_is_a_line_number_not_a_product_code(self):
+        """Its values run 1, 2, 3 down each territory's block -- which is why
+        Key can be built from Sub-Region plus I-CODE, giving "CHD (TRI)1". It
+        was stored as item_alt_code, which is a trap rather than a bug today:
+        nothing shows that field, but the day somebody adds it to the filter
+        list the product dropdown fills with 1.00, 2.00, 3.00."""
+        upload(aop_workbook([aop_row(**{'I-CODE': 1.0, 'ITEM NAME': 'HONEY'})]))
+        r = SalesRecord.objects.filter(period=date(2026, 4, 1)).first()
+        self.assertEqual(r.item_alt_code, '')
+        self.assertEqual(r.product_name, 'HONEY')
+        self.assertIn('I-CODE', AOP.IGNORED)
+
+    def test_the_summary_columns_are_still_recognised_beside_the_new_one(self):
+        """Adding entries to IGNORED must not have displaced the totals it
+        already carried -- they are what the import checks itself against."""
+        for col in ('Key', 'YTD AOP', 'YTD ACH', 'LYTD ACH', 'LMTD',
+                    'MTD SEC SALES'):
+            self.assertIn(col, AOP.IGNORED, col)
+
+    def test_a_month_can_be_negative_because_the_sheet_writes_returns_that_way(self):
+        """Apr-25 carries -0.80 and -0.10 on real rows."""
+        upload(aop_workbook([aop_row(ly=-0.80)]))
+        ly = SalesRecord.objects.get(period=date(2025, 4, 1))
+        self.assertLess(float(ly.measured_amount), 0)

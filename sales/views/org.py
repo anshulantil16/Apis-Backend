@@ -278,8 +278,14 @@ class SalesOrgView(SalesIQView):
         # name. Both happen on this sheet, which is why it carries an APIS ID
         # and a BIZOM ID beside every people column, and why the strip above
         # the tree now counts those instead.
-        per_level = [{'level': lvl, 'count': count_people([qs, detail], lvl)}
-                     for lvl in levels]
+        per_level = []
+        for lvl in levels:
+            filled, empty = count_people([qs, detail], lvl, with_vacancies=True)
+            # Vacancies ride alongside the headcount rather than inside it.
+            # The sheet writes VACANT-TRI where a territory has no manager,
+            # and counting those made this the number of TERRITORIES -- a
+            # figure that rises as the company leaves more seats open.
+            per_level.append({'level': lvl, 'count': filled, 'vacant': empty})
 
         # Whether the invoice dump names these levels at all. Customers and
         # SKUs are invoice facts; if the dump carries no RSM column then

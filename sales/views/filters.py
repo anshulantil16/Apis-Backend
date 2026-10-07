@@ -98,7 +98,7 @@ PERSON_CODE_FIELD = {
 }
 
 
-def count_people(querysets, level):
+def count_people(querysets, level, with_vacancies=False):
     """How many distinct PEOPLE a level holds, across several querysets.
 
     Identity is the ID where the sheet gave one. Where it did not -- the
@@ -106,9 +106,18 @@ def count_people(querysets, level):
     only for people no coded row already accounted for: the same RSM named
     on the sheet with an ID and on the dump without one is one person, and
     counting both halves reported them twice.
+
+    An unfilled territory is not a person. The sheet writes VACANT-TRI in
+    the name column for one, and counting those made the ASM headcount the
+    number of TERRITORIES rather than the number of managers -- a figure
+    that goes UP as the company leaves more positions open. They are counted
+    separately instead, because how many seats are empty is worth knowing,
+    just not under the heading "ASM".
     """
+    from ..ingest import is_vacant
+
     code_field = PERSON_CODE_FIELD.get(level)
-    coded, named, spoken_for = set(), set(), set()
+    coded, named, spoken_for, vacant = set(), set(), set(), set()
     for qs in querysets:
         if qs is None:
             continue
@@ -116,12 +125,16 @@ def count_people(querysets, level):
         for row in qs.exclude(**{level: ''}).values_list(*fields).order_by().distinct():
             name = row[0]
             code = row[1] if code_field else ''
+            if is_vacant(name):
+                vacant.add(name)
+                continue
             if code:
                 coded.add(code)
                 spoken_for.add(name)
             else:
                 named.add(name)
-    return len(coded) + len(named - spoken_for)
+    total = len(coded) + len(named - spoken_for)
+    return (total, len(vacant)) if with_vacancies else total
 
 
 NOT_SALES_ZONES = ['NOT A PART OF SALES', 'B2B', 'EXPORT']
