@@ -1535,6 +1535,63 @@ class TheSellingOrganisation(TestCase):
         self.assertNotIn('sales_head', reach['levels_named'])
         self.assertGreater(reach['lines'], 0)
 
+    def test_nobody_appears_as_a_branch_at_nought(self):
+        """The two files spell the organisation differently, and where the
+        review sheet owns a month the dump's rows for it are deliberately
+        zeroed so the same rupee is not counted twice. Those zeroed rows
+        still name an ASM, so every dump spelling the sheet did not share
+        arrived as its own branch at Rs 0 -- beside colleagues at tens of
+        crores, with 73 customers written underneath it. Read straight, that
+        said the man sold nothing."""
+        SalesRecord.objects.all().delete()
+        upload(aop_workbook([aop_row(**{'GTR HEAD': 'Anil Mehra',
+                                        'REPORT.INCHARGE': 'Vikas Gupta'})]))
+        upload(a_workbook([
+            a_row(**{'RSM Name': 'Anil Mehra', 'ASM Name': 'Vikas Gupta',
+                     'Order Date': '2026-04-05', 'Customer No.': 'C-1'}),
+            # Spelled only the dump's way -- no such person on the sheet.
+            a_row(**{'RSM Name': 'Hariom', 'ASM Name': 'Hariom',
+                     'Order Date': '2026-04-05', 'Customer No.': 'C-2'}),
+        ]))
+
+        def walk(nodes):
+            for n in nodes:
+                yield n
+                yield from walk(n.get('children') or [])
+
+        d = self.org()
+        empty = [n['name'] for n in walk(d['tree'])
+                 if not n['revenue'] and not n['target']]
+        self.assertEqual(empty, [], f'branches at nought: {empty}')
+        self.assertNotIn('Hariom', [n['name'] for n in walk(d['tree'])])
+
+    def test_detail_that_matches_no_branch_still_counts_in_the_total(self):
+        """Dropping the branch must not drop the customer. The figure cannot
+        be attributed to a person, so it belongs in the total and nowhere
+        else -- and the response says how much of it there is."""
+        SalesRecord.objects.all().delete()
+        upload(aop_workbook([aop_row(**{'GTR HEAD': 'Anil Mehra',
+                                        'REPORT.INCHARGE': 'Vikas Gupta'})]))
+        upload(a_workbook([
+            a_row(**{'RSM Name': 'Anil Mehra', 'ASM Name': 'Vikas Gupta',
+                     'Order Date': '2026-04-05', 'Customer No.': 'C-1'}),
+            a_row(**{'RSM Name': 'Hariom', 'ASM Name': 'Hariom',
+                     'Order Date': '2026-04-05', 'Customer No.': 'C-2'}),
+        ]))
+        d = self.org()
+        self.assertEqual(d['totals']['customers'], 2)
+        self.assertGreater(d['detail_reach']['unplaced'], 0)
+
+    def test_a_dump_on_its_own_still_builds_its_tree(self):
+        """The rule is "no revenue and no plan", not "came from the dump".
+        An install with no review sheet has real money on its dump rows."""
+        SalesRecord.objects.all().delete()
+        upload(a_workbook([a_row(**{'RSM Name': 'Anil Mehra',
+                                    'ASM Name': 'Vikas Gupta'})]))
+        d = self.org()
+        self.assertTrue(d['tree'])
+        self.assertEqual(d['tree'][0]['name'], 'Anil Mehra')
+
     def test_the_figures_roll_up_the_tree(self):
         d = self.org()
         for node in d['tree']:
@@ -2859,5 +2916,5 @@ class TheForecastExplainsItself(TestCase):
         used would be a correction for an error this one does not make."""
         spec = self.fc(periods=6)['spec']
         self.assertIn('95%', spec['band'])
-        self.assertIn('do not widen', spec['band'])
+        self.assertIn('does not', spec['band'])
         self.assertIn('5%', spec['floor'])

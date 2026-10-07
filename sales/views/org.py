@@ -132,6 +132,27 @@ class SalesOrgView(SalesIQView):
         root = _node('All', 'total')
         index = {}
         for r in rows:
+            # A row that carries neither revenue nor plan does not get a
+            # branch of its own.
+            #
+            # net_amount is the ELECTED actual: where the review sheet owns a
+            # month, the dump's rows for that month are deliberately zeroed so
+            # the same rupee is not counted from both files. Those zeroed rows
+            # still name an RSM and an ASM, and the two files spell the
+            # organisation differently, so every dump spelling the sheet does
+            # not share was arriving as its own branch at Rs 0 -- sitting
+            # beside colleagues at tens of crores with 73 customers written
+            # underneath it. Read straight, that row said the man sold
+            # nothing. What it meant was that his sales are reported on the
+            # other file under another spelling.
+            #
+            # Their customers and SKUs are not lost: the pass below attaches
+            # invoice detail to whichever branch does exist, and whatever
+            # matches nothing lands on the root, where it still counts in the
+            # totals. An install with no review sheet is unaffected -- its
+            # dump rows carry real money, so they build the tree as before.
+            if not (r['revenue'] or r['target']):
+                continue
             # A row is only placed as deep as it is actually named. A dump row
             # with an ASM but no head still belongs under its RSM.
             path, parent = [], root
@@ -167,24 +188,38 @@ class SalesOrgView(SalesIQView):
                 if r.get('subzone'):
                     node['_areas'].add(r['subzone'])
 
-        # The invoice-only figures, up the same tree. A dump row naming none
-        # of the levels lands on the root alone, which is honest: the money is
-        # attributed, the customer behind it is not.
+        # The invoice-only figures, onto the tree the review sheet built --
+        # and ONLY onto branches it already built.
+        #
+        # Creating a branch from a dump row produced a screen full of people
+        # at nought. The two files spell the organisation differently, so an
+        # ASM the dump names and the sheet does not became his own row, and
+        # because net_amount is the ELECTED actual -- zero on a dump row
+        # whose month the review sheet owns -- that row showed Rs 0 beside
+        # colleagues at tens of crores, with 73 customers underneath it. Read
+        # straight, it said this person sold nothing. What it meant was that
+        # his sales are reported on the other file under another spelling.
+        #
+        # Unmatched detail is not dropped: it lands on the root, so the
+        # customer and SKU totals stay whole, and `detail_reach` reports how
+        # much of it never found a branch. A figure that cannot be attributed
+        # belongs in the total and nowhere else.
+        unplaced = 0
         for r in det_rows:
             path, parent = [], root
             for lvl in levels:
                 name = (r.get(lvl) or '').strip()
                 if not name:
                     continue
-                path.append(name)
-                key = tuple(path)
-                node = index.get(key)
+                node = index.get(tuple(path + [name]))
                 if node is None:
-                    node = _node(name, lvl)
-                    node['depth'] = len(path) - 1
-                    index[key] = node
-                    parent['children'].append(node)
+                    # This spelling is not in the sheet's tree. Stop here
+                    # rather than invent a branch for it.
+                    break
+                path.append(name)
                 parent = node
+            if not path:
+                unplaced += r['lines'] or 0
             touched = [root] + [index[tuple(path[:d + 1])] for d in range(len(path))]
             for node in touched:
                 node['quantity'] += float(r['quantity'] or 0)
@@ -252,6 +287,10 @@ class SalesOrgView(SalesIQView):
         detail_reach = {
             'lines': detail_total,
             'placed': placed,
+            # Invoice lines whose RSM or ASM is spelled in a way the review
+            # sheet's tree does not contain. Their customers and SKUs are in
+            # the totals; they are under nobody's name.
+            'unplaced': unplaced,
             'levels_named': [lvl for lvl in levels
                              if detail.exclude(**{lvl: ''}).exists()],
         }

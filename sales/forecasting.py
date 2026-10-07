@@ -179,7 +179,26 @@ def run_rate_against_plan(overlap):
     weights = [RUN_RATE_DECAY ** i for i in range(len(ratios) - 1, -1, -1)]
     total = sum(weights)
     rate = sum(w * r for w, (_, r) in zip(weights, ratios)) / total
-    spread = _stdev([r for _, r in ratios])
+
+    # The band is built on how far the rate MOVES month to month, not on how
+    # far the months are spread around their own average. The distinction
+    # decided whether this chart said anything at all.
+    #
+    # A financial year opens with a full month of plan against a fraction of
+    # a month of invoicing, and climbs from there. Measured as dispersion
+    # about the mean, April sitting at 25% of plan and October at 102% read
+    # as enormous uncertainty -- a forecast of Rs 31 crore inside a range of
+    # Rs 8 lakh to Rs 63 crore, which is not a statement about anything. But
+    # that climb was not uncertainty. It was a trend, and it was perfectly
+    # orderly: each month landed a predictable step above the one before.
+    #
+    # What the band is actually for is "given where we are running now, how
+    # far could next month move from it". That is the size of the month-to-
+    # month STEP, and a series that climbs steadily has a small one however
+    # far it has travelled. A difference between two months carries twice
+    # the variance of one, hence the sqrt(2).
+    steps = [b - a for (_, a), (_, b) in zip(ratios, ratios[1:])]
+    spread = _stdev(steps) / math.sqrt(2) if len(steps) >= 2 else 0.0
     return rate, spread, ratios
 
 
@@ -459,13 +478,18 @@ def forecast_from_plan(points, plan, periods=6):
             'seasonality_why': ('Not fitted from history at all. The month-on-month '
                                 'shape is the plan\'s own, which already carries '
                                 'the festive quarter and the launch calendar.'),
-            'band': (f'The high and low are the same AOP scaled by how much the '
-                     f'achievement rate has VARIED month to month — between '
+            'band': (f'The high and low are the same AOP scaled by how far the '
+                     f'achievement rate has MOVED from one month to the next — '
+                     f'between '
                      f'{round(max(0.0, rate - 1.96 * max(spread, 0.05)) * 100, 1)}% '
                      f'and {round((rate + 1.96 * max(spread, 0.05)) * 100, 1)}% of '
-                     f'plan, a 95% range. They do not widen further out, because '
-                     f'the uncertainty is what rate we will run at — that is a '
-                     f'level, not an error compounding month on month.'),
+                     f'plan, a 95% range. Month-to-month movement rather than '
+                     f'spread about an average, because a year that opens slow '
+                     f'and climbs steadily is not uncertain — it is trending, '
+                     f'and the question the band answers is how far next month '
+                     f'could move from where we are running now. It does not '
+                     f'widen further out: that is a level, not an error '
+                     f'compounding month on month.'),
             'floor': ('The range never narrows below 5% of plan. Tracking the plan '
                       'closely for a few months does not make the rest of the year '
                       'certain.'),
