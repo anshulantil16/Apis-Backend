@@ -2918,3 +2918,111 @@ class TheForecastExplainsItself(TestCase):
         self.assertIn('95%', spec['band'])
         self.assertIn('does not', spec['band'])
         self.assertIn('5%', spec['floor'])
+
+
+# ── the blueprint's KPI rules ───────────────────────────────────────────────
+class TheControlTowerRules(TestCase):
+    """Red/Amber/Green and run rate, from the APIS AI Sales & Collection
+    Control Tower blueprint, section 4 and section 7. Only the limbs that P1
+    primary sales can actually answer -- collections, outstanding and the
+    daily grain are not loaded."""
+
+    def setUp(self):
+        # Six months done, six months of plan still ahead of the business.
+        row = {}
+        for m in FY27[:6]:
+            row[m] = 60000
+        for m in FY27:
+            row[f'{m} AOP'] = 100000
+        upload(aop_workbook([aop_row(**row)]))
+
+    def ov(self, **params):
+        q = '&'.join(f'{k}={v}' for k, v in params.items())
+        return self.client.get(f'/api/sales/overview/{"?" + q if q else ""}').json()
+
+    # ── the bands ───────────────────────────────────────────────────────
+    def test_the_bands_are_the_blueprints(self):
+        from sales.status import rag
+        self.assertEqual(rag(69.9), 'red')
+        self.assertEqual(rag(70.0), 'amber')
+        self.assertEqual(rag(99.9), 'amber')
+        self.assertEqual(rag(100.0), 'green')
+        self.assertEqual(rag(140.0), 'green')
+
+    def test_the_gap_the_blueprint_leaves_at_ninety_to_a_hundred_is_amber(self):
+        """The blueprint says RED under 70, AMBER 70-90, GREEN over 100, and
+        names nothing for 90-100. A branch at 94% has to come out somewhere
+        or every screen decides for itself. It is a watch: the blueprint's
+        own GREEN is 'over 100% OR on/above required run-rate', so what it
+        cares about is being on course, and 94% is not."""
+        from sales.status import rag
+        self.assertEqual(rag(94.0), 'amber')
+
+    def test_no_plan_is_no_status_rather_than_a_pass_or_a_fail(self):
+        """A branch nobody set an AOP for has not passed and has not failed.
+        Green because nothing was asked of it, and red because it cleared
+        nothing, are both inventions."""
+        from sales.status import rag, band
+        self.assertIsNone(rag(None))
+        self.assertIsNone(band(None))
+
+    def test_the_overview_carries_the_status_and_says_what_it_means(self):
+        d = self.ov()
+        self.assertEqual(d['status']['status'], 'red')     # 60% of plan
+        self.assertIn('70', d['status']['meaning'])
+        self.assertTrue(d['status']['label'])
+
+    def test_one_rule_reaches_the_tree_and_the_breakdowns_alike(self):
+        """A name in the org tree and the same name on a leaderboard cannot
+        come out different colours."""
+        org = self.client.get('/api/sales/org/').json()
+        brk = self.client.get('/api/sales/breakdown/?dim=rsm').json()
+        tree = {n['name']: n['status'] for n in org['tree']}
+        for r in brk['results']:
+            if r['name'] in tree and r.get('status'):
+                self.assertEqual(r['status'], tree[r['name']], r['name'])
+
+    # ── run rate ────────────────────────────────────────────────────────
+    def test_the_run_rate_is_what_happened_over_the_months_it_happened_in(self):
+        d = self.ov()
+        basis = d['run_rate_basis']
+        self.assertEqual(basis['months_elapsed'], 6)
+        self.assertAlmostEqual(d['run_rate'],
+                               d['achievement_basis']['revenue'] / 6, places=2)
+
+    def test_the_required_rate_is_what_is_left_over_the_months_left(self):
+        d = self.ov()
+        basis = d['run_rate_basis']
+        self.assertEqual(basis['months_ahead'], 6)
+        self.assertAlmostEqual(d['required_run_rate'],
+                               basis['target_ahead'] / 6, places=2)
+
+    def test_the_rate_is_reported_per_month_and_says_so(self):
+        """The blueprint asks for these per working day. The review sheet --
+        the only file carrying the plan -- has no days in it: every row is a
+        month, stored on the 1st. A daily rate off it would be a monthly
+        figure divided by a number of days nobody measured."""
+        self.assertEqual(self.ov()['run_rate_basis']['per'], 'month')
+
+    def test_it_says_how_much_the_pace_has_to_lift(self):
+        d = self.ov()
+        lift = d['run_rate_basis']['lift_needed_pct']
+        # Running at 60,000 a month, needs 100,000 -- a lift of two thirds.
+        self.assertAlmostEqual(lift, 66.7, places=1)
+
+    def test_a_finished_year_asks_for_no_lift_rather_than_dividing_by_nought(self):
+        SalesRecord.objects.filter(measured_amount=0).update(measured_amount=1,
+                                                             net_amount=1)
+        d = self.ov()
+        self.assertEqual(d['run_rate_basis']['months_ahead'], 0)
+        self.assertIsNone(d['required_run_rate'])
+        self.assertIsNone(d['run_rate_basis']['lift_needed_pct'])
+
+    # ── governance ──────────────────────────────────────────────────────
+    def test_the_screen_can_say_when_the_data_was_last_loaded(self):
+        """Every figure here is as old as the last upload. Without saying so
+        a screen looks live when it may be a fortnight stale."""
+        fresh = self.ov()['data_refreshed']
+        self.assertIsNotNone(fresh['at'])
+        self.assertTrue(fresh['file'])
+        self.assertEqual(fresh['uploads'], 1)

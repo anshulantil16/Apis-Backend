@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 from .auth import SalesIQAdminView, SalesIQView
 
 from ..ingest import is_vacant
+from .. import status as STATUS
 from ..models import SalesRecord
 from .filters import (apply_filters, detail_qs, count_people,
                       FINISHED_GOODS_PREFIX)
@@ -62,6 +63,9 @@ def _finish(node):
     node['states'] = len(node.pop('_states'))
     node['areas'] = len(node.pop('_areas'))
     node['achievement_pct'] = _pct(node['revenue'], node['target'])
+    # One rule, so a branch here and the same name on a leaderboard cannot
+    # come out different colours.
+    node['status'] = STATUS.rag(node['achievement_pct'])
     node['revenue'] = round(node['revenue'], 2)
     node['target'] = round(node['target'], 2)
     return node

@@ -22,6 +22,7 @@ from ..ingest import (map_headers, parse_date, parse_num, build_template,
 from .. import aop as AOP
 
 from ..forecasting import forecast_series, forecast_from_plan
+from .. import status as STATUS
 from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters, detail_qs,
                       qs_for_dimension, money_base, sheet_fields,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
@@ -847,6 +848,24 @@ class SalesOverviewView(SalesIQView):
                 .values('sku').distinct().count())
         orders = invoiced['orders'] or 0
 
+        # Actual over the months that have actually happened, and what the
+        # months still ahead would each have to do to land the plan. Both
+        # read off the same like-for-like basis as achievement, so the three
+        # figures describe one stretch of time rather than three.
+        last_up = (SalesUpload.objects.filter(status='completed')
+                   .order_by('-created_at').first())
+        freshness = {
+            'at': last_up.created_at.isoformat() if last_up else None,
+            'file': last_up.filename if last_up else None,
+            'by': (last_up.uploaded_by or None) if last_up else None,
+            'uploads': SalesUpload.objects.filter(status='completed').count(),
+        } if last_up else None
+
+        run_rate = (round(like_for_like['revenue'] / like_for_like['months'], 2)
+                    if like_for_like['months'] else None)
+        required_rate = (round(like_for_like['target_ahead'] / like_for_like['months_ahead'], 2)
+                         if like_for_like['months_ahead'] else None)
+
         return Response({
             'revenue': revenue,
             'quantity': _money(agg['qty']),
@@ -881,6 +900,46 @@ class SalesOverviewView(SalesIQView):
             # 508,382% and then 86% on this dashboard.
             'achievement_pct': like_for_like['pct'],
             'achievement_basis': like_for_like,
+            # Red / Amber / Green on the company's own rule -- see
+            # sales/status.py, which also records what that rule does not
+            # cover while only P1 is loaded.
+            'status': STATUS.band(like_for_like['pct']),
+
+            # Run rate, from the blueprint's KPI framework.
+            #
+            # It asks for these per WORKING DAY. They are per month here, and
+            # that is a limit of the data rather than a choice: the review
+            # sheet -- which is the record the business keeps, and the only
+            # file carrying the plan -- has no days in it. Every row is a
+            # month, stored on the 1st. A daily rate off it would be a
+            # monthly figure divided by a number of days nobody measured,
+            # presented to four significant figures. The month is the
+            # smallest grain this file can honestly answer at, so that is
+            # what is reported, named as such on screen.
+            # When the figures on screen were last loaded, and from what.
+            #
+            # The blueprint's governance section asks for a visible "data
+            # refreshed at", and it is the cheapest honest thing on the page:
+            # every number here is as old as the last upload, and without
+            # saying so a screen looks live when it may be a fortnight stale.
+            # This product is uploaded to rather than connected to a feed, so
+            # the refresh time IS the upload time.
+            'data_refreshed': freshness,
+
+            'run_rate': run_rate,
+            'required_run_rate': required_rate,
+            'run_rate_basis': {
+                'per': 'month',
+                'months_elapsed': like_for_like['months'],
+                'months_ahead': like_for_like['months_ahead'],
+                'target_ahead': like_for_like['target_ahead'],
+                'ahead_from': like_for_like['ahead_from'],
+                'ahead_to': like_for_like['ahead_to'],
+                # Whether the business has to lift its pace to land the plan,
+                # which is the one thing the two rates are for.
+                'lift_needed_pct': (round((required_rate / run_rate - 1) * 100, 1)
+                                    if run_rate and required_rate else None),
+            },
             # The comparison the business makes in its own sheet: this year
             # to date against the same months last year. The window above
             # ("prior period") is the stretch immediately before this one,
@@ -968,6 +1027,7 @@ class SalesBreakdownView(SalesIQView):
                 'lines': r['lines'],
                 'target': tgt,
                 'achievement_pct': round((rev / tgt) * 100, 1) if tgt else None,
+                'status': STATUS.rag(round((rev / tgt) * 100, 1) if tgt else None),
                 'share_pct': round((rev / total_rev) * 100, 1),
                 # The reporting line carries the post, not the holder, so an
                 # empty territory reads as somebody called "Vacant-Tri" and

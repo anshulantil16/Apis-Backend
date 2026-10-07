@@ -286,13 +286,22 @@ def comparable_window(qs):
 
     revenue = target = 0.0
     months = []
+    # The other side of the same cut: months that carry a plan and nothing
+    # against it yet. They are excluded from achievement for the reason
+    # above, and they are exactly what is left to play for -- which is what
+    # a required run rate is divided by.
+    ahead, ahead_target = [], 0.0
     for r in rows:
         planned = float(r['planned'] or 0)
         measured = float(r['measured'] or 0)
+        if planned <= 0 or not r['period']:
+            continue
         # A month counts only if it has a plan AND something actually
         # happened in it. Nothing measured against a plan means the month is
         # still ahead of the business, not that it sold nothing.
-        if planned <= 0 or measured == 0 or not r['period']:
+        if measured == 0:
+            ahead.append(r['period'])
+            ahead_target += planned
             continue
         revenue += float(r['earned'] or 0)
         target += planned
@@ -305,6 +314,11 @@ def comparable_window(qs):
         'months': len(months),
         'from': months[0].isoformat() if months else None,
         'to': months[-1].isoformat() if months else None,
+        # Still to come, within whatever window is on screen.
+        'months_ahead': len(ahead),
+        'target_ahead': round(ahead_target, 2),
+        'ahead_from': ahead[0].isoformat() if ahead else None,
+        'ahead_to': ahead[-1].isoformat() if ahead else None,
     }
 
 
