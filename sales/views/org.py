@@ -15,7 +15,8 @@ from .auth import SalesIQAdminView, SalesIQView
 
 from ..ingest import is_vacant
 from ..models import SalesRecord
-from .filters import apply_filters, detail_qs
+from .filters import (apply_filters, detail_qs, count_people,
+                      FINISHED_GOODS_PREFIX)
 
 
 def _pct(part, whole):
@@ -93,8 +94,16 @@ class SalesOrgView(SalesIQView):
         detail = detail_qs(request)
         det_rows = (detail.values(*levels)
                     .annotate(quantity=Sum('quantity'), lines=Count('id'),
-                              customers=Count('customer_name', distinct=True),
-                              skus=Count('sku', distinct=True))
+                              # Counted exactly as the headline tiles count
+                              # them: a customer is a customer CODE, and an
+                              # SKU is a finished-goods item code. Counted on
+                              # the name instead, this panel reported 440
+                              # customers beside a tile reading 454 -- the
+                              # same question answered twice, differently.
+                              customers=Count('customer_code', distinct=True,
+                                              filter=~Q(customer_code='')),
+                              skus=Count('sku', distinct=True,
+                                         filter=Q(sku__istartswith=FINISHED_GOODS_PREFIX)))
                     .order_by())
 
         # Field officers are a headcount attached to a sub-region, not a
@@ -198,19 +207,25 @@ class SalesOrgView(SalesIQView):
         # one customer buying from two RSMs is one customer, and summing the
         # per-group distinct counts reported them twice at the top.
         whole = detail.aggregate(
-            customers=Count('customer_name', distinct=True,
-                            filter=~Q(customer_name='')),
-            skus=Count('sku', distinct=True, filter=~Q(sku='')))
+            customers=Count('customer_code', distinct=True,
+                            filter=~Q(customer_code='')),
+            skus=Count('sku', distinct=True,
+                       filter=Q(sku__istartswith=FINISHED_GOODS_PREFIX)))
         root['customers'] = whole['customers'] or 0
         root['skus'] = whole['skus'] or 0
 
         _finish(root)
 
         # A flat count per level, for the summary strip above the tree.
-        per_level = []
-        for lvl in levels:
-            names = {n['name'] for n in index.values() if n['level'] == lvl}
-            per_level.append({'level': lvl, 'count': len(names)})
+        #
+        # Counted off the rows, not off the tree. The tree is keyed on names,
+        # so it answers "how many branches" -- which is the same number only
+        # for as long as nobody is spelled two ways and no two people share a
+        # name. Both happen on this sheet, which is why it carries an APIS ID
+        # and a BIZOM ID beside every people column, and why the strip above
+        # the tree now counts those instead.
+        per_level = [{'level': lvl, 'count': count_people([qs, detail], lvl)}
+                     for lvl in levels]
 
         return Response({
             'levels': levels,

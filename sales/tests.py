@@ -431,7 +431,12 @@ class TheColumnsThatAreEasyToMisread(TestCase):
 
 
 # ── file 2: AOP vs ACH ──────────────────────────────────────────────────────
-AOP_DIMS = ['CHANEL TYPE', 'HEAD', 'GTR HEAD', 'REPORT.INCHARGE', 'REGION',
+# The ID columns sit exactly where the real sheet puts them: each people
+# column followed by its own pair. Both pairs are headed the same thing --
+# the sheet tells them apart with a trailing full stop, which the header
+# normaliser strips -- so only their position says whose they are.
+AOP_DIMS = ['CHANEL TYPE', 'HEAD', 'GTR HEAD', 'BIZOM ID', 'APIS ID',
+            'REPORT.INCHARGE', 'BIZOM ID.', 'APIS ID.', 'REGION',
             'Sub-Region', 'Key', 'I-CODE', 'ITEM NAME', 'BRAND']
 FY27 = ['Apr-26', 'May-26', 'Jun-26', 'Jul-26', 'Aug-26', 'Sep-26',
         'Oct-26', 'Nov-26', 'Dec-26', 'Jan-27', 'Feb-27', 'Mar-27']
@@ -447,7 +452,9 @@ def aop_row(aop=None, cy=None, ly=None, **over):
     checkable without adding twelve numbers in your head."""
     d = {
         'CHANEL TYPE': 'General Trade', 'HEAD': 'Naagesh Mishra',
-        'GTR HEAD': 'Anil Mehra', 'REPORT.INCHARGE': 'Vikas Gupta',
+        'GTR HEAD': 'Anil Mehra', 'BIZOM ID': 'BZ900', 'APIS ID': 'AP100',
+        'REPORT.INCHARGE': 'Vikas Gupta', 'BIZOM ID.': 'BZ901',
+        'APIS ID.': 'AP200',
         'REGION': 'North', 'Sub-Region': 'Delhi', 'Key': 'x',
         'I-CODE': 'IC-4412', 'ITEM NAME': 'APIS Honey 500g', 'BRAND': 'APIS',
         'NO OF SFO': 4,
@@ -521,6 +528,34 @@ class ReadingTheWideSheet(TestCase):
         self.assertEqual(r.brand, 'APIS')
         self.assertEqual(r.item_alt_code, 'IC-4412')
         self.assertEqual(r.sfo_count, 4)
+
+    def test_each_persons_id_columns_are_the_ones_beside_them(self):
+        """Both pairs normalise to the same header text, so position is the
+        only thing that says whose they are. Mapped by name, the ASM would
+        have come out carrying the RSM's ID."""
+        upload(aop_workbook([aop_row()]))
+        r = SalesRecord.objects.filter(period=date(2026, 4, 1)).first()
+        self.assertEqual(r.rsm_code, 'AP100')
+        self.assertEqual(r.asm_code, 'AP200')
+
+    def test_the_apis_id_wins_and_bizom_stands_in_where_it_is_missing(self):
+        upload(aop_workbook([aop_row(**{'APIS ID': '', 'APIS ID.': ''})]))
+        r = SalesRecord.objects.filter(period=date(2026, 4, 1)).first()
+        # Prefixed, so a Bizom 900 can never be read as an APIS 900.
+        self.assertEqual(r.rsm_code, 'BZ-BZ900')
+        self.assertEqual(r.asm_code, 'BZ-BZ901')
+
+    def test_a_whole_numbered_id_is_not_stored_as_a_float(self):
+        """Excel hands back 10432 as 10432.0, and the two spellings would
+        count as two people."""
+        self.assertEqual(AOP._id_text(10432.0), '10432')
+        self.assertEqual(AOP._id_text(10432), '10432')
+        self.assertEqual(AOP._id_text(None), '')
+
+    def test_the_id_columns_are_not_reported_as_columns_we_did_not_read(self):
+        _, _, unknown = AOP.map_columns(AOP_HEADERS)
+        leaked = [h for h in unknown if 'ID' in h.upper()]
+        self.assertEqual(leaked, [], f'ID columns reported as unread: {leaked}')
 
     def test_the_year_total_columns_are_never_added_to_the_months(self):
         """YTD ACH is the monthly columns already added up. Storing it beside
@@ -1434,6 +1469,41 @@ class TheSellingOrganisation(TestCase):
         self.assertEqual(counts['sales_head'], 0)
         self.assertEqual(counts['rsm'], 2)
         self.assertEqual(counts['asm'], 3)
+
+    def test_people_are_counted_by_their_id_not_by_their_name(self):
+        """Two spellings of one RSM is one person; two people sharing a name
+        is two. Counted on the name, this strip was wrong in both directions
+        at once."""
+        SalesRecord.objects.all().delete()
+        upload(aop_workbook([
+            aop_row(**{'GTR HEAD': 'Anil Mehra', 'APIS ID': 'AP100'}),
+            aop_row(**{'GTR HEAD': 'ANIL  MEHRA', 'APIS ID': 'AP100'}),
+            aop_row(**{'GTR HEAD': 'Anil Mehra', 'APIS ID': 'AP777'}),
+        ]))
+        counts = {c['level']: c['count'] for c in self.org()['level_counts']}
+        self.assertEqual(counts['rsm'], 2)
+
+    def test_a_person_on_both_files_is_one_person(self):
+        """The dump carries no ID columns, so its rows fall back to the name.
+        Counting the fallback beside the ID reported the same RSM twice."""
+        SalesRecord.objects.all().delete()
+        upload(aop_workbook([aop_row(**{'GTR HEAD': 'Anil Mehra',
+                                        'APIS ID': 'AP100'})]))
+        upload(a_workbook([a_row(**{'RSM Name': 'Anil Mehra',
+                                    'Order Date': '2026-04-05'})]))
+        counts = {c['level']: c['count'] for c in self.org()['level_counts']}
+        self.assertEqual(counts['rsm'], 1)
+
+    def test_customers_are_counted_the_way_the_headline_tile_counts_them(self):
+        """One account spelled two ways is one customer: it has one code.
+        This panel read the name and disagreed with the tile above it."""
+        SalesRecord.objects.all().delete()
+        upload(a_workbook([
+            a_row(**{'Customer No.': 'C-1', 'Customer Name': 'Sharma Agency', 'Sales Order No.': 'SO-1'}),
+            a_row(**{'Customer No.': 'C-1', 'Customer Name': 'SHARMA AGENCIES', 'Sales Order No.': 'SO-2'}),
+            a_row(**{'Customer No.': 'C-2', 'Customer Name': 'Verma Stores', 'Sales Order No.': 'SO-3'}),
+        ]))
+        self.assertEqual(self.org()['totals']['customers'], 2)
 
     def test_the_figures_roll_up_the_tree(self):
         d = self.org()

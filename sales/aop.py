@@ -44,6 +44,104 @@ DIMENSIONS = {
     'sfo_count':     ['no of sfo', 'no of sfo s', 'number of sfo'],
 }
 
+# ── Who a person is, beside what they are called ──────────────────────────
+#
+# Each people column on this sheet is followed by its own pair of ID columns:
+#
+#     GTR HEAD | BIZOM ID | APIS ID | REPORT.INCHARGE | BIZOM ID. | APIS ID.
+#
+# Those IDs are the identity. A name is not — the same person is spelled
+# several ways across a year of exports, and two people genuinely share one —
+# so every count of PEOPLE is made on the ID and only falls back to the name
+# where the sheet left the ID empty.
+#
+# They cannot be mapped by header text the way every other column is. Both
+# pairs are headed the same thing; the sheet tells them apart with a trailing
+# full stop, which _norm strips, so an alias lookup gives the GTR HEAD pair
+# twice and the REPORT.INCHARGE pair never. They are found by POSITION
+# instead — the ID columns belonging to a person are the run of ID columns
+# immediately to the right of that person's own column — which is also what
+# makes the trailing dot irrelevant, and survives a fourth people column
+# being added tomorrow with a pair of its own.
+PERSON_FIELDS = ['sales_head', 'rsm', 'asm']
+
+ID_HEADERS = {
+    'apis':  ['apis id', 'apis code', 'apis emp id'],
+    'bizom': ['bizom id', 'bizom code'],
+}
+
+
+def _id_kind(cell):
+    """-> 'apis' / 'bizom' for an ID header, else None."""
+    key = _norm(cell)
+    for kind, aliases in ID_HEADERS.items():
+        if key in {_norm(a) for a in aliases}:
+            return kind
+    return None
+
+
+def map_person_codes(header_row, dims):
+    """-> {person field: {'apis': index, 'bizom': index}}.
+
+    Read rightwards from each person's own column and stop at the first
+    thing that is not an ID header, so a pair is only ever claimed by the
+    person it actually sits beside.
+    """
+    found = {}
+    for field in PERSON_FIELDS:
+        start = dims.get(field)
+        if start is None:
+            continue
+        pair = {}
+        ci = start + 1
+        while ci < len(header_row):
+            kind = _id_kind(header_row[ci])
+            if kind is None:
+                break
+            pair.setdefault(kind, ci)
+            ci += 1
+        if pair:
+            found[field] = pair
+    return found
+
+
+def _id_text(value):
+    """An ID cell as the string it was typed as.
+
+    Excel hands back a whole-numbered ID as a float, and 10432.0 and 10432
+    are the same person -- counted as written they would be two.
+    """
+    if value is None:
+        return ''
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def read_person_codes(row, code_cols):
+    """-> {'<person>_code': identity} for one row.
+
+    The APIS ID is the identity wherever the sheet gives one: it is the
+    company's own employee number, and the rest of the intranet knows people
+    by it. A row with only a Bizom ID falls back to that, written 'BZ-<id>'
+    so the two numbering schemes cannot collide -- an APIS 23 and a Bizom 23
+    are not the same person, and left bare they would count as one.
+    """
+    out = {}
+    for field, pair in code_cols.items():
+        code = ''
+        for kind, prefix in (('apis', ''), ('bizom', 'BZ-')):
+            ci = pair.get(kind)
+            if ci is None or ci >= len(row):
+                continue
+            text = _id_text(row[ci])
+            if text:
+                code = prefix + text
+                break
+        out[field + '_code'] = code[:60]
+    return out
+
+
 # Present, and deliberately not stored — see the module docstring.
 SUMMARY_COLUMNS = [
     'YTD AOP', 'YTD ACH', 'LYTD ACH', "FY'26-27 AOP", "FY'26-27 ACH",
@@ -213,6 +311,11 @@ def map_columns(header_row):
         field = lookup.get(_norm(cell))
         if field is not None:
             dims.setdefault(field, ci)
+        elif _id_kind(cell):
+            # Claimed by map_person_codes, by position. Named here so the
+            # upload does not report the sheet's own ID columns back to the
+            # user as columns it did not understand.
+            continue
         else:
             unknown.append(str(cell).strip())
     return dims, months, unknown

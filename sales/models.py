@@ -103,6 +103,17 @@ class SalesRecord(models.Model):
 
     # Above RSM in the AOP sheet's hierarchy: HEAD > GTR HEAD > REPORT.INCHARGE.
     sales_head = models.CharField(max_length=200, blank=True, db_index=True)
+
+    # ── Who a person IS, as opposed to what they are called ───────────────
+    # The review sheet carries an APIS ID and a BIZOM ID beside each of its
+    # people columns, and those are the real identity. A name is not: the
+    # same person is spelled three ways across a year of exports, and two
+    # people genuinely share one. Counting distinct names reported 23 RSMs
+    # where the business has a different number, in both directions at once.
+    # Written by aop.read_person_codes(), which says how the two IDs combine.
+    sales_head_code = models.CharField(max_length=60, blank=True, db_index=True)
+    rsm_code        = models.CharField(max_length=60, blank=True, db_index=True)
+    asm_code        = models.CharField(max_length=60, blank=True, db_index=True)
     # Field officers behind this line. A row attribute, not a monthly one, so
     # it repeats across the months a row unpivots into.
     sfo_count  = models.IntegerField(default=0)

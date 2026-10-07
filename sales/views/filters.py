@@ -84,6 +84,46 @@ FILTERABLE = ['state', 'zone', 'area', 'city', 'category', 'sub_category',
 # Matched case-insensitively, because the dump writes these by hand and
 # `zone__in` is exact: one row reading "Export" rather than "EXPORT" would
 # have walked straight through.
+# Finished goods carry an Item Code beginning FG. Everything else in that
+# column -- raw material, packaging, consumables -- can appear on a sales
+# invoice without being a product the company sells.
+FINISHED_GOODS_PREFIX = 'FG'
+
+# A person is counted by their ID, never by their name -- see
+# aop.read_person_codes for why, and for how the two IDs combine.
+PERSON_CODE_FIELD = {
+    'sales_head': 'sales_head_code',
+    'rsm':        'rsm_code',
+    'asm':        'asm_code',
+}
+
+
+def count_people(querysets, level):
+    """How many distinct PEOPLE a level holds, across several querysets.
+
+    Identity is the ID where the sheet gave one. Where it did not -- the
+    invoice dump carries no ID columns at all -- the name stands in, but
+    only for people no coded row already accounted for: the same RSM named
+    on the sheet with an ID and on the dump without one is one person, and
+    counting both halves reported them twice.
+    """
+    code_field = PERSON_CODE_FIELD.get(level)
+    coded, named, spoken_for = set(), set(), set()
+    for qs in querysets:
+        if qs is None:
+            continue
+        fields = [level] + ([code_field] if code_field else [])
+        for row in qs.exclude(**{level: ''}).values_list(*fields).order_by().distinct():
+            name = row[0]
+            code = row[1] if code_field else ''
+            if code:
+                coded.add(code)
+                spoken_for.add(name)
+            else:
+                named.add(name)
+    return len(coded) + len(named - spoken_for)
+
+
 NOT_SALES_ZONES = ['NOT A PART OF SALES', 'B2B', 'EXPORT']
 
 

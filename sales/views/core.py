@@ -26,6 +26,7 @@ from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters, detail_qs,
                       qs_for_dimension, money_base, sheet_fields,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
                       NOT_SALES_ZONES, _not_sales_zone_q, in_plan_scope,
+                      FINISHED_GOODS_PREFIX,
                       with_actuals, comparable_window,
                       same_months_last_year)
 
@@ -124,6 +125,9 @@ def _reconcile_against_sheet(upload, watermark, stated, scale):
 def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
     """Load the AOP-vs-ACH sheet, unpivoting each row into one per month."""
     dims, months, unknown = AOP.map_columns(header_row)
+    # The APIS / BIZOM ID columns beside each people column. Found by where
+    # they sit, not by what they are headed -- see aop.map_person_codes.
+    code_cols = AOP.map_person_codes(header_row, dims)
 
     if not months:
         return Response({'error': 'No month columns found. This sheet should carry '
@@ -172,6 +176,7 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
             if not any(v is not None and str(v).strip() != '' for v in row):
                 continue
             entries = AOP.unpivot(row, dims, months)
+            codes = AOP.read_person_codes(row, code_cols)
             if not entries:
                 empty_rows += 1
                 continue
@@ -206,6 +211,10 @@ def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
                 # so this sheet and the invoice dump name states the same way.
                 rec.subzone = rec.state[:100]
                 rec.state = state_from_subregion(rec.subzone)
+                # A row attribute, not a monthly one: the same person owns
+                # every month the row unpivots into.
+                for code_field, code in codes.items():
+                    setattr(rec, code_field, code)
                 batch.append(rec)
                 lo = period if lo is None or period < lo else lo
                 hi = period if hi is None or period > hi else hi
@@ -746,11 +755,6 @@ def _ingest_dump(request, upload, ws, header_row, header_row_index=1):
         'notes': notes,
     })
 
-
-# Finished goods carry an Item Code beginning FG. Everything else in that
-# column -- raw material, packaging, consumables -- can appear on a sales
-# invoice without being a product the company sells.
-FINISHED_GOODS_PREFIX = 'FG'
 
 
 class SalesOverviewView(SalesIQView):
@@ -1311,12 +1315,20 @@ class SalesInsightsView(SalesIQView):
         lo, hi = _period_bounds(qs)
         if hi:
             cutoff = hi - timedelta(days=90)
-            recent_c = set(qs.filter(order_date__gt=cutoff)
-                             .exclude(customer_name='')
-                             .values_list('customer_name', flat=True).distinct())
-            all_c = set(qs.exclude(customer_name='')
-                          .values_list('customer_name', flat=True).distinct())
-            dormant = all_c - recent_c
+            # Keyed on the customer CODE, the way every other customer
+            # count in this app is. On the name, one account spelled two
+            # ways was two customers -- and a renamed account was reported
+            # dormant while it was still buying under its new spelling.
+            def _codes(rows):
+                return {c: n for c, n in rows}
+            recent_c = _codes(qs.filter(order_date__gt=cutoff)
+                                .exclude(customer_code='')
+                                .values_list('customer_code', 'customer_name')
+                                .order_by().distinct())
+            all_c = _codes(qs.exclude(customer_code='')
+                             .values_list('customer_code', 'customer_name')
+                             .order_by().distinct())
+            dormant = {all_c[c] or c for c in (set(all_c) - set(recent_c))}
             if dormant and len(all_c) >= 5:
                 insights.append({
                     'type': 'risk',
