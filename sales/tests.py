@@ -3055,6 +3055,42 @@ class TheControlTowerRules(TestCase):
         d = self.client.get('/api/sales/org/').json()
         self.assertEqual(d['status_tally']['total'], len(d['tree']))
 
+    def test_the_headline_strip_is_answerable_from_one_comparison(self):
+        """Revenue, AOP, gap and percentage have to be four readings of ONE
+        comparison, or the strip contradicts itself in public.
+
+        It did: the percentage was like-for-like, the gap was the window's
+        whole revenue less the window's whole plan, and the bar was a third
+        ratio again -- so a real screen read "79% of AOP" above a bar sitting
+        at a third, beside "behind by Rs 212.73 Cr". Each was arithmetically
+        correct. No two answered the same question. These assertions are what
+        the screen needs in order to be drawn from one of them."""
+        d = self.ov()
+        basis = d['achievement_basis']
+
+        # The percentage is that basis, and nothing else.
+        self.assertAlmostEqual(d['achievement_pct'],
+                               basis['revenue'] / basis['target'] * 100, places=1)
+        # The gap is the same two numbers, subtracted rather than divided.
+        self.assertAlmostEqual(d['gap_to_target'],
+                               basis['target'] - basis['revenue'], places=2)
+        # And the basis is a real subset of the window, not the whole of it:
+        # six months of plan are loaded, six have results, so here they agree
+        # -- but the plan must never exceed the window's own total.
+        self.assertLessEqual(basis['target'], d['target'] + 0.01)
+
+    def test_the_plan_for_months_with_results_is_sent_apart_from_the_window_total(self):
+        """The screen needs both and must not confuse them: the plan for the
+        months that have happened is the denominator of the percentage, the
+        window's full plan is context."""
+        d = self.ov()
+        self.assertIn('target', d['achievement_basis'])
+        self.assertIn('target', d)
+        # Six months done out of twelve planned, so the window total is the
+        # larger of the two and the basis covers only what has happened.
+        self.assertEqual(d['achievement_basis']['months'], 6)
+        self.assertGreater(d['target'], d['achievement_basis']['target'])
+
     # ── governance ──────────────────────────────────────────────────────
     def test_the_screen_can_say_when_the_data_was_last_loaded(self):
         """Every figure here is as old as the last upload. Without saying so
