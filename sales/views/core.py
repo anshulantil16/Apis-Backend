@@ -1070,8 +1070,20 @@ class SalesForecastView(SalesIQView):
         metric = (request.query_params.get('metric') or 'revenue').strip().lower()
         agg_field = 'quantity' if metric == 'quantity' else 'net_amount'
 
-        qs, applied = apply_filters(SalesRecord.objects.all(), request,
-                                    default_window=False)
+        # DIMENSION filters only -- deliberately not the month window.
+        #
+        # The window says which months are being LOOKED at. It is not a
+        # statement about which months the model may learn from, and reading
+        # it as one did real damage: with Apr-Sep selected the forecast was
+        # fitted on six months of a rising ramp, which dropped it out of the
+        # seasonal model into a straight line and projected +78% on the next
+        # six months. Two full years were loaded the whole time.
+        #
+        # Region, channel, category and the rest still apply: a forecast for
+        # the North is a different series from a forecast for the company,
+        # and that is the question being asked. A forecast for April to
+        # September is not -- a forecast starts where the actuals stop.
+        qs, applied = apply_dim_filters(SalesRecord.objects.all(), request)
         rows = (with_actuals(qs).values('period')
                 .annotate(v=Sum(agg_field)).order_by('period'))
         points = [(r['period'], float(r['v'] or 0)) for r in rows]
@@ -1128,6 +1140,14 @@ class SalesForecastView(SalesIQView):
             }
 
         result['filters'] = applied
+        # Said out loud, because the filter bar above this panel shows a
+        # month range that this panel is ignoring on purpose.
+        result['window_note'] = (
+            'Fitted on every month loaded, not on the months selected above. '
+            'The month filter narrows what the rest of the dashboard shows; '
+            'a forecast has to learn from the full history and start where '
+            'the actuals stop. Region, channel and the other filters do '
+            'apply.')
 
         hist_total = sum(v for _, v in points)
         if points and result.get('points'):

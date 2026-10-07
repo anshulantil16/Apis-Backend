@@ -32,6 +32,17 @@ def _node(name, level):
         'name': name, 'level': level, 'vacant': is_vacant(name),
         'revenue': 0.0, 'target': 0.0, 'quantity': 0.0, 'lines': 0,
         'customers': 0, 'states': 0, 'areas': 0, 'skus': 0, 'field_officers': 0,
+        # How many invoice lines actually landed here. Without it a node
+        # shows "0 customers" whether it genuinely sold to none or whether
+        # the dump simply does not name this level -- and the second case
+        # was every row on screen.
+        'detail_lines': 0,
+        # Collected rather than added. Summing per-group distinct counts
+        # reported one head as covering 55 sub-regions when the company has
+        # nothing like that many: each of his thirteen RSMs contributed its
+        # own count and they were added together. Dropped before the
+        # response is built.
+        '_states': set(), '_areas': set(),
         'children': [],
     }
 
@@ -42,14 +53,14 @@ def _finish(node):
         _finish(child)
     if node['children']:
         node['children'].sort(key=lambda c: c['revenue'], reverse=True)
-        # Counts of PEOPLE come from the tree; counts of things a person
-        # covers come from the rows, and are summed rather than deduplicated
-        # because two ASMs selling in one state is two pieces of coverage.
         node['reports'] = len(node['children'])
         node['team'] = sum(c.get('team', 0) or 1 for c in node['children'])
     else:
         node['reports'] = 0
         node['team'] = 0
+    # A state two ASMs both sell in is ONE state the branch covers.
+    node['states'] = len(node.pop('_states'))
+    node['areas'] = len(node.pop('_areas'))
     node['achievement_pct'] = _pct(node['revenue'], node['target'])
     node['revenue'] = round(node['revenue'], 2)
     node['target'] = round(node['target'], 2)
@@ -77,11 +88,12 @@ class SalesOrgView(SalesIQView):
 
         qs, applied = apply_filters(SalesRecord.objects.all(), request)
 
-        rows = (qs.values(*levels)
+        # Grouped by state and sub-region as well as by level, so coverage
+        # can be collected as the set of places a branch reaches rather than
+        # as a count that gets added to another count.
+        rows = (qs.values(*levels, 'state', 'subzone')
                   .annotate(revenue=Sum('net_amount'), target=Sum('target_amount'),
-                            lines=Count('id'),
-                            states=Count('state', distinct=True),
-                            areas=Count('subzone', distinct=True))
+                            lines=Count('id'))
                   .order_by())
 
         # Customers, SKUs and quantity are facts about an invoice, and the
@@ -150,8 +162,10 @@ class SalesOrgView(SalesIQView):
                 node['revenue'] += float(r['revenue'] or 0)
                 node['target'] += float(r['target'] or 0)
                 node['lines'] += r['lines'] or 0
-                node['states'] += r['states'] or 0
-                node['areas'] += r['areas'] or 0
+                if r.get('state'):
+                    node['_states'].add(r['state'])
+                if r.get('subzone'):
+                    node['_areas'].add(r['subzone'])
 
         # The invoice-only figures, up the same tree. A dump row naming none
         # of the levels lands on the root alone, which is honest: the money is
@@ -176,6 +190,7 @@ class SalesOrgView(SalesIQView):
                 node['quantity'] += float(r['quantity'] or 0)
                 node['customers'] += r['customers'] or 0
                 node['skus'] += r['skus'] or 0
+                node['detail_lines'] += r['lines'] or 0
 
         # Roll the territory headcounts up the same tree, each territory
         # landing once on every level above it.
@@ -227,9 +242,24 @@ class SalesOrgView(SalesIQView):
         per_level = [{'level': lvl, 'count': count_people([qs, detail], lvl)}
                      for lvl in levels]
 
+        # Whether the invoice dump names these levels at all. Customers and
+        # SKUs are invoice facts; if the dump carries no RSM column then
+        # every node below the root has none of either, and a row of zeros
+        # is a claim that nobody bought anything rather than an admission
+        # that this file cannot say. The screen needs to tell the two apart.
+        detail_total = detail.count()
+        placed = sum(n['detail_lines'] for n in index.values() if n.get('depth') == 0)
+        detail_reach = {
+            'lines': detail_total,
+            'placed': placed,
+            'levels_named': [lvl for lvl in levels
+                             if detail.exclude(**{lvl: ''}).exists()],
+        }
+
         return Response({
             'levels': levels,
             'level_counts': per_level,
+            'detail_reach': detail_reach,
             'tree': root['children'],
             'totals': {k: root[k] for k in
                        ('revenue', 'target', 'achievement_pct', 'quantity',

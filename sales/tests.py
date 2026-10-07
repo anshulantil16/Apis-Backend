@@ -1505,6 +1505,35 @@ class TheSellingOrganisation(TestCase):
         ]))
         self.assertEqual(self.org()['totals']['customers'], 2)
 
+    def test_coverage_is_the_places_reached_not_a_sum_of_counts(self):
+        """Two ASMs both selling in Delhi is ONE state the branch covers.
+        Added up per group instead, one head was reported as covering 55
+        sub-regions, which is more than the company has."""
+        SalesRecord.objects.all().delete()
+        upload(a_workbook([
+            a_row(**{'RSM Name': 'Anil Mehra', 'ASM Name': 'Vikas Gupta',
+                     'Cust.State Code': '07', 'Sales Order No.': 'SO-1'}),
+            a_row(**{'RSM Name': 'Anil Mehra', 'ASM Name': 'Ramesh Singh',
+                     'Cust.State Code': '07', 'Sales Order No.': 'SO-2'}),
+        ]))
+        top = self.org()['tree'][0]
+        self.assertEqual(top['name'], 'Anil Mehra')
+        self.assertEqual(top['states'], 1)
+        for child in top['children']:
+            self.assertLessEqual(child['states'], top['states'],
+                                 'a branch covers less ground than its parent')
+
+    def test_the_response_says_which_levels_the_invoice_file_reaches(self):
+        """Customers and SKUs are invoice facts. If the dump carries no head
+        column then every head shows nought of both -- which is a claim that
+        nobody bought anything, not an admission that this file cannot say.
+        The screen has to be able to tell the two apart."""
+        d = self.org()
+        reach = d['detail_reach']
+        self.assertEqual(reach['levels_named'], ['rsm', 'asm'])
+        self.assertNotIn('sales_head', reach['levels_named'])
+        self.assertGreater(reach['lines'], 0)
+
     def test_the_figures_roll_up_the_tree(self):
         d = self.org()
         for node in d['tree']:
@@ -2750,6 +2779,27 @@ class TheForecastExplainsItself(TestCase):
         if '10' in by_month:
             self.assertGreater(by_month['10']['seasonal_pct'], 20,
                                'a 60% festive October was not reported as a lift')
+
+    def test_the_month_window_narrows_the_view_not_the_model(self):
+        """With Apr-Sep selected the forecast was fitted on six months of a
+        rising ramp, which dropped it out of the seasonal model into a
+        straight line and projected +78% on the next six. Two full years
+        were loaded the whole time. A window says which months are being
+        looked at, not which months the model may learn from."""
+        full = self.fc(periods=6)
+        narrowed = self.fc(periods=6, month_from='2026-04', month_to='2026-09')
+        self.assertEqual(narrowed['history_months'], full['history_months'])
+        self.assertEqual([p['value'] for p in narrowed['points']],
+                         [p['value'] for p in full['points']])
+
+    def test_a_dimension_filter_does_still_narrow_the_model(self):
+        """A forecast for one region is a different series from a forecast
+        for the company, and that is the question being asked."""
+        d = self.fc(periods=6, zone='Nowhere')
+        self.assertEqual(d['history_months'], 0)
+
+    def test_the_panel_says_it_is_ignoring_the_month_filter(self):
+        self.assertIn('not on the months selected', self.fc(periods=6)['window_note'])
 
     def test_the_band_is_explained_rather_than_just_drawn(self):
         spec = self.fc(periods=6)['spec']
