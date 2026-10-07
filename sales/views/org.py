@@ -299,10 +299,22 @@ class SalesOrgView(SalesIQView):
                              if detail.exclude(**{lvl: ''}).exists()],
         }
 
+        # How the branches fall across the bands, counted at the TOP level
+        # only -- the same person must not be counted once as an RSM and
+        # again inside their own team. Reported so a screen can say "19 of 23
+        # are under the red line" instead of leaving somebody to count
+        # colours down a long list, and so that a wall of red reads as a
+        # statement about how the plan was set rather than as nineteen
+        # separate accusations.
+        tally = STATUS.tally([n['achievement_pct'] for n in root['children']])
+        tally['level'] = root['children'][0]['level'] if root['children'] else None
+
         return Response({
             'levels': levels,
             'level_counts': per_level,
             'detail_reach': detail_reach,
+            'status_tally': tally,
+            'status_thresholds': STATUS.thresholds(),
             'tree': root['children'],
             'totals': {k: root[k] for k in
                        ('revenue', 'target', 'achievement_pct', 'quantity',

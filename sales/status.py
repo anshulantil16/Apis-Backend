@@ -31,8 +31,49 @@ GREEN = 'green'
 
 # The achievement limb of the blueprint's rule. Upper AMBER bound is 100
 # rather than 90 -- see the module docstring.
-RED_BELOW = 70.0
-GREEN_AT = 100.0
+#
+# Settable, and the reason is not politeness about someone else's numbers.
+# Run against the figures actually on this dashboard, these thresholds put
+# five of the first seven branches in RED and none in GREEN. A screen where
+# everything is red is a screen nobody reads by the second week: the colour
+# stops meaning "act on this" and starts meaning "this is the dashboard".
+#
+# That does not make the thresholds wrong. It means one of two things is
+# true -- the AOP is a stretch plan the business habitually runs under, or
+# something is understating revenue -- and neither is mine to decide from
+# here. So the blueprint's numbers stand as the default, and moving them is
+# a line in settings rather than a code change and a deploy:
+#
+#     SALESIQ_RED_BELOW = 55
+#     SALESIQ_GREEN_AT  = 95
+#
+# Read per call, not bound at import, so the change takes without a restart.
+#
+# Whatever they are set to, the screen prints the band it used beside the
+# status, and the org view reports how many branches landed in each -- so a
+# wall of red is legible as a statement about the plan rather than as
+# nineteen separate accusations.
+DEFAULT_RED_BELOW = 70.0
+DEFAULT_GREEN_AT = 100.0
+
+
+def thresholds():
+    """The bands in force.
+
+    Read when asked rather than at import. Bound once at import, a server
+    that moved the red line would have had to be restarted for it to take,
+    and -- the reason it was actually changed -- every message built from the
+    bounds would have frozen the defaults into itself, so a dashboard running
+    at 55 went on printing "Under 70% of AOP" beside the status.
+    """
+    red, green = DEFAULT_RED_BELOW, DEFAULT_GREEN_AT
+    try:
+        from django.conf import settings
+        red = float(getattr(settings, 'SALESIQ_RED_BELOW', red))
+        green = float(getattr(settings, 'SALESIQ_GREEN_AT', green))
+    except Exception:
+        pass
+    return {'red_below': red, 'green_at': green}
 
 LABELS = {
     RED:   'Needs intervention',
@@ -42,11 +83,13 @@ LABELS = {
 
 # What each band means in the blueprint's own terms, for the screen to show
 # beside the colour so a status is never just a colour.
-MEANING = {
-    RED:   f'Under {RED_BELOW:.0f}% of AOP',
-    AMBER: f'{RED_BELOW:.0f}% to {GREEN_AT:.0f}% of AOP',
-    GREEN: f'{GREEN_AT:.0f}% of AOP or better',
-}
+def _meaning(s):
+    t = thresholds()
+    return {
+        RED:   f'Under {t["red_below"]:.0f}% of AOP',
+        AMBER: f'{t["red_below"]:.0f}% to {t["green_at"]:.0f}% of AOP',
+        GREEN: f'{t["green_at"]:.0f}% of AOP or better',
+    }[s]
 
 
 def rag(pct):
@@ -59,9 +102,10 @@ def rag(pct):
     """
     if pct is None:
         return None
-    if pct < RED_BELOW:
+    t = thresholds()
+    if pct < t['red_below']:
         return RED
-    if pct < GREEN_AT:
+    if pct < t['green_at']:
         return AMBER
     return GREEN
 
@@ -71,4 +115,21 @@ def band(pct):
     s = rag(pct)
     if s is None:
         return None
-    return {'status': s, 'label': LABELS[s], 'meaning': MEANING[s]}
+    return {'status': s, 'label': LABELS[s], 'meaning': _meaning(s),
+            'thresholds': thresholds()}
+
+
+def tally(pcts):
+    """-> {'red': n, 'amber': n, 'green': n, 'unrated': n, 'total': n}.
+
+    So a screen can say "19 of 23 are under the red line" in one place
+    instead of leaving the reader to count colours down a long list -- and so
+    that a wall of red reads as what it is, which is a statement about how
+    the plan was set rather than about nineteen individual people.
+    """
+    out = {RED: 0, AMBER: 0, GREEN: 0, 'unrated': 0}
+    for p in pcts:
+        out[rag(p) or 'unrated'] += 1
+    out['total'] = sum(out.values())
+    return out
+

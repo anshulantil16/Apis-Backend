@@ -37,31 +37,50 @@ from datetime import date
 # ── what else is happening that month ────────────────────────────────────
 #
 # The model reads a seasonal index off the company's own history: it can say
-# December runs 18% above an average month, but not why. This names what the
-# business already knows sits in that month, so the two can be shown side by
-# side -- the number from the data, the reason from the calendar.
+# December runs 18% above an average month, but not why. This names what else
+# falls in that month, so the two sit side by side -- the size of the effect
+# from APIS's own data, the calendar from the calendar.
 #
-# It is a calendar, not an input. Nothing here changes a single forecast
-# figure; it is shown beside the figure so somebody asking "why is October
-# high" gets an answer instead of a shrug. Several of these festivals move
-# by a few weeks year to year, which is itself worth knowing when a month
-# comes in off its index.
+# What is in here, and what is deliberately NOT.
+#
+# Only dated events: festivals, the financial year boundary, the monsoon.
+# Those are facts about the Indian calendar and anyone can check them.
+#
+# What was here first, and has been taken out, were statements about this
+# business -- "peak winter, honey demand runs high", "the largest gifting and
+# stocking month", "channel loading into the trade". They were written from
+# general knowledge of Indian FMCG, not from anything APIS has said or any
+# figure in these files, and shown beside a real forecast they would have
+# read as established fact about this company. If December runs hot for APIS,
+# the seasonal index says so out of their own invoices, and that is a claim
+# worth something. The same sentence from me is worth nothing and is harder
+# to argue with, which is the worse combination.
+#
+# So: the data says how big, the calendar says what else was on, and nobody
+# asserts why except the people who actually know. SALESIQ_MONTH_CALENDAR in
+# settings replaces any month, for when they want to write that down.
 MONTH_CALENDAR = {
-    1:  ['Makar Sankranti, Lohri, Pongal', 'Peak winter — honey demand runs high'],
-    2:  ['Winter demand holding', 'Maha Shivratri in some years'],
-    3:  ['Holi', 'Financial year end — channel loading into the trade'],
-    4:  ['New financial year opens — trade stocks are low after March loading',
-         'Navratri and Ram Navami'],
-    5:  ['Summer peak', 'Wedding season'],
+    1:  ['Makar Sankranti, Lohri, Pongal', 'Republic Day'],
+    2:  ['Maha Shivratri, in some years'],
+    3:  ['Holi', 'Financial year ends'],
+    4:  ['Financial year opens', 'Navratri, Ram Navami, Baisakhi'],
+    5:  ['Peak summer'],
     6:  ['Monsoon onset', 'Schools reopen'],
-    7:  ['Shravan begins — fasting demand for honey and dry fruit'],
-    8:  ['Raksha Bandhan, Janmashtami, Independence Day', 'Gifting picks up'],
-    9:  ['Ganesh Chaturthi, Onam', 'Festive stocking begins ahead of Q3'],
-    10: ['Navratri, Dussehra, and Diwali in most years',
-         'The largest gifting and stocking month of the year'],
-    11: ['Diwali in some years, Bhai Dooj', 'Wedding season; winter begins'],
-    12: ['Christmas and New Year', 'Winter — honey demand builds'],
+    7:  ['Shravan begins, in most years'],
+    8:  ['Raksha Bandhan, Janmashtami', 'Independence Day'],
+    9:  ['Ganesh Chaturthi, Onam'],
+    10: ['Navratri and Dussehra', 'Diwali, in most years'],
+    11: ['Diwali, in some years', 'Bhai Dooj'],
+    12: ['Christmas, New Year'],
 }
+
+try:                                        # pragma: no cover - settings shim
+    from django.conf import settings as _settings
+    MONTH_CALENDAR = {**MONTH_CALENDAR,
+                      **{int(k): v for k, v in
+                         getattr(_settings, 'SALESIQ_MONTH_CALENDAR', {}).items()}}
+except Exception:
+    pass
 
 
 # ── helpers ──────────────────────────────────────────────────────────────

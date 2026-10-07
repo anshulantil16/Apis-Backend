@@ -3018,6 +3018,43 @@ class TheControlTowerRules(TestCase):
         self.assertIsNone(d['required_run_rate'])
         self.assertIsNone(d['run_rate_basis']['lift_needed_pct'])
 
+    def test_the_bands_can_be_moved_without_a_deploy(self):
+        """These thresholds put five of the first seven real branches in RED
+        and none in GREEN. That may be right -- a stretch plan the business
+        habitually runs under -- but a screen where everything is red stops
+        being read, and which it is is not a judgement this code can make. So
+        the blueprint's numbers are the default and a settings line moves
+        them."""
+        from django.test import override_settings
+        from sales import status as st
+        with override_settings(SALESIQ_RED_BELOW=55, SALESIQ_GREEN_AT=95):
+            self.assertEqual(st.rag(60), 'amber')   # red under the default
+            self.assertEqual(st.rag(96), 'green')   # amber under the default
+            self.assertIn('55', st.band(60)['meaning'])
+        # Read per call, so nothing leaks past the override.
+        self.assertEqual(st.rag(60), 'red')
+        self.assertEqual(st.rag(96), 'amber')
+
+    def test_the_meaning_is_built_from_the_bands_actually_in_force(self):
+        """A module-level f-string would have frozen the defaults into every
+        message at import, so a server that moved the red line to 55 would go
+        on printing 'Under 70%' beside it."""
+        d = self.ov()
+        self.assertIn(str(int(d['status']['thresholds']['red_below'])),
+                      d['status']['meaning'])
+
+    def test_the_tree_says_how_many_landed_in_each_band(self):
+        """So a wall of red reads as a statement about how the plan was set,
+        rather than as nineteen separate accusations."""
+        t = self.client.get('/api/sales/org/').json()['status_tally']
+        self.assertEqual(t['total'], t['red'] + t['amber'] + t['green'] + t['unrated'])
+
+    def test_the_tally_counts_each_person_once(self):
+        """Counted down the whole tree, an RSM would be counted again inside
+        his own team."""
+        d = self.client.get('/api/sales/org/').json()
+        self.assertEqual(d['status_tally']['total'], len(d['tree']))
+
     # ── governance ──────────────────────────────────────────────────────
     def test_the_screen_can_say_when_the_data_was_last_loaded(self):
         """Every figure here is as old as the last upload. Without saying so
