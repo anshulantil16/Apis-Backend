@@ -42,9 +42,19 @@ class PolicyDocuments(TestCase):
     def _auth(self, user):
         return {'HTTP_AUTHORIZATION': f'Bearer {PortalSession.start(user)}'}
 
+    COMPLETE = {'department': 'P & C', 'approvedBy': 'Vimal Anand',
+                'reviewedBy': 'Pankaj', 'approvalDate': '2026-10-01'}
+
     def _upload(self, user, **fields):
-        data = {'title': 'Leave SOP', 'category': 'SOP', 'file': _pdf(), **fields}
+        data = {'title': 'Leave SOP', 'category': 'SOP', 'file': _pdf(), **self.COMPLETE, **fields}
         return self.client.post(URL, data, **self._auth(user))
+
+    def test_every_field_is_required(self):
+        for missing in ('department', 'approvedBy', 'reviewedBy', 'approvalDate'):
+            r = self._upload(self.admin, **{missing: ''})
+            self.assertEqual(r.status_code, 400, missing)
+        self.assertEqual(self._upload(self.admin, approvalDate='not-a-date').status_code, 400)
+        self.assertFalse(PolicyDocument.objects.exists())
 
     def test_upload_needs_sign_in(self):
         r = self.client.post(URL, {'title': 'x', 'category': 'SOP', 'file': _pdf()})
@@ -141,7 +151,7 @@ class PolicyDocuments(TestCase):
     def test_file_link_is_root_relative_not_the_host_django_was_reached_on(self):
         # Behind the QA proxy Django is reached as 127.0.0.1:8001; a link
         # carrying that host sends the browser to the viewer's own machine.
-        r = self.client.post(URL, {'title': 'x', 'category': 'SOP', 'file': _pdf()},
+        r = self.client.post(URL, {'title': 'x', 'category': 'SOP', 'file': _pdf(), **self.COMPLETE},
                              HTTP_HOST='127.0.0.1:8001', **self._auth(self.admin))
         self.assertTrue(r.json()['file'].startswith('/media/policies/'), r.json()['file'])
         listed = self.client.get(URL, HTTP_HOST='127.0.0.1:8001').json()
