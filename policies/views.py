@@ -127,6 +127,17 @@ class PolicyDocumentListView(PortalScopedAPIView):
             return Response({'error': 'Choose what kind of document this is.'},
                             status=http.HTTP_400_BAD_REQUEST)
 
+        # Every field is required: a register entry without its department,
+        # sign-off or date is a document nobody can vouch for.
+        for field, label in (('department', 'department'), ('approvedBy', 'who approved it'),
+                             ('reviewedBy', 'who reviewed it')):
+            if not (request.data.get(field) or '').strip():
+                return Response({'error': f'Fill in {label}.'},
+                                status=http.HTTP_400_BAD_REQUEST)
+        if _parse_date(request.data.get('approvalDate')) is None:
+            return Response({'error': 'Fill in the approval date.'},
+                            status=http.HTTP_400_BAD_REQUEST)
+
         f = request.FILES.get('file')
         problem = _validate(f)
         if problem:
