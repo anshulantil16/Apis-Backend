@@ -2654,3 +2654,104 @@ class OnlyB2BAndExportLeaveTheFigure(TestCase):
         self.assertEqual(
             set(scoped.values_list('zone', flat=True).distinct()),
             {'GTR01', 'CPC', 'MT'})
+
+
+# ── the forecast, and whether it can answer for itself ──────────────────────
+class TheForecastExplainsItself(TestCase):
+    """A projection nobody can account for is not usable in a review. Every
+    figure the forecast panel shows has to be traceable to either the data or
+    a stated rule."""
+
+    def setUp(self):
+        # 19 months of actuals -- all of FY26 plus April to October of FY27 --
+        # against a full twelve months of plan. That leaves November to March
+        # as months the plan reaches and the history does not, which is
+        # exactly the stretch the AOP line exists to cover.
+        row = {}
+        for i, m in enumerate(FY26):
+            row[m] = 50000 + i * 1000
+        for i, m in enumerate(FY27[:7]):
+            row[m] = 62000 + i * 1000
+        for i, m in enumerate(FY27):
+            row[f'{m} AOP'] = 70000 + i * 1000
+        upload(aop_workbook([aop_row(**row)]))
+
+    def fc(self, **params):
+        q = '&'.join(f'{k}={v}' for k, v in params.items())
+        return self.client.get(f'/api/sales/forecast/{"?" + q if q else ""}').json()
+
+    def test_the_plan_is_drawn_across_the_forecast_not_only_the_history(self):
+        d = self.fc(periods=6)
+        future = [p for p in d['points'] if p['aop'] is not None]
+        self.assertTrue(future, 'no AOP on any forecast month')
+        self.assertEqual([p['label'] for p in future],
+                         ['Nov 2026', 'Dec 2026', 'Jan 2027', 'Feb 2027', 'Mar 2027'])
+
+    def test_the_plan_is_not_an_input_to_the_model(self):
+        """The forecast says what the business looks like it will do; the AOP
+        says what it undertook to do. Feeding one into the other would make
+        the two lines agree by construction and the chart would say nothing."""
+        before = [p['value'] for p in self.fc(periods=6)['points']]
+        SalesRecord.objects.filter(target_amount__gt=0).update(target_amount=999999)
+        after = [p['value'] for p in self.fc(periods=6)['points']]
+        self.assertEqual(before, after)
+
+    def test_forecast_and_plan_are_totalled_over_the_same_months(self):
+        """The plan stops in March. Totalling six months of forecast against
+        five months of plan reads as a shortfall that is really a plan
+        running out."""
+        d = self.fc(periods=6)
+        v = d['vs_aop']
+        self.assertEqual(v['months'], 5)
+        self.assertTrue(v['partial'])
+        covered = [p for p in d['points'] if p['aop'] is not None]
+        self.assertAlmostEqual(v['aop_total'], sum(p['aop'] for p in covered), places=2)
+        self.assertAlmostEqual(v['forecast_total'], sum(p['value'] for p in covered), places=2)
+        self.assertAlmostEqual(v['gap'], v['forecast_total'] - v['aop_total'], places=2)
+
+    def test_a_quantity_forecast_carries_no_plan_line(self):
+        """The plan is in rupees. Drawn against a forecast in cases it would
+        be a line with no meaning on that axis."""
+        d = self.fc(periods=6, metric='quantity')
+        self.assertTrue(all(p['aop'] is None for p in d['points']))
+        self.assertNotIn('vs_aop', d)
+
+    def test_the_panel_can_say_which_model_ran_and_why(self):
+        d = self.fc(periods=6)
+        spec = d['spec']
+        self.assertIn("Holt", spec['name'])
+        self.assertIn('19', spec['why'])          # the history it was given
+        self.assertTrue(spec['reads'])
+        self.assertEqual(spec['seasonality'], 'none')
+        self.assertIn('24 months', spec['seasonality_why'])
+        self.assertIn('95%', spec['band'])
+
+    def test_every_forecast_month_names_what_is_in_it(self):
+        for p in self.fc(periods=6)['points']:
+            self.assertTrue(p['calendar'], f"{p['label']} has nothing beside it")
+
+    def test_seasonality_is_only_claimed_once_there_is_enough_history(self):
+        """A seasonal index off 19 months would be one observation per month
+        dressed up as a pattern."""
+        for p in self.fc(periods=6)['points']:
+            self.assertNotIn('seasonal_index', p)
+
+    def test_with_two_full_years_the_model_shows_its_seasonal_working(self):
+        from sales.forecasting import forecast_series
+        from datetime import date as _d
+        pts, lift = [], {10: 1.6, 11: 1.4}      # a festive October and November
+        for i in range(30):
+            m = _d(2024 + (3 + i) // 12, (3 + i) % 12 + 1, 1)
+            pts.append((m, 100000 * lift.get(m.month, 1.0)))
+        d = forecast_series(pts, periods=6)
+        self.assertEqual(d['method'], 'holt-winters')
+        self.assertEqual(d['spec']['seasonality'], 'multiplicative')
+        by_month = {p['period'][5:7]: p for p in d['points']}
+        if '10' in by_month:
+            self.assertGreater(by_month['10']['seasonal_pct'], 20,
+                               'a 60% festive October was not reported as a lift')
+
+    def test_the_band_is_explained_rather_than_just_drawn(self):
+        spec = self.fc(periods=6)['spec']
+        self.assertIn('widens', spec['band'])
+        self.assertIn('5%', spec['floor'])

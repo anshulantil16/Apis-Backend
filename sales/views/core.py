@@ -1078,8 +1078,55 @@ class SalesForecastView(SalesIQView):
 
         result = forecast_series(points, periods=periods)
         result['metric'] = metric
+
+        # ── the AOP line ──────────────────────────────────────────────────
+        # The plan is already loaded for the whole financial year, months
+        # ahead of the business, so it can be drawn across the forecast as
+        # well as across the history. It is not an input to the model and
+        # never has been: the forecast says what this business looks like it
+        # will do, the AOP says what it undertook to do, and the distance
+        # between the two lines is the thing worth looking at. Feeding the
+        # plan into the model would collapse that distance to nothing and
+        # the chart would agree with the plan by construction.
+        #
+        # Only on revenue. A plan column in rupees has nothing to say about
+        # a quantity forecast in cases.
+        plan = {}
+        if metric != 'quantity':
+            plan = {r['period']: float(r['t'] or 0) for r in
+                    qs.filter(source=SalesRecord.SOURCE_PLAN,
+                              target_amount__gt=0)
+                      .values('period').annotate(t=Sum('target_amount'))
+                    if r['period']}
+
         result['history'] = [{'period': d.isoformat(), 'label': d.strftime('%b %Y'),
-                              'value': round(v, 2)} for d, v in points]
+                              'value': round(v, 2),
+                              'aop': round(plan[d], 2) if d in plan else None}
+                             for d, v in points]
+        for pt in result.get('points') or []:
+            month = date.fromisoformat(pt['period'])
+            pt['label'] = month.strftime('%b %Y')
+            pt['aop'] = round(plan[month], 2) if month in plan else None
+
+        # Forecast against plan, over the months the plan actually reaches.
+        # Totalled over those months alone -- comparing a six-month forecast
+        # with four months of plan reads as a shortfall that is really just
+        # a plan that stops in March.
+        covered = [pt for pt in (result.get('points') or []) if pt.get('aop') is not None]
+        if covered:
+            fc_total = sum(pt['value'] for pt in covered)
+            aop_total = sum(pt['aop'] for pt in covered)
+            result['vs_aop'] = {
+                'months': len(covered),
+                'from': covered[0]['label'],
+                'to': covered[-1]['label'],
+                'forecast_total': round(fc_total, 2),
+                'aop_total': round(aop_total, 2),
+                'gap': round(fc_total - aop_total, 2),
+                'cover_pct': round((fc_total / aop_total) * 100, 1) if aop_total else None,
+                'partial': len(covered) < len(result.get('points') or []),
+            }
+
         result['filters'] = applied
 
         hist_total = sum(v for _, v in points)
