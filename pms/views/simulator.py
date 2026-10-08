@@ -466,7 +466,14 @@ class PMSImportView(APIView):
             'one time reward': 'reward_amount',
             'sustained performance': 'sustained_performance', 'sustained': 'sustained_performance',
             'reward amount': 'reward_amount',
-            'redesignation': 'redesignation', 're-designation': 'redesignation',
+            # 're-designation' is NOT listed here. It is an alias of
+            # new_designation above, and listing it in both places put the
+            # same key in this dict twice -- Python kept the last, so a
+            # column headed "Re-Designation" holding a job title was run
+            # through parse_bool: the flag came out False and the title was
+            # dropped without a word. Which of the two it means is decided
+            # by the VALUE, below, because both sheets are real.
+            'redesignation': 'redesignation',
             'revised ctc': 'revised_ctc',
             'increment nt %': 'increment_nt_pct', 'increment nt': 'increment_nt_pct',
             'increment on %': 'promotion_pct', 'increment on': 'promotion_pct',
@@ -575,6 +582,21 @@ class PMSImportView(APIView):
                 return v
 
             reward_amt = sf(data.get('reward_amount'), 0) or 0
+
+            # "Re-Designation" is the one heading that is genuinely two
+            # different things across the sheets we receive: in some it holds
+            # the new job title, in others Y/N for whether the person was
+            # re-designated at all. Read by its value rather than by its
+            # heading, which is the only way to get both right.
+            #
+            # Without this, a Y/N sheet set somebody's designation to "Y" --
+            # which then goes onto a letter.
+            BOOLISH = {'y', 'n', 'yes', 'no', 'true', 'false', '0', '1'}
+            maybe = str(data.get('new_designation') or '').strip()
+            if maybe.lower() in BOOLISH and not str(
+                    data.get('redesignation') or '').strip():
+                data['redesignation'] = maybe
+                data['new_designation'] = ''
 
             obj, was_created = PMSEmployee.objects.update_or_create(
                 employee_id=emp_id,

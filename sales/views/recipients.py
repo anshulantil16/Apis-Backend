@@ -239,7 +239,13 @@ class SalesRecipientsImportView(SalesIQAdminView):
             if not text.strip():
                 return Response({'error': 'Nothing was uploaded or pasted.'},
                                 status=400)
-            lines = list(csv.reader(io.StringIO(text)))
+            # Tab separated as well as comma. Copying a block out of Excel
+            # puts TABS on the clipboard, and read as CSV every row came back
+            # as one cell -- "needs at least four columns", nineteen times
+            # over, for a paste that was perfectly correct.
+            sample = text.splitlines()[0] if text.splitlines() else ''
+            delim = '	' if sample.count('	') >= sample.count(',') and '	' in sample else ','
+            lines = list(csv.reader(io.StringIO(text), delimiter=delim))
 
         snap = _latest()
         rows = _rows(snap)

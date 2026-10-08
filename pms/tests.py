@@ -1,3 +1,4 @@
+import io
 from django.test import TestCase
 
 # Create your tests here.
@@ -333,3 +334,56 @@ class MonthsExcelTurnedIntoDates(TestCase):
         # month_rows stringifies whatever it is given; the reader is what
         # normalises, so this asserts the two together do not reintroduce it.
         self.assertNotIn('00:00:00', rows[0]['month'])
+
+
+class TheReDesignationColumn(TestCase):
+    """One heading, two meanings, and it used to get both wrong.
+
+    "Re-Designation" was listed as an alias of new_designation (the new job
+    title) AND of redesignation (a yes/no flag) in the same dict literal.
+    Python keeps the last, so every sheet was read as the flag: a column
+    holding a title went through parse_bool, the flag came out False, and the
+    title was dropped without a word.
+    """
+
+    def _upload(self, header, value):
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        cols = ['Employee ID', 'Employee Name', 'Designation', header]
+        ws.append(cols)
+        ws.append(['E1', 'A Person', 'Executive', value])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'increments.xlsx'
+        from django.test import Client
+        return Client().post('/api/pms/import/', {'file': buf})
+
+    def test_a_title_in_that_column_is_kept_as_the_new_designation(self):
+        from pms.models import PMSEmployee
+        self.assertEqual(self._upload('Re-Designation', 'Senior Manager').status_code, 200)
+        e = PMSEmployee.objects.get(employee_id='E1')
+        self.assertEqual(e.new_designation, 'Senior Manager')
+        self.assertFalse(e.redesignation)
+
+    def test_a_yes_no_in_that_column_sets_the_flag_and_not_the_title(self):
+        """Read as a title it put the literal "Y" on somebody's designation,
+        which then goes onto a letter."""
+        from pms.models import PMSEmployee
+        self.assertEqual(self._upload('Re-Designation', 'Y').status_code, 200)
+        e = PMSEmployee.objects.get(employee_id='E1')
+        self.assertEqual(e.new_designation, '')
+        self.assertTrue(e.redesignation)
+
+    def test_the_unhyphenated_column_is_still_the_flag(self):
+        from pms.models import PMSEmployee
+        self._upload('Redesignation', 'Yes')
+        self.assertTrue(PMSEmployee.objects.get(employee_id='E1').redesignation)
+
+    def test_a_new_designation_column_is_untouched_by_any_of_this(self):
+        from pms.models import PMSEmployee
+        self._upload('New Designation', 'Area Manager')
+        e = PMSEmployee.objects.get(employee_id='E1')
+        self.assertEqual(e.new_designation, 'Area Manager')
+        self.assertFalse(e.redesignation)
