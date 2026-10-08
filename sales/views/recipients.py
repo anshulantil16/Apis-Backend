@@ -61,6 +61,23 @@ def match_head(key, rows):
     return None
 
 
+def _csv_stream(text):
+    """A stream csv.reader can read without choking on line endings.
+
+    csv.reader requires its source to be opened with newline='' -- the
+    documentation says so, and the failure when it is not is this, verbatim:
+
+        new-line character seen in unquoted field -- do you need to open the
+        file with newline=''?
+
+    A CSV saved by Excel on Windows ends its lines with CRLF. Without
+    newline='' the stream translates them, csv sees a stray carriage return
+    inside a field, and the whole upload is refused -- a file that was
+    perfectly correct.
+    """
+    return io.StringIO(text, newline='')
+
+
 def _read_workbook(f):
     """-> [[cell, ...], ...] from an uploaded .xlsx, or from a .csv.
 
@@ -70,14 +87,27 @@ def _read_workbook(f):
     column. Anything that is not in that order fails loudly in the loop
     below, line by line, which is the behaviour we want anyway.
     """
+    def as_text(data):
+        if isinstance(data, bytes):
+            # utf-8-sig, because Excel's "CSV UTF-8" writes a byte order mark
+            # and it lands on the first cell -- the header row then stops
+            # looking like a header and the first data row like a role.
+            return data.decode('utf-8-sig', errors='replace')
+        return data
+
     name = (getattr(f, 'name', '') or '').lower()
     if name.endswith('.csv') or name.endswith('.txt'):
-        raw = f.read()
-        if isinstance(raw, bytes):
-            raw = raw.decode('utf-8-sig', errors='replace')
-        return list(csv.reader(io.StringIO(raw)))
+        return list(csv.reader(_csv_stream(as_text(f.read()))))
 
-    wb = openpyxl.load_workbook(f, data_only=True, read_only=True)
+    try:
+        wb = openpyxl.load_workbook(f, data_only=True, read_only=True)
+    except Exception:
+        # Decided by content, not by the name on it. A spreadsheet saved as
+        # CSV and renamed, or a file arriving with no name at all, is still
+        # a list somebody filled in correctly, and refusing it over its
+        # extension is the kind of pedantry that gets worked around.
+        f.seek(0)
+        return list(csv.reader(_csv_stream(as_text(f.read()))))
     out = []
     # The first sheet only. The second is the instructions, and reading it
     # would report every sentence on it as a line that could not be parsed.
@@ -245,7 +275,7 @@ class SalesRecipientsImportView(SalesIQAdminView):
             # over, for a paste that was perfectly correct.
             sample = text.splitlines()[0] if text.splitlines() else ''
             delim = '	' if sample.count('	') >= sample.count(',') and '	' in sample else ','
-            lines = list(csv.reader(io.StringIO(text), delimiter=delim))
+            lines = list(csv.reader(_csv_stream(text), delimiter=delim))
 
         snap = _latest()
         rows = _rows(snap)

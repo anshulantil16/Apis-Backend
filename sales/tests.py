@@ -3856,6 +3856,37 @@ class WhoGetsWhichReport(TestCase):
         self.assertTrue(ReportRecipient.objects.filter(
             email='mohinder@apisindia.com', head_key='GTR01').exists())
 
+    def test_a_csv_saved_by_excel_on_windows_is_read(self):
+        """CRLF line endings. Without newline='' csv.reader refuses the whole
+        file: "new-line character seen in unquoted field"."""
+        raw = ('role,key,region,name,email,regions_covered\r\n'
+               'head,GTR01,GTR01,Mohinder Sharma,m@apisindia.com,\r\n'
+               'head,GTR04 B,GTR04 B,Gulshan Kumar,g@apisindia.com,\r\n')
+        buf = io.BytesIO(raw.encode('utf-8'))
+        buf.name = 'report recipients.csv'
+        d = self.client.post('/api/sales/recipients/import/', {'file': buf}).json()
+        self.assertEqual(d['added'], 2, d)
+        self.assertEqual(d['skipped'], [])
+
+    def test_a_csv_with_a_byte_order_mark_is_read(self):
+        """Excel writes one on "CSV UTF-8". It lands on the first cell, so the
+        header row stops looking like a header."""
+        raw = ('\ufeffrole,key,region,name,email,regions_covered\r\n'
+               'head,GTR01,GTR01,Mohinder Sharma,m@apisindia.com,\r\n')
+        buf = io.BytesIO(raw.encode('utf-8'))
+        buf.name = 'report recipients.csv'
+        d = self.client.post('/api/sales/recipients/import/', {'file': buf}).json()
+        self.assertEqual(d['added'], 1, d)
+
+    def test_a_tab_separated_paste_out_of_excel_is_read(self):
+        """Copying a block out of Excel puts TABS on the clipboard, not
+        commas -- read as CSV every row came back as a single cell."""
+        text = ('head\tGTR01\tGTR01\tMohinder Sharma\tm@apisindia.com\t\n'
+                'head\tGTR04 B\tGTR04 B\tGulshan Kumar\tg@apisindia.com\t\n')
+        d = self.client.post('/api/sales/recipients/import/', {'text': text},
+                             content_type='application/json').json()
+        self.assertEqual(d['added'], 2, d)
+
     def test_a_manager_with_no_territory_is_reported_not_silently_added(self):
         """An empty coverage list means no territories, never all of them --
         so a manager row with an email and no regions is somebody who would
