@@ -180,48 +180,86 @@ RUN_RATE_DECAY = 0.85
 MIN_OVERLAP = 3
 
 
+def _median(xs):
+    if not xs:
+        return 0.0
+    ys = sorted(xs)
+    n = len(ys)
+    return ys[n // 2] if n % 2 else (ys[n // 2 - 1] + ys[n // 2]) / 2
+
+
+# How wide the high/low lines may ever be, as a fraction of plan. Both ends
+# matter and both are judgements, so both are settable.
+#
+# The floor stops a business that has tracked its plan closely for a few
+# months being shown a hairline, as though the rest of the year were
+# settled. The ceiling stops the opposite: one erratic pair of months used
+# to produce a range of 41% to 170% of plan, which is not a forecast but a
+# shrug with an axis on it. A range nobody can act on is worse than a range
+# that admits where it was truncated, so when it is truncated the screen
+# says so.
+BAND_FLOOR = 0.05
+BAND_CEILING = 0.25
+
+
+def _band_limits():
+    lo, hi = BAND_FLOOR, BAND_CEILING
+    try:
+        from django.conf import settings
+        lo = float(getattr(settings, 'SALESIQ_BAND_FLOOR', lo))
+        hi = float(getattr(settings, 'SALESIQ_BAND_CEILING', hi))
+    except Exception:
+        pass
+    return lo, hi
+
+
 def run_rate_against_plan(overlap):
-    """-> (rate, spread, [(month, ratio)]) from months that have both figures.
+    """-> (rate, half_width, [(month, ratio)], capped) from months with both.
 
     The rate is what the business has been achieving against its own plan,
-    recent months weighted heaviest. The spread is how much that rate has
-    varied month to month, and it is what the high and low lines are built
-    from -- not from a model's fit residuals, because the forecast is no
-    longer a fitted curve.
+    recent months weighted heaviest, and it is a RATIO OF SUMS rather than a
+    mean of monthly ratios. That is not a refinement, it is a correction. A
+    month carrying a small plan and an ordinary month's invoicing produces a
+    ratio of three or four, and averaged in beside the rest it dragged the
+    whole rate up on the strength of the month that mattered least. Summing
+    the money on each side first gives every rupee one vote instead of
+    giving every month one vote, which is also exactly what the business
+    reads off its own sheet as YTD ACH over YTD AOP.
+
+    The half width of the band is a ROBUST measure of how far the monthly
+    ratios sit from that rate -- the median absolute deviation, scaled to
+    read like a standard deviation. The mean-based version was moved by the
+    very months it should have ignored: a financial year opens with a full
+    month of plan against a fraction of a month of invoicing, and those
+    opening months are not evidence about November. The median does not care
+    how extreme an outlier is, only that it is on one side.
 
     A month with no plan, or a plan of zero, is skipped rather than counted
     as a miss: there is no rate to read off a month nobody set a target for.
     """
-    ratios = [(m, a / t) for m, a, t in overlap if t > 0]
-    if not ratios:
-        return None, 0.0, []
-    weights = [RUN_RATE_DECAY ** i for i in range(len(ratios) - 1, -1, -1)]
-    total = sum(weights)
-    rate = sum(w * r for w, (_, r) in zip(weights, ratios)) / total
+    rows = [(m, a, t) for m, a, t in overlap if t > 0]
+    if not rows:
+        return None, 0.0, [], False
+    ratios = [(m, a / t) for m, a, t in rows]
 
-    # The band is built on how far the rate MOVES month to month, not on how
-    # far the months are spread around their own average. The distinction
-    # decided whether this chart said anything at all.
-    #
-    # A financial year opens with a full month of plan against a fraction of
-    # a month of invoicing, and climbs from there. Measured as dispersion
-    # about the mean, April sitting at 25% of plan and October at 102% read
-    # as enormous uncertainty -- a forecast of Rs 31 crore inside a range of
-    # Rs 8 lakh to Rs 63 crore, which is not a statement about anything. But
-    # that climb was not uncertainty. It was a trend, and it was perfectly
-    # orderly: each month landed a predictable step above the one before.
-    #
-    # What the band is actually for is "given where we are running now, how
-    # far could next month move from it". That is the size of the month-to-
-    # month STEP, and a series that climbs steadily has a small one however
-    # far it has travelled. A difference between two months carries twice
-    # the variance of one, hence the sqrt(2).
-    steps = [b - a for (_, a), (_, b) in zip(ratios, ratios[1:])]
-    spread = _stdev(steps) / math.sqrt(2) if len(steps) >= 2 else 0.0
-    return rate, spread, ratios
+    weights = [RUN_RATE_DECAY ** i for i in range(len(rows) - 1, -1, -1)]
+    earned = sum(w * a for w, (_, a, _) in zip(weights, rows))
+    planned = sum(w * t for w, (_, _, t) in zip(weights, rows))
+    if planned <= 0:
+        return None, 0.0, [], False
+    rate = earned / planned
+
+    # 1.4826 is the constant that makes a median absolute deviation match a
+    # standard deviation on normally distributed data, so the 1.96 below
+    # still means what it usually means.
+    mad = _median([abs(r - rate) for _, r in ratios]) * 1.4826
+    raw = 1.96 * mad
+    lo, hi = _band_limits()
+    half = max(lo, min(hi, raw))
+    return rate, half, ratios, raw > hi
 
 
-def _plan_anchored(plan_months, rate, spread):
+def _plan_anchored(plan_months, rate, half):
     """-> [(month, value, lower, upper)] for each planned month.
 
     Every figure is that month's AOP scaled by the run rate, so the forecast
@@ -229,19 +267,15 @@ def _plan_anchored(plan_months, rate, spread):
     quiet months -- and only moves the level to where the business has
     actually been running.
 
-    The band is the run rate's own variability, applied to the same AOP. It
-    does NOT widen with the horizon the way an extrapolated trend's band
-    does, and that is deliberate: the uncertainty here is "what rate will we
-    run at", which is a level, not a random walk compounding month on month.
-    Widening it would be borrowing a correction from a model that is not
-    being used.
+    The band is the same AOP scaled by the rate's own spread, bounded at
+    both ends. It does NOT widen with the horizon the way an extrapolated
+    trend's band does, and that is deliberate: the uncertainty here is "what
+    rate will we run at", which is a level, not a random walk compounding
+    month on month. Widening it would borrow a correction from a model that
+    is not being used.
     """
-    # A floor, for the same reason the statistical band has one: a business
-    # that happened to track its plan closely for a few months has not
-    # thereby made the rest of the year certain.
-    spread = max(spread, 0.05)
-    lo_rate = max(0.0, rate - 1.96 * spread)
-    hi_rate = rate + 1.96 * spread
+    lo_rate = max(0.0, rate - half)
+    hi_rate = rate + half
     return [(m, _clamp0(t * rate), _clamp0(t * lo_rate), _clamp0(t * hi_rate))
             for m, t in plan_months]
 
@@ -426,11 +460,11 @@ def forecast_from_plan(points, plan, periods=6):
     if not ahead:
         return None
 
-    rate, spread, ratios = run_rate_against_plan(overlap)
+    rate, half, ratios, capped = run_rate_against_plan(overlap)
     if rate is None:
         return None
 
-    rows = _plan_anchored([(m, plan[m]) for m in ahead], rate, spread)
+    rows = _plan_anchored([(m, plan[m]) for m in ahead], rate, half)
 
     out = []
     for m, v, lo, hi in rows:
@@ -467,51 +501,60 @@ def forecast_from_plan(points, plan, periods=6):
         'forecast_total': round(sum(p['value'] for p in out), 2),
         'run_rate': {
             'rate_pct': round(rate * 100, 1),
-            'spread_pct': round(max(spread, 0.05) * 100, 1),
-            'low_pct': round(max(0.0, rate - 1.96 * max(spread, 0.05)) * 100, 1),
-            'high_pct': round((rate + 1.96 * max(spread, 0.05)) * 100, 1),
+            'spread_pct': round(half * 100, 1),
+            'low_pct': round(max(0.0, rate - half) * 100, 1),
+            'high_pct': round((rate + half) * 100, 1),
+            'capped': capped,
             'months': len(overlap),
             'best': {'month': best[0].strftime('%b %Y'), 'pct': round(best[1] * 100, 1)},
             'worst': {'month': worst[0].strftime('%b %Y'), 'pct': round(worst[1] * 100, 1)},
             'by_month': [{'month': m.strftime('%b %Y'), 'pct': round(r * 100, 1)}
                          for m, r in ratios],
         },
+        # Short lines, not paragraphs. This panel exists to be scanned by
+        # somebody being asked a question in a review, and a wall of prose is
+        # the one shape that cannot be scanned.
         'spec': {
             'name': 'Run rate against AOP',
-            'why': ('The AOP is the company\'s own month-by-month shape for the '
-                    'year — the sales plan, the launch calendar, the festive '
-                    'quarter — and it is a better carrier of that shape than a '
-                    'slope fitted to a few months of history. A pure '
-                    'extrapolation has nothing holding it down: it reads the '
-                    'slope it was given and keeps going, which is how a strong '
-                    'first half projects a second half nobody planned for.'),
+            'why': [
+                'The AOP is the company\'s own month-by-month shape for the year.',
+                'It already carries the festive quarter and the launch calendar.',
+                'A slope fitted to a few months carries none of that, and nothing '
+                'holds it down — it keeps going, so a strong first half projects '
+                'a second half nobody planned for.',
+            ],
             'reads': [
-                f'The AOP for each month ahead, as uploaded',
-                f'What this business achieved against plan in the '
-                f'{len(overlap)} months that have both figures',
-                'Recent months weighted heaviest, so the rate follows a '
-                'business that has picked up or slowed',
+                'The AOP for each month ahead, as uploaded.',
+                f'What was achieved against plan across {len(overlap)} months '
+                f'that have both figures.',
+                'Recent months count for more, so the rate follows a business '
+                'that has picked up or slowed.',
+                'Money is summed on each side before dividing — every rupee gets '
+                'one vote, not every month.',
             ],
             'params': {'decay': RUN_RATE_DECAY, 'min_overlap': MIN_OVERLAP},
             'seasonality': 'from the AOP',
-            'seasonality_why': ('Not fitted from history at all. The month-on-month '
-                                'shape is the plan\'s own, which already carries '
-                                'the festive quarter and the launch calendar.'),
-            'band': (f'The high and low are the same AOP scaled by how far the '
-                     f'achievement rate has MOVED from one month to the next — '
-                     f'between '
-                     f'{round(max(0.0, rate - 1.96 * max(spread, 0.05)) * 100, 1)}% '
-                     f'and {round((rate + 1.96 * max(spread, 0.05)) * 100, 1)}% of '
-                     f'plan, a 95% range. Month-to-month movement rather than '
-                     f'spread about an average, because a year that opens slow '
-                     f'and climbs steadily is not uncertain — it is trending, '
-                     f'and the question the band answers is how far next month '
-                     f'could move from where we are running now. It does not '
-                     f'widen further out: that is a level, not an error '
-                     f'compounding month on month.'),
-            'floor': ('The range never narrows below 5% of plan. Tracking the plan '
-                      'closely for a few months does not make the rest of the year '
-                      'certain.'),
+            'seasonality_why': [
+                'Nothing is fitted from history.',
+                'The month-on-month shape is the plan\'s own.',
+            ],
+            'band': [
+                f'The same AOP, scaled between '
+                f'{round(max(0.0, rate - half) * 100, 1)}% and '
+                f'{round((rate + half) * 100, 1)}% of plan.',
+                'Built on how far the monthly rates sit from the rate above, '
+                'measured by the median rather than the mean — so the opening '
+                'months of a year cannot stretch it on their own.',
+                'It does not widen further out: this is uncertainty about a '
+                'level, not an error compounding month on month.',
+            ],
+            'floor': [
+                f'Never narrower than {round(_band_limits()[0] * 100)}% of plan — '
+                f'a few months on track does not settle the year.',
+                f'Never wider than {round(_band_limits()[1] * 100)}% either, '
+                f'because a range nobody can act on says nothing.'
+                + (' This one is at that limit.' if capped else ''),
+            ],
             'history_months': len(points),
         },
     }

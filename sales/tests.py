@@ -2844,13 +2844,30 @@ class TheForecastExplainsItself(TestCase):
     def test_a_month_nobody_set_a_plan_for_is_not_counted_as_a_miss(self):
         from sales.forecasting import run_rate_against_plan
         from datetime import date as _d
-        rate, _, ratios = run_rate_against_plan([
+        rate, _half, ratios, _capped = run_rate_against_plan([
             (_d(2026, 4, 1), 90.0, 100.0),
             (_d(2026, 5, 1), 50.0, 0.0),      # no plan set -- skipped
             (_d(2026, 6, 1), 90.0, 100.0),
         ])
         self.assertEqual(len(ratios), 2)
         self.assertAlmostEqual(rate, 0.9, places=6)
+
+    def test_the_rate_is_a_ratio_of_sums_not_an_average_of_ratios(self):
+        from sales.forecasting import run_rate_against_plan
+        from datetime import date as _d
+        """A month carrying a small plan and an ordinary month's invoicing
+        produces a ratio of three or four. Averaged in beside the rest it
+        dragged the whole rate up on the strength of the month that mattered
+        least. Summing the money on each side first gives every rupee one
+        vote instead of giving every month one vote -- which is also what
+        the business reads off its own sheet as YTD ACH over YTD AOP."""
+        rate, _half, _r, _c = run_rate_against_plan([
+            (_d(2026, 4, 1), 90.0, 100.0),
+            (_d(2026, 5, 1), 90.0, 100.0),
+            (_d(2026, 6, 1), 60.0, 5.0),      # tiny plan, ordinary month
+        ])
+        # Mean of ratios would be (0.9 + 0.9 + 12.0) / 3 = 466%.
+        self.assertLess(rate * 100, 150)
 
     def test_without_a_plan_it_falls_back_to_extrapolating_the_history(self):
         SalesRecord.objects.filter(target_amount__gt=0).update(target_amount=0)
@@ -2884,10 +2901,15 @@ class TheForecastExplainsItself(TestCase):
         d = self.fc(periods=6)
         spec = d['spec']
         self.assertEqual(spec['name'], 'Run rate against AOP')
-        self.assertTrue(spec['why'])
-        self.assertTrue(spec['reads'])
         self.assertEqual(spec['seasonality'], 'from the AOP')
-        self.assertIn('95%', spec['band'])
+        # Bullets, not paragraphs: the panel is scanned by somebody being
+        # asked a question in a review, and prose is the one shape that
+        # cannot be scanned.
+        for key in ('why', 'reads', 'seasonality_why', 'band', 'floor'):
+            self.assertIsInstance(spec[key], list, key)
+            self.assertTrue(spec[key], key)
+            for line in spec[key]:
+                self.assertLess(len(line), 180, f'{key}: {line}')
 
     def test_every_forecast_month_names_what_is_in_it(self):
         for p in self.fc(periods=6)['points']:
@@ -2941,9 +2963,10 @@ class TheForecastExplainsItself(TestCase):
         the horizon -- borrowing the widening from a model that is not being
         used would be a correction for an error this one does not make."""
         spec = self.fc(periods=6)['spec']
-        self.assertIn('95%', spec['band'])
-        self.assertIn('does not', spec['band'])
-        self.assertIn('5%', spec['floor'])
+        band = ' '.join(spec['band'])
+        self.assertIn('% of plan', band)
+        self.assertIn('does not widen', band)
+        self.assertIn('5%', ' '.join(spec['floor']))
 
 
 # ── the blueprint's KPI rules ───────────────────────────────────────────────
