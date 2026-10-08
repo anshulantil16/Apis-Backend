@@ -472,3 +472,90 @@ class ReviewRow(models.Model):
 
     def __str__(self):
         return f"{self.region} {self.head_name}"
+
+
+# -- who may upload --------------------------------------------------------
+#
+# Ownership used to be settable only in code or in SALESIQ_ADMIN_EMAILS, which
+# means a server visit and a restart to let one more person load the morning
+# file. That is the right strictness for OWNERSHIP and the wrong strictness
+# for a daily chore, so uploading is split off from owning.
+#
+# An uploader can load the morning workbook and build the reports. They cannot
+# clear the data, and they cannot grant this to anybody else -- both stay with
+# the one hard-coded super admin, because those are the two actions there is
+# no way back from.
+class UploaderGrant(models.Model):
+    email      = models.EmailField(unique=True)
+    name       = models.CharField(max_length=200, blank=True)
+    granted_by = models.CharField(max_length=200, blank=True)
+    is_active  = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['email']
+
+    def __str__(self):
+        return self.email
+
+
+# -- who the reports go to -------------------------------------------------
+#
+# Two kinds of recipient, and the difference is what they are allowed to see.
+#
+#   head     their own territory and nothing else. The peer chart in their
+#            report shows where they sit, which is the point of it, but they
+#            get no file but their own.
+#   manager  one rolled-up report across the territories they cover, plus
+#            each of those heads' own files.
+#
+# A manager's coverage is stated here rather than inferred from the sheet.
+# The Region Summary tab carries channel, region and head -- it does not carry
+# who those heads report to, and guessing a reporting line from a spreadsheet
+# is how somebody receives a territory that is not theirs.
+class ReportRecipient(models.Model):
+    ROLE_HEAD    = 'head'
+    ROLE_MANAGER = 'manager'
+    ROLES = [(ROLE_HEAD, 'Head — their own territory'),
+             (ROLE_MANAGER, 'Manager — everyone they cover')]
+
+    role  = models.CharField(max_length=20, default=ROLE_HEAD, db_index=True)
+    name  = models.CharField(max_length=200, blank=True)
+    email = models.EmailField(db_index=True)
+
+    # For a head: which row on the sheet is theirs. Matched against APIS ID
+    # first, then region, then name -- an ID because a name is not an
+    # identity and is spelled several ways across a year of exports.
+    head_key = models.CharField(max_length=120, blank=True, db_index=True)
+
+    # For a manager: the regions they cover. Empty means every region, which
+    # is a real case (a national head) and so has to be said deliberately
+    # rather than being what an unfilled field happens to mean -- see
+    # covers_all.
+    regions     = models.JSONField(default=list, blank=True)
+    covers_all  = models.BooleanField(default=False)
+
+    is_active    = models.BooleanField(default=True, db_index=True)
+    last_sent_at = models.DateTimeField(null=True, blank=True)
+    note         = models.CharField(max_length=300, blank=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
+    updated_at   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['role', 'name', 'email']
+        constraints = [
+            # One person, one row per role. A duplicated head row means two
+            # identical files landing in the same inbox each morning, which
+            # reads as the system being broken.
+            models.UniqueConstraint(fields=['email', 'role', 'head_key'],
+                                    name='one_row_per_person_per_role'),
+        ]
+
+    def __str__(self):
+        return f'{self.email} ({self.role})'
+
+    def covered_regions(self, all_regions):
+        """-> the regions this manager's report covers."""
+        if self.covers_all:
+            return list(all_regions)
+        return [r for r in all_regions if r in (self.regions or [])]

@@ -1794,11 +1794,18 @@ class SalesUploadsView(SalesIQView):
             'count': SalesUpload.objects.count()})
 
     def delete(self, request):
-        # The one destructive action in SalesIQ. Readers may see which files
-        # are loaded -- that is the provenance of every figure on the screen
-        # -- but not remove them.
-        self.require_owner(request)
+        # Readers may see which files are loaded -- that is the provenance of
+        # every figure on the screen -- but not remove them.
+        #
+        # Removing ONE file is part of the daily chore: a wrong morning
+        # workbook has to be undoable by whoever loaded it. Removing
+        # everything is not, and stays with the owner.
+        self.require_writer(request)
         up_id = request.query_params.get('id')
+        if not up_id:
+            # Clearing everything is the one action with no way back, so it
+            # stays with the owner even though loading the file does not.
+            self.require_owner(request)
         if up_id:
             try:
                 u = SalesUpload.objects.get(id=up_id)

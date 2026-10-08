@@ -38,6 +38,12 @@ def _salesiq_allowed_emails():
     extra = [e.strip().lower() for e in
              os.getenv('SALESIQ_ADMIN_EMAILS', '').split(',') if e.strip()]
     allowed = set([SALESIQ_SUPER_ADMIN] + extra)
+    try:
+        from ..models import UploaderGrant
+        allowed.update(UploaderGrant.objects.filter(is_active=True)
+                       .values_list('email', flat=True))
+    except Exception:
+        pass
 
     # Inactive accounts are excluded: disabling somebody's sign-in in the
     # console has to disable it here too, or "disable sign-in" is a lie.
@@ -195,6 +201,18 @@ def role_of(email):
         os.getenv('SALESIQ_ADMIN_EMAILS', '').split(',') if e.strip()])
     if email in owners:
         return 'super_admin'
+    # An uploader loads the morning workbook and builds the reports. They do
+    # not own the data: clearing it, and granting this to somebody else, both
+    # stay with the super admin, because those are the two actions there is
+    # no way back from.
+    try:
+        from ..models import UploaderGrant
+        if UploaderGrant.objects.filter(email=email, is_active=True).exists():
+            return 'uploader'
+    except Exception:
+        # Before this table exists, nobody is an uploader -- which is the
+        # safe answer, not a reason to refuse everybody.
+        pass
     return 'viewer' if email in _salesiq_allowed_emails() else None
 
 
@@ -211,8 +229,9 @@ class _Unauthorised(APIException):
 
 class _Forbidden(APIException):
     status_code = 403
-    default_detail = ('This is read-only for you. Only the SalesIQ owner can '
-                      'upload or delete sales data.')
+    default_detail = ('This is read-only for you. Only the SalesIQ owner, or '
+                      'somebody they have given upload access, can load or '
+                      'delete sales data.')
 
 
 class SalesIQView(APIView):
@@ -244,11 +263,28 @@ class SalesIQView(APIView):
         if getattr(request, 'salesiq_role', None) != 'super_admin':
             raise _Forbidden()
 
+    def require_writer(self, request):
+        """May change the data: the owner, or somebody they gave upload
+        access to. A reader never reaches past this, whatever they ask for."""
+        if getattr(request, 'salesiq_role', None) not in ('super_admin', 'uploader'):
+            raise _Forbidden()
+
 
 class SalesIQAdminView(SalesIQView):
-    """And owns the data. Uploading and deleting only."""
+    """May load the data: uploading, and building the reports.
+
+    Two roles reach here. The super admin owns the data; an uploader does the
+    daily chore. Anything there is no way back from -- clearing the data,
+    granting this to somebody else -- calls require_owner on top.
+    """
+    WRITERS = ('super_admin', 'uploader')
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
-        if request.salesiq_role != 'super_admin':
+        if request.salesiq_role not in self.WRITERS:
             raise _Forbidden()
+
+
+class SalesIQOwnerView(SalesIQAdminView):
+    """Only the one hard-coded owner. For what cannot be undone."""
+    WRITERS = ('super_admin',)

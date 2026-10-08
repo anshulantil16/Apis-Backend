@@ -5,6 +5,7 @@
     advanced.py   Pareto, quadrant, movers, anomalies, RFM, cohorts, pacing...
     org.py        the reporting tree, with sales rolled up it
     review.py     the daily GTR-head review sheet, and one head's report
+    recipients.py who may upload, who receives what, and the team roll-up
     auth.py       super-admin OTP login
 
 Re-exported here so `from .views import X` in urls.py is unaffected by the split.
@@ -15,6 +16,7 @@ from .advanced import *   # noqa: F401,F403
 from .org import *        # noqa: F401,F403
 from .auth import *       # noqa: F401,F403
 from .review import *     # noqa: F401,F403
+from .recipients import * # noqa: F401,F403
 
 # `import *` skips underscore names that tests and sibling modules rely on.
 from .filters import (apply_filters, apply_dim_filters, DIMENSIONS, FILTERABLE,

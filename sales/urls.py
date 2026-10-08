@@ -9,6 +9,9 @@ from .views import (
     SalesLoginView, SalesOrgView,
     SalesReviewView, SalesReviewReportView, SalesReviewDeleteView,
     SalesReviewReportHtmlView, SalesReviewReportBundleView,
+    SalesRecipientsView, SalesRecipientsEditView, SalesRecipientsTemplateView,
+    SalesRecipientsImportView, SalesUploaderView, SalesUploaderEditView,
+    SalesTeamReportView, SalesTeamReportHtmlView,
 )
 
 urlpatterns = [
@@ -45,4 +48,16 @@ urlpatterns = [
     path('review/report/file/', SalesReviewReportHtmlView.as_view()),
     path('review/bundle/',      SalesReviewReportBundleView.as_view()),
     path('review/<int:pk>/',    SalesReviewDeleteView.as_view()),
+    # One rolled-up report across several territories.
+    path('review/team/',      SalesTeamReportView.as_view()),
+    path('review/team/file/', SalesTeamReportHtmlView.as_view()),
+    # Who receives which report, and who may load the morning file.
+    path('recipients/',               SalesRecipientsView.as_view()),
+    path('recipients/edit/',          SalesRecipientsEditView.as_view()),
+    path('recipients/edit/<int:pk>/', SalesRecipientsEditView.as_view()),
+    path('recipients/template/',      SalesRecipientsTemplateView.as_view()),
+    path('recipients/import/',        SalesRecipientsImportView.as_view()),
+    path('uploaders/',                SalesUploaderView.as_view()),
+    path('uploaders/edit/',           SalesUploaderEditView.as_view()),
+    path('uploaders/edit/<int:pk>/',  SalesUploaderEditView.as_view()),
 ]

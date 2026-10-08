@@ -40,7 +40,8 @@ from sales import report as REPORT
 from sales.ingest import (PRE_SALES_DUMP, build_template, is_return_type,
                           map_headers, parse_bool, pick_sheets)
 from sales.models import (SalesRecord, SalesUpload,
-                          ReviewSnapshot, ReviewRow)
+                          ReviewSnapshot, ReviewRow,
+                          ReportRecipient, UploaderGrant)
 
 
 def header_names():
@@ -3726,3 +3727,248 @@ class UploadedEveryMorning(TestCase):
         upload(a_workbook([a_row()]))
         d = upload(a_workbook([a_row()])).json()
         self.assertTrue(any('replaced' in n for n in d['notes']), d['notes'])
+
+
+class WhoMayLoadTheMorningFile(TestCase):
+    """Uploading is a daily chore; owning the data is not the same thing."""
+
+    def setUp(self):
+        from accounts.models import AppKey, PortalUser
+        from sales.views.auth import issue_session
+        PortalUser.objects.create(email='reader@apisindia.com', is_active=True,
+                                  app_access=[AppKey.SALESIQ])
+        self.reader = {'HTTP_X_SALESIQ_SESSION': issue_session('reader@apisindia.com')}
+
+    def test_a_reader_cannot_upload(self):
+        r = RawClient().post('/api/sales/upload/', {}, **self.reader)
+        self.assertEqual(r.status_code, 403)
+
+    def test_granting_upload_access_lets_them_upload(self):
+        self.client.post('/api/sales/uploaders/edit/',
+                         {'email': 'reader@apisindia.com', 'name': 'A Reader'},
+                         content_type='application/json')
+        r = RawClient().post('/api/sales/upload/', {}, **self.reader)
+        self.assertNotEqual(r.status_code, 403)     # refused for a missing file now
+
+    def test_an_uploader_still_cannot_clear_everything(self):
+        """The one action with no way back stays with the owner even though
+        loading the file does not."""
+        UploaderGrant.objects.create(email='reader@apisindia.com')
+        r = RawClient().delete('/api/sales/uploads/', **self.reader)
+        self.assertEqual(r.status_code, 403)
+
+    def test_an_uploader_may_undo_one_bad_morning_file(self):
+        UploaderGrant.objects.create(email='reader@apisindia.com')
+        upload(a_workbook([a_row()]))
+        u = SalesUpload.objects.get()
+        r = RawClient().delete(f'/api/sales/uploads/?id={u.id}', **self.reader)
+        self.assertEqual(r.status_code, 200)
+
+    def test_a_plain_reader_still_cannot_delete_one_file(self):
+        """Moving the owner check onto the clear-all branch let a reader
+        through the single-file branch, where the only thing stopping them
+        was the id not existing."""
+        upload(a_workbook([a_row()]))
+        u = SalesUpload.objects.get()
+        r = RawClient().delete(f'/api/sales/uploads/?id={u.id}', **self.reader)
+        self.assertEqual(r.status_code, 403)
+
+    def test_an_uploader_cannot_grant_it_to_anybody_else(self):
+        """Otherwise the distinction between the two roles is decorative."""
+        UploaderGrant.objects.create(email='reader@apisindia.com')
+        r = RawClient().post('/api/sales/uploaders/edit/',
+                             {'email': 'someone@apisindia.com'},
+                             content_type='application/json', **self.reader)
+        self.assertEqual(r.status_code, 403)
+
+    def test_revoking_takes_the_access_away(self):
+        g = UploaderGrant.objects.create(email='reader@apisindia.com')
+        self.client.delete(f'/api/sales/uploaders/edit/{g.id}/')
+        r = RawClient().post('/api/sales/upload/', {}, **self.reader)
+        self.assertEqual(r.status_code, 403)
+
+
+class WhoGetsWhichReport(TestCase):
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04B]))
+
+    def test_a_head_is_added_against_their_apis_id(self):
+        r = self.client.post('/api/sales/recipients/edit/',
+                             {'role': 'head', 'head_key': 'GTR01',
+                              'name': 'Mohinder Sharma', 'email': 'm@apisindia.com'},
+                             content_type='application/json')
+        self.assertEqual(r.status_code, 201)
+        d = self.client.get('/api/sales/recipients/').json()
+        self.assertTrue(d['recipients'][0]['matched'])
+
+    def test_a_head_needs_a_key_so_the_report_knows_whose_territory(self):
+        r = self.client.post('/api/sales/recipients/edit/',
+                             {'role': 'head', 'email': 'm@apisindia.com'},
+                             content_type='application/json')
+        self.assertEqual(r.status_code, 400)
+
+    def test_heads_with_nobody_against_them_are_named(self):
+        """A head with no recipient is one whose report is built every
+        morning and sent to no one."""
+        d = self.client.get('/api/sales/recipients/').json()
+        self.assertEqual(len(d['heads_without_a_recipient']), 2)
+
+    def test_the_csv_template_lists_every_head_with_an_empty_email(self):
+        """Filled in and pasted back, this is the whole of setting it up."""
+        body = self.client.get('/api/sales/recipients/template/').content.decode()
+        self.assertIn('GTR01', body)
+        self.assertIn('Mohinder Sharma', body)
+        self.assertIn('role,key_or_regions,name,email', body)
+
+    def test_pasting_the_filled_in_template_adds_everybody(self):
+        text = ('role,key_or_regions,name,email\n'
+                'head,GTR01,Mohinder Sharma,m@apisindia.com\n'
+                'head,GTR04 B,Gulshan Kumar,g@apisindia.com\n')
+        d = self.client.post('/api/sales/recipients/import/', {'text': text},
+                             content_type='application/json').json()
+        self.assertEqual(d['added'], 2)
+        self.assertEqual(d['skipped'], [])
+
+    def test_one_bad_line_does_not_throw_away_the_good_ones(self):
+        """A silent partial import is worse than either accepting or
+        refusing the lot."""
+        text = ('head,GTR01,Mohinder,m@apisindia.com\n'
+                'head,GTR99,Nobody,x@apisindia.com\n'
+                'head,GTR04 B,Gulshan,not-an-email\n')
+        d = self.client.post('/api/sales/recipients/import/', {'text': text},
+                             content_type='application/json').json()
+        self.assertEqual(d['added'], 1)
+        self.assertEqual(len(d['skipped']), 2)
+
+    def test_a_blank_email_is_a_row_not_filled_in_yet_not_an_error(self):
+        text = 'head,GTR01,Mohinder,\n'
+        d = self.client.post('/api/sales/recipients/import/', {'text': text},
+                             content_type='application/json').json()
+        self.assertEqual(d['added'], 0)
+        self.assertEqual(d['skipped'], [])
+
+    def test_a_manager_covers_the_regions_named_against_them(self):
+        text = 'manager,GTR01;GTR04 B,The Manager,mgr@apisindia.com\n'
+        d = self.client.post('/api/sales/recipients/import/', {'text': text},
+                             content_type='application/json').json()
+        self.assertEqual(d['added'], 1)
+        rec = ReportRecipient.objects.get(role='manager')
+        self.assertEqual(rec.regions, ['GTR01', 'GTR04 B'])
+
+    def test_a_manager_cannot_be_given_a_region_that_is_not_on_the_sheet(self):
+        """Guessing a reporting line from a spreadsheet is how somebody
+        receives a territory that is not theirs."""
+        d = self.client.post('/api/sales/recipients/import/',
+                             {'text': 'manager,GTR77,Nobody,n@apisindia.com\n'},
+                             content_type='application/json').json()
+        self.assertEqual(d['added'], 0)
+        self.assertEqual(len(d['skipped']), 1)
+
+    def test_covering_everything_has_to_be_said_deliberately(self):
+        """An empty region list must not quietly mean the whole company."""
+        self.client.post('/api/sales/recipients/import/',
+                         {'text': 'manager,ALL,National Head,nh@apisindia.com\n'},
+                         content_type='application/json')
+        rec = ReportRecipient.objects.get(role='manager')
+        self.assertTrue(rec.covers_all)
+        self.assertEqual(rec.covered_regions(['GTR01', 'GTR04 B']),
+                         ['GTR01', 'GTR04 B'])
+        rec.covers_all = False; rec.regions = []; rec.save()
+        self.assertEqual(rec.covered_regions(['GTR01', 'GTR04 B']), [])
+
+    def test_the_same_person_is_not_added_twice(self):
+        """A duplicated row means two identical files in one inbox each
+        morning, which reads as the system being broken."""
+        for _ in range(2):
+            self.client.post('/api/sales/recipients/edit/',
+                             {'role': 'head', 'head_key': 'GTR01',
+                              'email': 'm@apisindia.com'},
+                             content_type='application/json')
+        self.assertEqual(ReportRecipient.objects.count(), 1)
+
+
+class TheManagersReport(TestCase):
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04B]))
+
+    def test_it_adds_the_territories_rather_than_taking_the_sheets_total(self):
+        """A group covering part of a channel has no subtotal on the sheet,
+        and taking the one that is there reports the whole channel as
+        theirs."""
+        total = ['GT Total', '', '', 999, 9999.0, 9999.0, 999.0, 9999.0, 9999.0,
+                 0, 0, 0, 9999.0, 9999.0, 0, 0, 9999.0, 9999.0, 0, 0]
+        ReviewSnapshot.objects.all().delete()
+        upload(review_workbook([GTR01, GTR04B, total]))
+        d = self.client.get('/api/sales/review/team/?regions=GTR01,GTR04 B').json()
+        self.assertAlmostEqual(d['totals']['mtd_primary'] / 100_000,
+                               83.91 + 110.33, places=2)
+
+    def test_it_covers_only_the_regions_asked_for(self):
+        d = self.client.get('/api/sales/review/team/?regions=GTR01').json()
+        self.assertEqual(d['regions'], ['GTR01'])
+        self.assertAlmostEqual(d['totals']['mtd_primary'] / 100_000, 83.91, places=2)
+
+    def test_the_file_is_a_whole_html_document(self):
+        r = self.client.get('/api/sales/review/team/file/?regions=GTR01,GTR04 B'
+                            '&name=North%20Group')
+        self.assertEqual(r.status_code, 200)
+        body = r.content.decode()
+        self.assertTrue(body.startswith('<!doctype html>'))
+        self.assertIn('North Group', body)
+        self.assertIn('Mohinder Sharma', body)
+        self.assertIn('Gulshan Kumar', body)
+
+    def test_it_is_self_contained_like_the_head_report(self):
+        body = self.client.get(
+            '/api/sales/review/team/file/?regions=GTR01').content.decode()
+        self.assertNotIn('<script', body.lower())
+        self.assertNotIn('http://', body)
+
+    def test_asking_for_regions_that_are_not_there_says_so(self):
+        r = self.client.get('/api/sales/review/team/?regions=GTR77')
+        self.assertEqual(r.status_code, 404)
+
+
+class TheCoveringEmail(TestCase):
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04B]))
+
+    def _d(self, head):
+        return self.client.get(f'/api/sales/review/report/?head={head}').json()
+
+    def test_the_subject_carries_the_figure_that_decides_whether_to_open_it(self):
+        subject, _ = REPORT.email_for(self._d('GTR01'))
+        self.assertIn('GTR01', subject)
+        self.assertIn('74%', subject)
+
+    def test_the_body_is_addressed_to_a_person_not_a_region(self):
+        _, body = REPORT.email_for(self._d('GTR01'))
+        self.assertIn('Hello Mohinder', body)
+
+    def test_a_head_past_plan_is_not_told_what_the_year_still_needs(self):
+        """It reads as the system refusing to acknowledge a good month."""
+        _, body = REPORT.email_for(self._d('GTR04 B'))
+        self.assertIn('past plan', body)
+        self.assertNotIn('a month across', body)
+
+    def test_a_head_behind_plan_is_told_what_the_year_needs(self):
+        _, body = REPORT.email_for(self._d('GTR01'))
+        self.assertIn('187.16', body)
+
+    def test_the_manager_email_names_who_needs_attention(self):
+        d = self.client.get('/api/sales/review/team/?regions=GTR01,GTR04 B'
+                            '&name=North').json()
+        subject, body = REPORT.team_email_for(d)
+        self.assertIn('North', subject)
+        self.assertIn('1 of 2 territories', body)
+
+    def test_nothing_here_sends_anything(self):
+        """Composing the list and sending to sixteen real people are separate
+        decisions, and the second is made deliberately."""
+        from django.core import mail
+        self.client.get('/api/sales/review/report/file/?head=GTR01')
+        self.client.get('/api/sales/review/bundle/')
+        self.assertEqual(len(mail.outbox), 0)

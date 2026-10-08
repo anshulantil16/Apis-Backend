@@ -658,3 +658,268 @@ def render(d):
   </footer>
 </div>
 </body></html>'''
+
+
+# -- the manager's rolled-up report ---------------------------------------
+#
+# A different document, not the head report with more rows in it. A head is
+# being asked about their own month; a manager is being asked which of their
+# territories needs attention this week. So this leads with the comparison
+# between them, where the head report leads with one territory and keeps the
+# comparison to a chart near the bottom.
+def render_team(d):
+    t, y = d['totals'], d['year']
+    snap = d['snapshot']
+    # Sorted by achievement rather than by region code, so the ones that need
+    # attention sit together instead of being scattered through the list.
+    # Territories with no plan go last: they have not come bottom, they have
+    # not been measured.
+    heads = sorted(d['heads'],
+                   key=lambda h: (h['month_pct'] is None, -(h['month_pct'] or 0)))
+    month = snap.get('as_of_month_label') or 'this month'
+    name = d.get('name') or 'Team'
+
+    behind = [h for h in heads if h['month_pct'] is not None and h['month_pct'] < 70]
+    ahead = [h for h in heads if h['month_pct'] is not None and h['month_pct'] >= 100]
+
+    rows = ''
+    for h in heads:
+        p = h['month_pct']
+        rows += (
+            '<tr>'
+            f'<td>{e(h["region"])}</td>'
+            f'<td class="nm">{e(h["head_name"])}</td>'
+            f'<td class="n">{lakh(h["month_target"])}</td>'
+            f'<td class="n">{lakh(h["mtd_primary"])}</td>'
+            f'<td class="n {rag(p)}"><b>{pct(p)}</b></td>'
+            f'<td class="n {"good" if (h["growth_pct"] or 0) > 0 else "bad"}">'
+            f'{signed(h["growth_pct"])}</td>'
+            f'<td class="n">{lakh(h["month_backlog"])}</td>'
+            f'<td class="n {rag(h["ytd_pct"])}">{pct(h["ytd_pct"])}</td>'
+            f'<td class="n">{lakh(h["fy_backlog"])}</td>'
+            '</tr>')
+
+    TONE = {'good': 'var(--done)', 'warn': 'var(--sec)',
+            'bad': 'var(--owed)', 'none': '#8A94A6'}
+    board, Y = '', 10
+    top = max([h['month_pct'] or 0 for h in heads] + [100]) * 1.1
+    BW = 330.0
+    for h in heads:
+        p = h['month_pct']
+        label = (f'<text x="258" y="{Y + 13}" text-anchor="end" class="lab">'
+                 f'{e(h["region"])} &#183; {e(h["head_name"])}</text>')
+        if p is None:
+            board += label + (f'<text x="274" y="{Y + 13}" class="val" '
+                              f'fill="#8A94A6">no plan</text>')
+        else:
+            w = p / top * BW
+            board += label + (
+                f'<rect x="266" y="{Y}" width="{w:.1f}" height="18" rx="3" '
+                f'fill="{TONE[rag(p)]}"/>'
+                f'<text x="{266 + w + 9:.1f}" y="{Y + 13}" class="val">{pct(p)}</text>')
+        Y += 26
+    plan_x = 266 + 100 / top * BW
+
+    def tile(k, v, s, tone=''):
+        return (f'<div class="tile"><div class="k">{k}</div>'
+                f'<div class="v {tone}">{v}</div><div class="s">{s}</div></div>')
+
+    regions = ', '.join(d['regions'][:6]) + ('...' if len(d['regions']) > 6 else '')
+    asat = (f" &#183; as at {e(snap['as_of_date'])}" if snap.get('as_of_date') else '')
+    ahead_line = (f"{len(ahead)} of {len(heads)} territories are at or past plan. "
+                  if ahead else '')
+    behind_line = ('<b>' + str(len(behind)) + ' need a conversation</b>: '
+                   + e(', '.join(h['region'] for h in behind)) + '. ') if behind else ''
+
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{e(name)} &mdash; {e(month)}</title>
+<style>{CSS}
+th.nm,td.nm{{text-align:left}}
+td.nm{{font-family:var(--f-body); color:var(--ink-2); font-weight:400}}
+tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
+</style>
+</head><body>
+
+<div class="band"><div class="wrap"><div class="idrow">
+  <div class="who">
+    <span class="code">{len(heads)} territories &#183; {e(regions)}</span>
+    <h1>{e(name)}</h1>
+    <p>{t['sfo_count']} sales field officers across the group</p>
+  </div>
+  <div class="stamp"><b>{e(month)}</b>
+    Month to date{asat}<br>
+    Figures in &#8377; lakhs &#183; primary sales basis
+  </div>
+</div></div></div>
+
+<div class="wrap">
+  <div class="verdict">
+    <p><b>The group is at {pct(t['month_pct'])} of plan this month</b>,
+      {signed(t['growth_pct'])} on last month, with
+      {lakh(t['month_backlog'])} lakh still owed.</p>
+    <p>{ahead_line}{behind_line}April to date stands at {pct(t['ytd_pct'])}, and the
+      annual plan leaves {lakh(t['fy_backlog'])} lakh over
+      {y['months_remaining']} months &mdash; {lakh(y['required_monthly'])} a month.</p>
+  </div>
+
+  <section>
+    <div class="shead"><h2>Where each territory stands</h2>
+      <span>This month against this month&#8217;s AOP</span></div>
+    <figure>
+      <div class="scroll"><svg viewBox="0 0 700 {Y + 30}" role="img"
+        aria-label="Achievement against AOP this month, by territory">
+        <line x1="266" y1="4" x2="266" y2="{Y - 4}" stroke="#D5DCE6"/>
+        <line x1="{plan_x:.1f}" y1="4" x2="{plan_x:.1f}" y2="{Y - 4}"
+              stroke="var(--plan)" stroke-width="1.5"/>
+        <text x="{plan_x:.1f}" y="{Y + 16}" text-anchor="middle" class="axis"
+              fill="var(--plan)">100% &mdash; plan</text>
+        {board}
+      </svg></div>
+      <figcaption>Sorted by achievement rather than by region code, so the
+        territories needing attention sit together at the bottom instead of
+        being scattered through the list.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="shead"><h2>The group</h2>
+      <span>Added from the territory rows below</span></div>
+    <div class="grid g3">
+      {tile('This month', pct(t['month_pct']),
+            f"{lakh(t['mtd_primary'])} against a plan of {lakh(t['month_target'])}.",
+            rag(t['month_pct']))}
+      {tile('April to date', pct(t['ytd_pct']),
+            f"{lakh(t['ytd_actual'])} against {lakh(t['ytd_target'])}. "
+            f"{lakh(t['ytd_backlog'])} behind.", rag(t['ytd_pct']))}
+      {tile('Needed each month', lakh(y['required_monthly']),
+            f"To close {lakh(t['fy_backlog'])} across the "
+            f"{y['months_remaining']} months left. This month&#8217;s plan is "
+            f"{lakh(t['month_target'])}.")}
+    </div>
+    <p class="note"><b>These are added from the territory rows, not read off the
+      sheet&#8217;s own total line.</b> A group covering part of a channel has no
+      subtotal on the sheet at all, and taking the one that is there would quietly
+      report the whole channel as this group&#8217;s.</p>
+  </section>
+
+  <section>
+    <div class="shead"><h2>Every territory</h2>
+      <span>Exactly as circulated, in &#8377; lakhs</span></div>
+    <div class="scroll"><div class="tbl"><table>
+      <thead><tr><th>Region</th><th class="nm">Head</th><th>AOP</th><th>Billed</th>
+        <th>ACH</th><th>vs LM</th><th>Backlog</th><th>YTD</th>
+        <th>FY backlog</th></tr></thead>
+      <tbody>{rows}</tbody>
+      <tfoot><tr class="hl"><td>Group</td>
+        <td class="nm">{len(heads)} territories</td>
+        <td class="n">{lakh(t['month_target'])}</td>
+        <td class="n">{lakh(t['mtd_primary'])}</td>
+        <td class="n">{pct(t['month_pct'])}</td>
+        <td class="n">{signed(t['growth_pct'])}</td>
+        <td class="n">{lakh(t['month_backlog'])}</td>
+        <td class="n">{pct(t['ytd_pct'])}</td>
+        <td class="n">{lakh(t['fy_backlog'])}</td></tr></tfoot>
+    </table></div></div>
+    <p class="note"><b>FY ACH % is not shown per territory.</b> It measures how much
+      of the <i>annual</i> plan is banked, so it reads low for everybody in the first
+      half of the year and ranks nobody against anybody. The FY backlog column says
+      the same thing in a way that can be acted on.</p>
+  </section>
+
+  <footer>
+    Built from the review sheet for {e(month)}, as circulated. Every percentage and
+    backlog is recomputed from the AOP and sales columns rather than copied across.
+    Achievement is measured on primary sales. All figures in &#8377; lakhs.
+  </footer>
+</div>
+</body></html>"""
+
+
+# -- the covering email ---------------------------------------------------
+#
+# Short, plain, and it does not repeat the report. Somebody opening this at
+# half past eight wants to know whether they need to open the attachment
+# today, and three figures answer that.
+EMAIL_SUBJECT = '{region} - {month} position ({pct} of AOP)'
+
+EMAIL_BODY = """Hello {first_name},
+
+Your {month} position, attached.
+
+  Month to date         {mtd} lakh against a plan of {target} ({pct})
+  Against last month    {growth}
+  Still owed this month {backlog} lakh
+
+{line}
+
+The attachment has the year-to-date and full-year position, where you sit
+against the other heads, and what the remaining months need to run at.
+
+Figures are from the Region Summary sheet as circulated{stamp}.
+"""
+
+TEAM_SUBJECT = '{name} - {month} position ({pct} of AOP)'
+
+TEAM_BODY = """Hello {first_name},
+
+Your group's {month} position, attached, with each territory's own report.
+
+  Month to date              {mtd} lakh against a plan of {target} ({pct})
+  Against last month         {growth}
+  At or past plan            {ahead} of {total} territories
+
+{line}
+
+Figures are from the Region Summary sheet as circulated{stamp}.
+"""
+
+
+def email_for(d):
+    """-> (subject, body) for one head's covering email."""
+    h, y = d['head'], d['year']
+    first = (h['head_name'] or '').split()[0].title() if h['head_name'] else 'there'
+    p = h['month_pct']
+
+    # The one line that changes. A head past plan being told what the year
+    # still needs reads as the system refusing to acknowledge a good month.
+    if p is None:
+        line = ('There is no AOP against this territory this month, so there '
+                'is no achievement figure.')
+    elif p >= 100:
+        line = 'You are past plan for the month.'
+    elif y.get('required_monthly'):
+        line = (f"The year needs {lakh(y['required_monthly'])} lakh a month "
+                f"across the {y['months_remaining']} months left.")
+    else:
+        line = ''
+
+    stamp = (f" on {d['snapshot']['as_of_date']}"
+             if d['snapshot'].get('as_of_date') else '')
+    ctx = {'region': h['region'], 'first_name': first,
+           'month': d['snapshot'].get('as_of_month_label') or 'this month',
+           'mtd': lakh(h['mtd_primary']), 'target': lakh(h['month_target']),
+           'pct': pct(p), 'growth': signed(h['growth_pct']),
+           'backlog': lakh(h['month_backlog']), 'line': line, 'stamp': stamp}
+    return EMAIL_SUBJECT.format(**ctx), EMAIL_BODY.format(**ctx)
+
+
+def team_email_for(d):
+    """-> (subject, body) for a manager's covering email."""
+    t = d['totals']
+    heads = d['heads']
+    ahead = sum(1 for h in heads if (h['month_pct'] or 0) >= 100)
+    behind = [h['region'] for h in heads
+              if h['month_pct'] is not None and h['month_pct'] < 70]
+    line = (f"Needing attention: {', '.join(behind)}." if behind
+            else 'No territory is below 70% of plan.')
+    stamp = (f" on {d['snapshot']['as_of_date']}"
+             if d['snapshot'].get('as_of_date') else '')
+    ctx = {'name': d.get('name') or 'Your group', 'first_name': 'there',
+           'month': d['snapshot'].get('as_of_month_label') or 'this month',
+           'mtd': lakh(t['mtd_primary']), 'target': lakh(t['month_target']),
+           'pct': pct(t['month_pct']), 'growth': signed(t['growth_pct']),
+           'ahead': ahead, 'total': len(heads), 'line': line, 'stamp': stamp}
+    return TEAM_SUBJECT.format(**ctx), TEAM_BODY.format(**ctx)
