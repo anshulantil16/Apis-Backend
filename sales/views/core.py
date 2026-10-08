@@ -27,7 +27,8 @@ from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters, detail_qs,
                       qs_for_dimension, money_base, sheet_fields,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
                       NOT_SALES_ZONES, _not_sales_zone_q, in_plan_scope,
-                      FINISHED_GOODS_PREFIX,
+                      FINISHED_GOODS_PREFIX, display_floor,
+                      filters_the_dump_cannot_answer,
                       with_actuals, comparable_window,
                       same_months_last_year)
 
@@ -925,6 +926,10 @@ class SalesOverviewView(SalesIQView):
             # This product is uploaded to rather than connected to a feed, so
             # the refresh time IS the upload time.
             'data_refreshed': freshness,
+            # Filters the invoice file has no column for. Everything built
+            # out of invoice detail is empty under one of these, and empty
+            # reads as "nothing sold" rather than "this file cannot say".
+            'filters_blind_to_invoices': filters_the_dump_cannot_answer(applied),
 
             'run_rate': run_rate,
             'required_run_rate': required_rate,
@@ -1178,10 +1183,15 @@ class SalesForecastView(SalesIQView):
             or forecast_series(points, periods=periods)
         result['metric'] = metric
 
+        # The model is fitted on every month loaded -- more history is a
+        # better fit, and that is what last year is loaded for. What goes on
+        # the CHART starts at the display floor, so the forecast panel does
+        # not reintroduce the year the rest of the dashboard stops showing.
+        lo = display_floor()
         result['history'] = [{'period': d.isoformat(), 'label': d.strftime('%b %Y'),
                               'value': round(v, 2),
                               'aop': round(plan[d], 2) if d in plan else None}
-                             for d, v in points]
+                             for d, v in points if d >= lo]
         for pt in result.get('points') or []:
             month = date.fromisoformat(pt['period'])
             pt['label'] = month.strftime('%b %Y')
@@ -1244,7 +1254,12 @@ class SalesFiltersView(SalesIQView):
         # Cancelled rows are excluded from every figure, so offering their
         # values here would put a customer in the dropdown that returns an
         # empty dashboard when picked.
-        qs = SalesRecord.objects.exclude(is_cancelled=True)
+        # Floored like every other on-screen read: a month, region or brand
+        # that exists only in last year's rows must not be offered as
+        # something to filter by, or the floor is a rule the dropdowns
+        # quietly let you around.
+        qs = (SalesRecord.objects.exclude(is_cancelled=True)
+              .filter(order_date__gte=display_floor()))
 
         # The file that answers a figure also supplies the values you may
         # filter it by.

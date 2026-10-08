@@ -90,8 +90,13 @@ class SalesAnomaliesView(SalesIQView):
 class SalesSeasonalityView(SalesIQView):
     # A seasonal index needs the same month in more than one year.
     def get(self, request):
+        # The one read that reaches below the display floor, and the reason
+        # is the line above: an index for April is worth having precisely
+        # because two Aprils went into it. What it shows is a multiplier,
+        # never last April's rupees, so no figure from before the floor
+        # reaches the screen through here.
         qs, applied = apply_filters(SalesRecord.objects.all(), request,
-                                    default_window=False)
+                                    default_window=False, floor=False)
         # Averaging October over a year that has run and one that has not
         # halved every month in the back half of the financial year.
         data = AN.seasonality(with_actuals(qs))

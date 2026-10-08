@@ -137,6 +137,41 @@ def count_people(querysets, level, with_vacancies=False):
     return (total, len(vacant)) if with_vacancies else total
 
 
+# ── the earliest month anything on screen may show ───────────────────────
+#
+# Last year is loaded on purpose: the review sheet carries FY25-26 beside
+# FY26-27 so growth, the year-on-year comparison and the forecast's fit have
+# something to stand on. None of that is a reason to PUT it on screen, and
+# putting it there did real damage -- the revenue trend opened on May 2025
+# and ran a year of actuals against an AOP of zero, because last year has no
+# plan in this file. A reader seeing twelve months at 0% of plan reasonably
+# concludes the dashboard is broken.
+#
+# So the two uses are separated. Reads that answer "what is on screen" stop
+# at this floor. The comparison helpers below -- money_base(),
+# same_months_last_year(), the year-on-year view -- deliberately reach past
+# it, because computing a growth percentage out of last year is exactly the
+# backend work last year is loaded for.
+#
+# Settable, because the floor is a financial year and financial years end.
+DISPLAY_FROM = date(2026, 4, 1)
+
+
+def display_floor():
+    """The earliest month any on-screen figure may include."""
+    try:
+        from django.conf import settings
+        raw = getattr(settings, 'SALESIQ_DISPLAY_FROM', None)
+        if isinstance(raw, date):
+            return raw
+        if raw:
+            y, m = str(raw).split('-')[:2]
+            return date(int(y), int(m), 1)
+    except Exception:
+        pass
+    return DISPLAY_FROM
+
+
 NOT_SALES_ZONES = ['NOT A PART OF SALES', 'B2B', 'EXPORT']
 
 
@@ -423,7 +458,7 @@ def month_end(value):
     return nxt - timedelta(days=1)
 
 
-def apply_filters(qs, request, default_window=True, money_scope=True):
+def apply_filters(qs, request, default_window=True, money_scope=True, floor=True):
     """Shared filter parsing (dates + dimensions). Returns (qs, applied dict).
 
     With no date filter given, the window defaults to the CURRENT FINANCIAL
@@ -456,6 +491,19 @@ def apply_filters(qs, request, default_window=True, money_scope=True):
     would only ever take rows away from them.
     """
     qs, applied = apply_dim_filters(qs, request)
+    # Last year is loaded for the maths, not for the screen. Everything that
+    # answers "what am I looking at" stops here; the comparison helpers that
+    # genuinely need history go around this function, not through it.
+    #
+    # floor=False is for a figure that is COMPUTED from history rather than
+    # being history on display: a seasonal index for April is worth having
+    # precisely because two Aprils went into it, and it shows a multiplier,
+    # never last April's rupees. Anything that puts a month on an axis or in
+    # a table keeps the floor.
+    if floor:
+        lo = display_floor()
+        qs = qs.filter(order_date__gte=lo)
+        applied['display_from'] = lo.strftime('%Y-%m')
     # The window is a RANGE OF MONTHS, not of days. `month_from`/`month_to`
     # are what the screen sends; `from`/`to` are still read so that a saved
     # link keeps working, and they are snapped to whole months too.
@@ -564,6 +612,34 @@ def qs_for_dimension(request, field):
                                 money_scope=False)
     applied['source'] = 'invoice_dump'
     return qs.filter(source=SalesRecord.SOURCE_INVOICE), applied, True
+
+
+def filters_the_dump_cannot_answer(applied):
+    """-> the applied filters the invoice file has no column for.
+
+    The review sheet and the invoice dump do not carry the same columns, and
+    Channel is the one that bites: the sheet has CHANEL TYPE, the dump's
+    export does not, so every dump row holds a blank channel. Filter to GT
+    and the money narrows correctly off the sheet while every panel built out
+    of invoice detail -- customers, SKUs, categories, cities, order sizes --
+    silently empties, because a blank channel is not GT.
+
+    Empty is the wrong answer. "No categories" reads as "nothing sold in GT",
+    which is false; the truth is that the invoice file cannot be asked the
+    question. That is worth saying on screen, and it is worth saying which
+    filter did it, because the remedy is a column in an export rather than
+    anything in this code.
+    """
+    blind = []
+    for field, vals in (applied or {}).items():
+        if field not in FILTERABLE or not vals:
+            continue
+        has_any = (SalesRecord.objects
+                   .filter(source=SalesRecord.SOURCE_INVOICE)
+                   .exclude(**{field: ''}).exists())
+        if not has_any:
+            blind.append(field)
+    return blind
 
 
 def detail_qs(request):

@@ -650,9 +650,11 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
         upload(a_workbook([a_row()]))           # dump first this time
         upload(aop_workbook([aop_row(cy=20000)]))
         d = Client().get('/api/sales/overview/?month_from=2025-04&month_to=2027-03').json()
-        # 20,000 for April 2026 from the review sheet, 80,000 for April 2025.
-        # The dump's April 2026 is the same money and is not added again.
-        self.assertEqual(float(d['revenue']), 100000)
+        # 20,000 for April 2026, from the review sheet. The dump's April 2026
+        # is the same money and is not added again, and April 2025 is below
+        # the display floor -- asking for it in the URL does not bring it
+        # back, which is the point of a floor.
+        self.assertEqual(float(d['revenue']), 20000)
 
     def test_removing_the_invoice_data_hands_the_figures_back(self):
         upload(aop_workbook([aop_row()]))
@@ -663,17 +665,17 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
                          'the dashboard would show zero with a good plan file loaded')
 
     def test_a_month_in_both_files_is_counted_once(self):
-        # April 2026 is in both, at 20,000 each. April 2025 is in the review
-        # sheet alone, at 80,000. The right answer counts April 2026 once and
-        # keeps April 2025 — it does not drop the history to prove it can
-        # avoid double counting.
+        # April 2026 is in both files, at 20,000 each, and must be counted
+        # once. April 2025 is in the review sheet alone and must not appear
+        # at all -- it is below the display floor, loaded for growth maths
+        # rather than for the screen.
         upload(aop_workbook([aop_row(cy=20000)]))
         upload(a_workbook([a_row()]))           # 20,000 taxable, April 2026
-        # span=all because this is a claim about the whole file, and the
-        # dashboard now defaults to the current financial year.
         d = Client().get('/api/sales/overview/?month_from=2025-04&month_to=2027-03').json()
         rev = float(d.get('total_revenue') or d.get('revenue') or 0)
-        self.assertEqual(rev, 100000, f'not 20,000 (April 26) + 80,000 (April 25): {rev}')
+        # Counted once, not twice. April 2025 is loaded and is deliberately
+        # not in this figure: it is below the display floor.
+        self.assertEqual(rev, 20000, f'April 2026 counted from both files: {rev}')
 
     def test_no_month_is_counted_from_both_files_at_once(self):
         """The invariant underneath every total on the dashboard.
@@ -685,17 +687,17 @@ class WhichFileTheSalesFigureComesFrom(TestCase):
         """
         upload(aop_workbook([aop_row(cy=20000)]))
         upload(a_workbook([a_row()]))
-        # The sheet has April 2025 at 80,000 and April 2026 at 20,000. The
-        # dump has the same April 2026 at 20,000. Counted once: 100,000.
+        # The sheet has April 2026 at 20,000 and the dump has the same April
+        # 2026 at 20,000. Counted once: 20,000.
         d = Client().get('/api/sales/overview/?month_from=2025-04&month_to=2027-03').json()
-        self.assertEqual(float(d['revenue']), 100000,
+        self.assertEqual(float(d['revenue']), 20000,
                          'April 2026 is being counted from both files')
         # And per month, so a single wrong month cannot hide inside a right
-        # total.
+        # total -- including the month that must not be there at all.
         rows = {r['period']: float(r['revenue'] or 0)
                 for r in Client().get('/api/sales/trend/').json()['results']}
         self.assertEqual(rows['2026-04-01'], 20000)
-        self.assertEqual(rows['2025-04-01'], 80000)
+        self.assertNotIn('2025-04-01', rows, 'last year reached the trend line')
 
 
 class TheSheetChecksItself(TestCase):
@@ -736,7 +738,10 @@ class TheSheetChecksItself(TestCase):
         blob = ' '.join(d['notes'])
         self.assertIn('SEC SALES', blob)
         rev = float(Client().get('/api/sales/overview/?month_from=2025-04&month_to=2027-03').json()['revenue'])
-        self.assertEqual(rev, 170000, 'secondary sales were added to primary')
+        # 90,000 for April 2026. Last year's 80,000 is loaded and below the
+        # display floor; secondary sales are reported in the notes and never
+        # added to either.
+        self.assertEqual(rev, 90000, 'secondary sales were added to primary')
 
 
 class GroupingByWhatTheLineActuallyIs(TestCase):
@@ -882,10 +887,15 @@ class AchievementIsComparedLikeForLike(TestCase):
                          "last year's 500,000 was added to this year")
         self.assertEqual(float(d['target']), 200000)       # Apr + May plan
 
-    def test_the_whole_file_is_still_reachable(self):
+    def test_last_year_cannot_be_reached_by_asking_for_it(self):
+        """A window naming April 2025 does not bring April 2025 back. The
+        floor is not a default to be overridden from the URL -- last year is
+        loaded for growth arithmetic, and the moment it can be put on screen
+        by typing a date, it is on screen."""
         self._two_years()
         d = Client().get('/api/sales/overview/?month_from=2025-04&month_to=2027-03').json()
-        self.assertEqual(float(d['revenue']), 560000)      # 500k last yr + 60k this
+        self.assertEqual(float(d['revenue']), 60000)       # this year alone
+        self.assertEqual(d['filters']['display_from'], '2026-04')
 
     def test_the_basis_says_which_months_were_compared(self):
         self._two_years()
@@ -1990,12 +2000,16 @@ class RevenueMeansThisYear(TestCase):
         d = Client().get('/api/sales/breakdown/?dim=zone').json()
         self.assertEqual(sum(float(r['revenue']) for r in d['results']), 60000)
 
-    def test_the_trend_line_still_sees_last_year(self):
-        """History is the subject of a trend chart, not noise around it."""
+    def test_the_trend_line_starts_at_the_display_floor(self):
+        """It used to open on last May and run a year of actuals against an
+        AOP of zero, because last year has no plan in this file. Twelve
+        months at 0% of plan reads as a broken dashboard."""
         self._two_years()
         d = Client().get('/api/sales/trend/').json()
-        months = [r['period'] for r in d['results']]
-        self.assertIn('2025-04-01', str(months), f'last year fell off the chart: {months}')
+        months = [str(r['period']) for r in d['results']]
+        self.assertTrue(months, 'the trend came back empty')
+        self.assertTrue(all(m >= '2026-04' for m in months),
+                        f'something before the floor is on the chart: {months}')
 
     def test_growth_against_last_year_survives_the_default(self):
         self._two_years()
@@ -2422,7 +2436,16 @@ class TheWindowOffersOnlyMonthsThatExist(TestCase):
         upload(aop_workbook([aop_row()]))
         months = Client().get('/api/sales/filters/').json()['months']
         self.assertIn('2026-04', months)
-        self.assertIn('2025-04', months, "last year's months are selectable too")
+
+    def test_a_month_below_the_display_floor_is_not_offered(self):
+        """Last year is loaded for growth arithmetic. Offering it in the
+        picker is a way around the floor that the picker itself provides --
+        choose April 2025 and the year the dashboard stops showing is back on
+        screen."""
+        upload(aop_workbook([aop_row()]))
+        months = Client().get('/api/sales/filters/').json()['months']
+        self.assertNotIn('2025-04', months)
+        self.assertTrue(all(m >= '2026-04' for m in months), months)
 
     def test_every_month_offered_is_one_a_file_covers(self):
         upload(aop_workbook([aop_row()]))
@@ -2430,7 +2453,8 @@ class TheWindowOffersOnlyMonthsThatExist(TestCase):
         months = set(Client().get('/api/sales/filters/').json()['months'])
         real = {d.strftime('%Y-%m') for d in
                 SalesRecord.objects.exclude(period=None)
-                                   .values_list('period', flat=True)}
+                                   .values_list('period', flat=True)
+                if d.strftime('%Y-%m') >= '2026-04'}
         self.assertEqual(months, real, 'a month was offered that no file has')
 
     def test_there_is_no_way_to_turn_the_window_off(self):
@@ -3092,6 +3116,24 @@ class TheControlTowerRules(TestCase):
         # larger of the two and the basis covers only what has happened.
         self.assertEqual(d['achievement_basis']['months'], 6)
         self.assertGreater(d['target'], d['achievement_basis']['target'])
+
+    def test_a_filter_the_invoice_file_cannot_answer_is_named(self):
+        """The sheet has CHANEL TYPE and the dump's export does not, so every
+        dump row holds a blank channel. Filter to GT and the money narrows
+        correctly off the sheet while every panel built out of invoice detail
+        empties — and "no categories" reads as "nothing sold in GT", which is
+        false. The screen has to be able to say which filter did it."""
+        SalesRecord.objects.all().delete()
+        upload(aop_workbook([aop_row(**{'CHANEL TYPE': 'GT'})]))
+        upload(a_workbook([a_row(**{'Order Date': '2026-04-05'})]))   # no channel
+        d = self.client.get('/api/sales/overview/?channel=GT').json()
+        self.assertIn('channel', d['filters_blind_to_invoices'])
+
+    def test_a_filter_both_files_carry_is_not_named(self):
+        SalesRecord.objects.all().delete()
+        upload(a_workbook([a_row(**{'Zone': 'North', 'Order Date': '2026-04-05'})]))
+        d = self.client.get('/api/sales/overview/?zone=North').json()
+        self.assertEqual(d['filters_blind_to_invoices'], [])
 
     # ── governance ──────────────────────────────────────────────────────
     def test_the_screen_can_say_when_the_data_was_last_loaded(self):
