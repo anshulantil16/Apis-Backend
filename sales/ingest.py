@@ -609,6 +609,65 @@ _SAMPLE = [
 IGNORED_HEADERS = {_norm(h) for h, used in PRE_SALES_DUMP if not used}
 
 
+# -- which tabs to read ---------------------------------------------------
+#
+# The daily workbook carries many sheets. Three of them are ours:
+#
+#     Region Summary      the morning review, one row per GTR head -> reports
+#     YTD,AOP vs.ACH      the plan, one row per person and item    -> dashboard
+#     PRI SALES DUMP      invoice lines                            -> dashboard
+#
+# Everything else in the file is left alone.
+#
+# They are picked by TAB NAME rather than by what their headers look like,
+# which matters for one specific reason: "Sub-Region" is the same report as
+# "Region Summary" cut at a finer grain, so its headers are identical. Routed
+# on headers alone both would load, and the reports would be built from twice
+# the heads -- each territory once under its region and again under each of
+# its sub-regions.
+SHEET_ALIASES = {
+    'review': ('region summary', 'region wise summary'),
+    'aop':    ('ytd aop vs ach', 'ytd aop vs ach report', 'aop vs ach',
+               'ytd aop vs ach summary'),
+    'dump':   ('pri sales dump', 'primary sales dump', 'pri sales',
+               'pre sales dump'),
+}
+
+
+def sheet_key(title):
+    """Normalise a tab name. Commas and dots carry no meaning in one --
+    "YTD,AOP vs.ACH" and "YTD AOP vs ACH" are the same tab named by two
+    different people."""
+    s = str(title or '').strip().lower()
+    for ch in (',', '.', '-', '_', '/', '(', ')', ':', '&', "'"):
+        s = s.replace(ch, ' ')
+    return ' '.join(s.split())
+
+
+def pick_sheets(titles):
+    """-> ({kind: tab title}, [titles ignored on purpose]).
+
+    An empty mapping means no tab was recognised by name, and the caller
+    should fall back to reading headers -- a single-sheet export saved out of
+    one of these tabs is still a perfectly good upload, and refusing it
+    because the tab was renamed would be the kind of strictness that gets
+    worked around rather than fixed.
+    """
+    chosen, ignored = {}, []
+    for t in titles:
+        key = sheet_key(t)
+        for kind, names in SHEET_ALIASES.items():
+            if key in names:
+                # First match wins. A workbook with two tabs claiming the
+                # same role is a mistake upstream, and reading the second
+                # over the first would hide it.
+                chosen.setdefault(kind, t)
+                break
+        else:
+            ignored.append(t)
+    return chosen, ignored
+
+
 def partition_unknown(unknown):
     """-> (deliberately skipped, genuinely unrecognised)."""
     skipped, unrecognised = [], []

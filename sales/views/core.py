@@ -18,7 +18,8 @@ from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       is_return_remark, is_not_a_sale, is_vacant,
                       TEXT_FIELDS, NUM_FIELDS, TEXT_MAX, DATE_FIELDS,
                       parse_bool, is_return_type, partition_unknown,
-                      state_from_code, state_from_subregion, find_header_row)
+                      state_from_code, state_from_subregion, find_header_row,
+                      pick_sheets, sheet_key)
 from .. import aop as AOP
 from .. import review as REVIEW
 
@@ -123,6 +124,52 @@ def _reconcile_against_sheet(upload, watermark, stated, scale):
             f'loaded as sales: it measures a different thing from the primary '
             f'figures beside it and adding the two would double the month.')
     return out
+
+
+SOURCE_LABEL = {
+    SalesRecord.SOURCE_PLAN:    'AOP sheet',
+    SalesRecord.SOURCE_INVOICE: 'sales dump',
+}
+
+
+def _supersede(upload):
+    """Drop earlier rows of every source this upload just loaded.
+
+    -> {source: rows removed}. Uploads left with nothing are removed too,
+    rather than left in the list as a file that loaded nought rows -- which
+    reads as a failed import rather than as one that has been replaced.
+    """
+    removed, touched = {}, set()
+    for src in (upload.records.values_list('source', flat=True)
+                .distinct().order_by()):
+        stale = SalesRecord.objects.filter(source=src).exclude(upload=upload)
+        n = stale.count()
+        if n:
+            touched.update(stale.values_list('upload_id', flat=True).distinct())
+            stale.delete()
+            removed[src] = n
+
+    # An earlier file can lose one of its sheets and keep the other -- a
+    # two-tab workbook whose dump is superseded still holds its AOP rows.
+    # Its stored row count has to be brought back to what is left, or the
+    # uploads list reports a header that disagrees with the lines under it.
+    for u in SalesUpload.objects.filter(id__in=touched).exclude(id=upload.id):
+        agg = u.records.aggregate(n=Count('id'), lo=Min('order_date'),
+                                  hi=Max('order_date'))
+        if not agg['n'] and not u.review_snapshots.exists():
+            u.delete()          # nothing left of it; an entry reading nought
+            continue            # rows reads as a failed import, not a replaced one
+        earned = (in_plan_scope(u.records.exclude(is_cancelled=True)
+                                .exclude(is_not_sales=True))
+                  .aggregate(rev=Sum('net_amount'))['rev'])
+        u.row_count = agg['n'] or 0
+        u.total_revenue = round(float(earned or 0), 2)
+        u.period_start, u.period_end = agg['lo'], agg['hi']
+        u.notes = list(u.notes or []) + [
+            'Part of this file has since been replaced by a newer upload.']
+        u.save(update_fields=['row_count', 'total_revenue', 'period_start',
+                              'period_end', 'notes'])
+    return removed
 
 
 def _ingest_review(request, upload, ws, header_row, header_row_index=1):
@@ -487,8 +534,25 @@ class SalesUploadView(SalesIQAdminView):
             status='completed',
         )
 
-        outcomes = []
+        # The daily workbook carries many tabs; three of them are ours. They
+        # are chosen by NAME, because "Sub-Region" is the same report as
+        # "Region Summary" at a finer grain and has identical headers -- read
+        # on headers alone, both would load and every head would be counted
+        # once per sub-region as well as once for their region.
+        chosen, ignored = pick_sheets([ws.title for ws in wb.worksheets])
+        by_title = {t: kind for kind, t in chosen.items()}
+
+        outcomes, left_alone = [], []
         for ws in wb.worksheets:
+            # A workbook whose tabs are all named is read strictly. One where
+            # nothing matched falls back to reading headers, so a single-sheet
+            # export saved out of one of these tabs still works -- refusing it
+            # because somebody renamed the tab is the kind of strictness that
+            # gets worked around instead of fixed.
+            if chosen and ws.title not in by_title:
+                left_alone.append(ws.title)
+                continue
+
             header_row, header_at = find_header_row(
                 ws, recognises=lambda r: max(len(map_headers(r)[0]),
                                              len(AOP.map_columns(r)[0])
@@ -497,9 +561,11 @@ class SalesUploadView(SalesIQAdminView):
                                              + len(REVIEW.map_columns(r)[1])))
             if header_row is None:
                 continue        # an empty tab is not an error
-            if REVIEW.looks_like_review_sheet(header_row):
+
+            kind = by_title.get(ws.title)
+            if kind == 'review' or (not kind and REVIEW.looks_like_review_sheet(header_row)):
                 resp = _ingest_review(request, upload, ws, header_row, header_at)
-            elif AOP.looks_like_aop_sheet(header_row):
+            elif kind == 'aop' or (not kind and AOP.looks_like_aop_sheet(header_row)):
                 resp = _ingest_aop(request, upload, ws, header_row, header_at)
             else:
                 resp = _ingest_dump(request, upload, ws, header_row, header_at)
@@ -531,6 +597,24 @@ class SalesUploadView(SalesIQAdminView):
         # along as the sheets are read. A running total and the table it
         # describes drift the moment anything is skipped, and the list header
         # then disagrees with the row beneath it.
+        # This file is uploaded every morning, and both dashboard sheets are
+        # full restatements rather than a day's additions: the AOP sheet
+        # carries all twelve months of the year every time, and the dump
+        # carries the year's invoice lines. Appended, day two reports every
+        # figure twice and day three three times -- a dashboard that climbs
+        # steadily for reasons that have nothing to do with selling.
+        #
+        # So a sheet supersedes what the same KIND of sheet loaded before it.
+        # Replacing is also the safer way round to be wrong: if a file ever
+        # turns out to be incremental, superseding loses history that can be
+        # re-uploaded, whereas appending silently doubles revenue and looks
+        # entirely plausible while it does it.
+        #
+        # The review snapshots are deliberately NOT superseded. Each is a
+        # dated statement of where people stood that morning, nothing on the
+        # dashboard reads them, and the history is the point.
+        superseded = _supersede(upload)
+
         sync_actual_source()
         agg = upload.records.aggregate(
             n=Count('id'), lo=Min('order_date'), hi=Max('order_date'))
@@ -549,6 +633,20 @@ class SalesUploadView(SalesIQAdminView):
         upload.period_start, upload.period_end = agg['lo'], agg['hi']
         upload.warnings = [f'{t}: {w}' for t, r in good for w in r.data.get('warnings', [])]
         upload.notes = [f'{t}: {n}' for t, r in good for n in r.data.get('notes', [])]
+        if chosen:
+            upload.notes.insert(0, 'This workbook: read ' + ', '.join(
+                f'"{t}"' for t in chosen.values()) + '.')
+        if left_alone:
+            upload.notes.insert(1 if chosen else 0,
+                                f'This workbook: {len(left_alone)} other sheet(s) '
+                                f'were left alone: ' + ', '.join(left_alone[:8])
+                                + ('...' if len(left_alone) > 8 else '') + '.')
+        for src, n in sorted(superseded.items()):
+            upload.notes.append(
+                f'This workbook: {n:,} rows from the previous '
+                f'{SOURCE_LABEL.get(src, src)} upload '
+                f'were replaced, not added to. This file restates them in full, so '
+                f'keeping both would count the same sales twice.')
 
         # Where each month's sales actually came from. This is a fact about
         # the whole upload, not about either sheet on its own, and it is the

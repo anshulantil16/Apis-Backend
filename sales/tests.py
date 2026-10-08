@@ -10,7 +10,7 @@ import io
 import openpyxl
 from datetime import date, datetime
 
-from django.db.models import F
+from django.db.models import F, Sum
 from django.test import Client as RawClient, TestCase as _TestCase
 
 
@@ -38,7 +38,7 @@ from sales import review as REVIEW
 from sales import report as REPORT
 
 from sales.ingest import (PRE_SALES_DUMP, build_template, is_return_type,
-                          map_headers, parse_bool)
+                          map_headers, parse_bool, pick_sheets)
 from sales.models import (SalesRecord, SalesUpload,
                           ReviewSnapshot, ReviewRow)
 
@@ -1308,11 +1308,14 @@ class OneWorkbookTwoSheets(TestCase):
         every = d['notes'] + d['warnings']
         self.assertTrue(every)
         for m in every:
-            # 'Both sheets:' is the third legitimate case -- a message about
-            # the election BETWEEN the two, which belongs to neither alone.
+            # Two more legitimate cases beside a single sheet: 'Both
+            # sheets:' for the election BETWEEN them, which belongs to
+            # neither alone, and 'This workbook:' for what was read out of
+            # the file and what was left alone in it.
             self.assertTrue(m.startswith('PRI SALES DUMP:')
                             or m.startswith('YTD,AOP vs.ACH:')
-                            or m.startswith('Both sheets:'), m)
+                            or m.startswith('Both sheets:')
+                            or m.startswith('This workbook:'), m)
 
 
 class TheUploadedFilesList(TestCase):
@@ -3571,3 +3574,155 @@ class TheReportFile(TestCase):
     def test_a_name_with_a_slash_in_it_cannot_escape_the_zip(self):
         self.assertNotIn('/', REPORT._safe('GTR04 A/B'))
         self.assertNotIn('..', REPORT._safe('../../etc/passwd'))
+
+
+# -- the daily workbook -----------------------------------------------------
+def named_workbook(sheets):
+    """A workbook whose tabs are named, in order. `sheets` is
+    [(title, [header row, *data rows])]."""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for title, rows in sheets:
+        ws = wb.create_sheet(title=title)
+        header = list(rows[0])
+        ws.append(header)
+        for r in rows[1:]:
+            # The other helpers build a row as {header: value}; a plain list
+            # is taken as already laid out.
+            ws.append([r.get(h) for h in header] if isinstance(r, dict) else list(r))
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    buf.name = 'Daily MIS.xlsx'
+    return buf
+
+
+class PickingTheRightTabs(TestCase):
+    """The file uploaded each morning has many sheets. Three are ours."""
+
+    def test_the_three_tabs_are_recognised_by_name(self):
+        chosen, ignored = pick_sheets(
+            ['Region Summary', 'Sub-Region', 'Cover', 'YTD,AOP vs.ACH', 'PRI SALES DUMP'])
+        self.assertEqual(chosen['review'], 'Region Summary')
+        self.assertEqual(chosen['aop'], 'YTD,AOP vs.ACH')
+        self.assertEqual(chosen['dump'], 'PRI SALES DUMP')
+        self.assertEqual(ignored, ['Sub-Region', 'Cover'])
+
+    def test_punctuation_in_a_tab_name_carries_no_meaning(self):
+        """"YTD,AOP vs.ACH" and "YTD AOP vs ACH" are the same tab named by
+        two different people."""
+        for t in ('YTD,AOP vs.ACH', 'YTD AOP vs ACH', 'ytd aop vs. ach'):
+            self.assertEqual(pick_sheets([t])[0].get('aop'), t, t)
+
+    def test_sub_region_is_not_read_although_it_looks_identical(self):
+        """It is the same report cut finer, so its headers match Region
+        Summary exactly. Routed on headers alone both would load and every
+        head would be counted once per sub-region as well."""
+        self.assertTrue(REVIEW.looks_like_review_sheet(REVIEW_HEADERS))
+        chosen, ignored = pick_sheets(['Region Summary', 'Sub-Region'])
+        self.assertNotIn('Sub-Region', chosen.values())
+        self.assertIn('Sub-Region', ignored)
+
+    def test_only_the_named_tabs_are_loaded_from_a_real_workbook(self):
+        sub = list(GTR01); sub[1] = 'CHD (TRI)'
+        upload(named_workbook([
+            ('Cover',          [['Daily MIS', None]]),
+            ('Region Summary', [REVIEW_HEADERS, GTR01, GTR04B]),
+            ('Sub-Region',     [REVIEW_HEADERS, sub, sub, sub]),
+        ]))
+        self.assertEqual(ReviewSnapshot.objects.count(), 1)
+        self.assertEqual(ReviewRow.objects.filter(is_total=False).count(), 2)
+
+    def test_the_upload_says_what_it_read_and_what_it_left_alone(self):
+        d = upload(named_workbook([
+            ('Region Summary', [REVIEW_HEADERS, GTR01]),
+            ('Sub-Region',     [REVIEW_HEADERS, GTR01]),
+            ('Notes',          [['anything']]),
+        ])).json()
+        every = ' '.join(d['notes'])
+        self.assertIn('Region Summary', every)
+        self.assertIn('left alone', every)
+        self.assertIn('Sub-Region', every)
+
+    def test_a_renamed_tab_still_works_on_its_headers(self):
+        """A single-sheet export saved out of one of these tabs is a
+        perfectly good upload. Refusing it because somebody renamed the tab
+        is the kind of strictness that gets worked around, not fixed."""
+        upload(named_workbook([('Sheet1', [REVIEW_HEADERS, GTR01])]))
+        self.assertEqual(ReviewRow.objects.filter(is_total=False).count(), 1)
+
+
+class UploadedEveryMorning(TestCase):
+    """Both dashboard sheets restate the whole year every time."""
+
+    def test_the_same_file_twice_does_not_double_the_sales(self):
+        """Appended, day two reports every figure twice and day three three
+        times -- a dashboard that climbs steadily for reasons that have
+        nothing to do with selling."""
+        upload(a_workbook([a_row(**{'Invoice No.': 'INV-1'}),
+                           a_row(**{'Invoice No.': 'INV-2'})]))
+        first = SalesRecord.objects.count()
+        total = float(SalesRecord.objects.aggregate(s=Sum('net_amount'))['s'])
+
+        upload(a_workbook([a_row(**{'Invoice No.': 'INV-1'}),
+                           a_row(**{'Invoice No.': 'INV-2'})]))
+        self.assertEqual(SalesRecord.objects.count(), first)
+        self.assertEqual(float(SalesRecord.objects.aggregate(s=Sum('net_amount'))['s']),
+                         total)
+
+    def test_the_aop_sheet_replaces_the_previous_aop_sheet(self):
+        upload(aop_workbook([aop_row(aop=100000)]))
+        upload(aop_workbook([aop_row(aop=120000)]))
+        plan = SalesRecord.objects.filter(source=SalesRecord.SOURCE_PLAN,
+                                          period=date(2026, 4, 1))
+        self.assertEqual(plan.count(), 1)
+        self.assertEqual(float(plan.get().target_amount), 120000)
+
+    def test_a_sheet_only_replaces_its_own_kind(self):
+        """A morning with no dump attached must not wipe the dump."""
+        upload(a_workbook([a_row()]))
+        invoices = SalesRecord.objects.filter(source=SalesRecord.SOURCE_INVOICE).count()
+        upload(aop_workbook([aop_row()]))
+        self.assertEqual(
+            SalesRecord.objects.filter(source=SalesRecord.SOURCE_INVOICE).count(),
+            invoices)
+
+    def test_the_replaced_file_disappears_rather_than_reading_nought_rows(self):
+        """An entry saying 0 rows reads as a failed import, not a replaced
+        one."""
+        upload(a_workbook([a_row()]))
+        upload(a_workbook([a_row()]))
+        self.assertEqual(SalesUpload.objects.count(), 1)
+
+    def test_a_file_that_keeps_half_its_sheets_keeps_an_honest_row_count(self):
+        """A two-tab workbook whose dump is superseded still holds its AOP
+        rows. Its stored count has to come back to what is left, or the list
+        header disagrees with the lines under it."""
+        upload(named_workbook([
+            ('YTD,AOP vs.ACH',  [AOP_HEADERS, aop_row()]),
+            ('PRI SALES DUMP',  [header_names(), a_row()]),
+        ]))
+        upload(a_workbook([a_row()]))
+        for u in SalesUpload.objects.all():
+            self.assertEqual(u.row_count, u.records.count(), u.filename)
+        d = self.client.get('/api/sales/uploads/').json()
+        self.assertEqual(sum(u['rows'] for u in d['results']), d['total_rows'])
+
+    def test_review_snapshots_are_kept_rather_than_replaced(self):
+        """Each is a dated statement of where people stood that morning,
+        nothing on the dashboard reads them, and the history is the point."""
+        upload(review_workbook([GTR01]))
+        upload(review_workbook([GTR01]))
+        self.assertEqual(ReviewSnapshot.objects.count(), 2)
+
+    def test_the_report_is_built_from_the_most_recent_morning(self):
+        upload(review_workbook([GTR01]))
+        later = list(GTR01); later[7] = 99.99       # MTD primary moved on
+        upload(review_workbook([later]))
+        d = self.client.get('/api/sales/review/report/?head=GTR01').json()
+        self.assertAlmostEqual(d['head']['mtd_primary'] / 100_000, 99.99, places=2)
+
+    def test_the_upload_says_what_it_replaced(self):
+        upload(a_workbook([a_row()]))
+        d = upload(a_workbook([a_row()])).json()
+        self.assertTrue(any('replaced' in n for n in d['notes']), d['notes'])
