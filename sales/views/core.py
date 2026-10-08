@@ -28,7 +28,7 @@ from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters, detail_qs,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
                       NOT_SALES_ZONES, _not_sales_zone_q, in_plan_scope,
                       FINISHED_GOODS_PREFIX, display_floor,
-                      filters_the_dump_cannot_answer,
+                      filters_the_dump_cannot_answer, why_empty,
                       with_actuals, comparable_window,
                       same_months_last_year)
 
@@ -1006,7 +1006,7 @@ class SalesBreakdownView(SalesIQView):
         # carries zone, state, channel, head, RSM, ASM, item and brand;
         # customer, SKU, category, city and the rest live only on an invoice,
         # and a split by one of those read off the sheet comes back empty.
-        qs, applied, _from_dump = qs_for_dimension(request, field)
+        qs, applied, from_dump = qs_for_dimension(request, field)
         # What the whole slice is worth BEFORE rows with nothing in this
         # column are dropped, so the chart can say what it is leaving out.
         grand = _money(qs.aggregate(v=Sum('net_amount'))['v'])
@@ -1064,6 +1064,8 @@ class SalesBreakdownView(SalesIQView):
                 'count': len(others),
                 'revenue': _money(sum(float(r['revenue'] or 0) for r in others)),
             } if others else None,
+            # Why there is nothing here, when there is nothing here.
+            'empty': why_empty(applied, from_dump, bool(out)),
             'filters': applied,
         })
 

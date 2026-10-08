@@ -642,6 +642,41 @@ def filters_the_dump_cannot_answer(applied):
     return blind
 
 
+def dim_applied(request):
+    """-> the dimension filters in force, without running the whole door.
+
+    The invoice-only panels threw this away and reported only
+    {'source': 'invoice_dump'}, so when one of them came back empty there was
+    nothing left to say WHICH filter emptied it.
+    """
+    _, applied = apply_dim_filters(SalesRecord.objects.none(), request)
+    return applied
+
+
+def why_empty(applied, from_dump, has_rows):
+    """-> why a panel came back with nothing, or None if it did not.
+
+    An empty panel is a sentence the reader completes for themselves, and
+    they complete it wrongly. "No categories" under a Channel filter reads as
+    "nothing sold in GT"; what it actually means is that the invoice file has
+    no channel column, so the question could not be put to it. Those two are
+    opposite in meaning and identical on screen.
+
+    Returned as a reason plus the fields involved rather than as finished
+    text, so the labels stay in the one place that already knows them -- the
+    screen calls a zone a Region, and the backend should not have to.
+    """
+    if has_rows:
+        return None
+    blind = filters_the_dump_cannot_answer(applied) if from_dump else []
+    if blind:
+        return {'reason': 'no_column', 'fields': blind}
+    narrowed = [f for f in applied if f in FILTERABLE]
+    if narrowed:
+        return {'reason': 'filtered_out', 'fields': narrowed}
+    return {'reason': 'nothing_loaded', 'fields': []}
+
+
 def detail_qs(request):
     """The invoice dump alone, under the current filters.
 

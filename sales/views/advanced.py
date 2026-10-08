@@ -20,6 +20,7 @@ from ..ingest import (map_headers, parse_date, parse_num, build_template,
 
 from .. import analytics as AN
 from .filters import (DIMENSIONS, apply_filters, apply_dim_filters, _period_bounds,
+                      why_empty, dim_applied,
                      detail_qs, qs_for_dimension, money_base,
                       with_actuals)
 
@@ -124,8 +125,13 @@ class SalesRFMView(SalesIQView):
     # Recency, frequency and money per CUSTOMER. The review sheet has none.
     def get(self, request):
         qs = detail_qs(request)
-        applied = {'source': 'invoice_dump'}
+        applied = {**dim_applied(request), 'source': 'invoice_dump'}
         data = AN.rfm(qs)
+        # Which filter emptied this, when one did. These panels read the
+        # invoice file alone, and the sheet and the dump do not carry the
+        # same columns -- so a filter the dump has no column for empties them
+        # completely, and an empty panel reads as "nothing sold".
+        data['empty'] = why_empty(applied, True, qs.exists())
         data['filters'] = applied
         return Response(data)
 
@@ -135,8 +141,13 @@ class SalesCohortsView(SalesIQView):
     # The review sheet has no customers at all.
     def get(self, request):
         qs = detail_qs(request)
-        applied = {'source': 'invoice_dump'}
+        applied = {**dim_applied(request), 'source': 'invoice_dump'}
         data = AN.cohorts(qs)
+        # Which filter emptied this, when one did. These panels read the
+        # invoice file alone, and the sheet and the dump do not carry the
+        # same columns -- so a filter the dump has no column for empties them
+        # completely, and an empty panel reads as "nothing sold".
+        data['empty'] = why_empty(applied, True, qs.exists())
         data['filters'] = applied
         return Response(data)
 
@@ -145,8 +156,13 @@ class SalesNewRepeatView(SalesIQView):
     # New or repeat is a fact about a customer. Invoices only.
     def get(self, request):
         qs = detail_qs(request)
-        applied = {'source': 'invoice_dump'}
+        applied = {**dim_applied(request), 'source': 'invoice_dump'}
         data = AN.new_vs_repeat(qs)
+        # Which filter emptied this, when one did. These panels read the
+        # invoice file alone, and the sheet and the dump do not carry the
+        # same columns -- so a filter the dump has no column for empties them
+        # completely, and an empty panel reads as "nothing sold".
+        data['empty'] = why_empty(applied, True, qs.exists())
         data['filters'] = applied
         return Response(data)
 
@@ -179,8 +195,13 @@ class SalesPriceView(SalesIQView):
     # Realised price is revenue over quantity, and the review sheet carries no quantity.
     def get(self, request):
         qs = detail_qs(request)
-        applied = {'source': 'invoice_dump'}
+        applied = {**dim_applied(request), 'source': 'invoice_dump'}
         data = AN.price_realisation(qs)
+        # Which filter emptied this, when one did. These panels read the
+        # invoice file alone, and the sheet and the dump do not carry the
+        # same columns -- so a filter the dump has no column for empties them
+        # completely, and an empty panel reads as "nothing sold".
+        data['empty'] = why_empty(applied, True, qs.exists())
         data['filters'] = applied
         return Response(data)
 
