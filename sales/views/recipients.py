@@ -141,7 +141,12 @@ class SalesRecipientsEditView(SalesIQAdminView):
         rec.save()
         return Response(recipient_json(rec))
 
-    def delete(self, request, pk):
+    def delete(self, request, pk=None):
+        if pk is None:
+            # Clearing the whole list is the owner's call, not an uploader's.
+            self.require_owner(request)
+            n, _ = ReportRecipient.objects.all().delete()
+            return Response({'deleted': n})
         n, _ = ReportRecipient.objects.filter(id=pk).delete()
         if not n:
             return Response({'error': 'Not on the list.'}, status=404)
@@ -158,22 +163,53 @@ class SalesRecipientsTemplateView(SalesIQView):
 
     def get(self, request):
         snap = _latest()
+        rows = _rows(snap)
         buf = io.StringIO()
         w = csv.writer(buf)
+
+        # Instructions in the file rather than on a screen somebody has
+        # closed by the time they are filling it in. Lines starting with #
+        # are ignored on the way back.
+        for line in (
+                '# WHO GETS WHICH REPORT. Fill in the email column and paste',
+                '# the whole file back into SalesIQ. Nothing is guessed from',
+                '# it -- a row with no email is simply not set up yet.',
+                '#',
+                '# role    head    = gets their own territory only',
+                '#         manager = gets one report across the territories',
+                '#                   named in column 2, plus each of those',
+                '#                   heads own files',
+                '#',
+                '# column 2  for a head: leave it as it is -- it is the key',
+                '#                       their report is built from',
+                '#           for a manager: the regions they cover, separated',
+                '#                       by SEMICOLONS, or the word ALL',
+                '#',
+                '# Add as many manager rows as you need. Blank rows are fine.'):
+            w.writerow([line])
+        w.writerow([])
         w.writerow(['role', 'key_or_regions', 'name', 'email'])
-        for r in _rows(snap):
+
+        for r in rows:
             rec = ReportRecipient.objects.filter(
                 role=ReportRecipient.ROLE_HEAD,
-                head_key__in=[r.head_code, r.region]).first()
+                head_key__in=[k for k in (r.head_code, r.region) if k]).first()
             w.writerow(['head', r.head_code or r.region, r.head_name,
                         rec.email if rec else ''])
-        # One worked example rather than a note nobody reads: a manager line
-        # with its regions separated by semicolons, because a comma inside a
-        # CSV cell is the first thing that goes wrong here.
+
         w.writerow([])
-        w.writerow(['# manager rows: put the regions they cover in column 2, '
-                    'separated by semicolons, or the word ALL'])
-        w.writerow(['manager', 'GTR01;GTR02;GTR03 A', 'Example Manager', ''])
+        w.writerow(['# managers below -- column 2 is their regions, '
+                    'semicolon separated, or ALL'])
+        existing = list(ReportRecipient.objects.filter(
+            role=ReportRecipient.ROLE_MANAGER))
+        for rec in existing:
+            w.writerow(['manager',
+                        'ALL' if rec.covers_all else ';'.join(rec.regions or []),
+                        rec.name, rec.email])
+        # Blank rows to type into, so nobody has to work out the shape of a
+        # line from a sentence about it.
+        for _ in range(max(6 - len(existing), 2)):
+            w.writerow(['manager', '', '', ''])
 
         out = HttpResponse(buf.getvalue(), content_type='text/csv; charset=utf-8')
         out['Content-Disposition'] = 'attachment; filename="report_recipients.csv"'
