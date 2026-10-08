@@ -78,6 +78,39 @@ def _csv_stream(text):
     return io.StringIO(text, newline='')
 
 
+# What a spreadsheet writes between cells, in the order we try them. Excel
+# uses the list separator from the machine's locale when it saves a CSV --
+# comma here, semicolon across much of Europe -- and "Text (Tab delimited)"
+# writes tabs. Copying a block to the clipboard always writes tabs.
+DELIMITERS = (',', ';', '	', '|')
+
+
+def rows_from_text(text):
+    """-> [[cell, ...], ...], working out the separator from the text itself.
+
+    The file path used to assume a comma while the paste path looked for
+    tabs, so a semicolon or tab separated FILE came back as one cell per
+    line and every row was reported as "needs at least four columns" -- for
+    a list that was filled in perfectly.
+
+    Chosen on the line that yields the most columns rather than on counts of
+    the character, so a comma inside a name cannot outvote the real
+    separator.
+    """
+    lines = [l for l in text.splitlines() if l.strip()][:12]
+    if not lines:
+        return []
+    best, best_cols = ',', 0
+    for d in DELIMITERS:
+        try:
+            cols = max(len(r) for r in csv.reader(lines, delimiter=d))
+        except csv.Error:
+            continue
+        if cols > best_cols:
+            best, best_cols = d, cols
+    return list(csv.reader(_csv_stream(text), delimiter=best))
+
+
 def _read_workbook(f):
     """-> [[cell, ...], ...] from an uploaded .xlsx, or from a .csv.
 
@@ -97,7 +130,7 @@ def _read_workbook(f):
 
     name = (getattr(f, 'name', '') or '').lower()
     if name.endswith('.csv') or name.endswith('.txt'):
-        return list(csv.reader(_csv_stream(as_text(f.read()))))
+        return rows_from_text(as_text(f.read()))
 
     try:
         wb = openpyxl.load_workbook(f, data_only=True, read_only=True)
@@ -107,7 +140,7 @@ def _read_workbook(f):
         # a list somebody filled in correctly, and refusing it over its
         # extension is the kind of pedantry that gets worked around.
         f.seek(0)
-        return list(csv.reader(_csv_stream(as_text(f.read()))))
+        return rows_from_text(as_text(f.read()))
     out = []
     # The first sheet only. The second is the instructions, and reading it
     # would report every sentence on it as a line that could not be parsed.
@@ -269,13 +302,7 @@ class SalesRecipientsImportView(SalesIQAdminView):
             if not text.strip():
                 return Response({'error': 'Nothing was uploaded or pasted.'},
                                 status=400)
-            # Tab separated as well as comma. Copying a block out of Excel
-            # puts TABS on the clipboard, and read as CSV every row came back
-            # as one cell -- "needs at least four columns", nineteen times
-            # over, for a paste that was perfectly correct.
-            sample = text.splitlines()[0] if text.splitlines() else ''
-            delim = '	' if sample.count('	') >= sample.count(',') and '	' in sample else ','
-            lines = list(csv.reader(_csv_stream(text), delimiter=delim))
+            lines = rows_from_text(text)
 
         snap = _latest()
         rows = _rows(snap)
@@ -289,7 +316,10 @@ class SalesRecipientsImportView(SalesIQAdminView):
             if cells[0].lower() in ('role', 'r'):
                 continue                      # the header row
             if len(cells) < 4:
-                skipped.append(f'line {n}: needs at least four columns')
+                skipped.append(
+                    f'line {n}: this row has {len(cells)} column(s), not the '
+                    f'six the list carries. Expected role, key, region, name, '
+                    f'email, regions_covered.')
                 continue
 
             # Two shapes are accepted. The workbook has one column per job --
@@ -351,6 +381,19 @@ class SalesRecipientsImportView(SalesIQAdminView):
                     email=email, role='head', head_key=key,
                     defaults={'name': name, 'is_active': True})
             added, updated = added + bool(made), updated + (not made)
+
+        # Every row failing the same way is not sixteen mistakes, it is one:
+        # the file was not read in the shape it was written. Said once, at
+        # the top, rather than left to be inferred from a wall of identical
+        # lines.
+        if not added and not updated and len(skipped) > 2 and all(
+                'column(s), not the six' in m for m in skipped):
+            return Response({
+                'error': 'None of the rows came out in the right shape, so '
+                         'nothing was read. Upload the file as it was '
+                         'downloaded (.xlsx), or save it as CSV and upload '
+                         'that — do not paste it in.',
+                'added': 0, 'updated': 0, 'skipped': skipped[:5]}, status=400)
 
         return Response({'added': added, 'updated': updated, 'skipped': skipped})
 

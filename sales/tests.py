@@ -3887,6 +3887,47 @@ class WhoGetsWhichReport(TestCase):
                              content_type='application/json').json()
         self.assertEqual(d['added'], 2, d)
 
+    def _csv_upload(self, text, name='report recipients.csv'):
+        buf = io.BytesIO(text.encode('utf-8'))
+        buf.name = name
+        return self.client.post('/api/sales/recipients/import/',
+                                {'file': buf}).json()
+
+    def test_a_semicolon_separated_file_is_read(self):
+        """Excel uses the machine's list separator when it saves a CSV --
+        comma here, semicolon across much of Europe. Assumed to be a comma,
+        every row came back as a single cell."""
+        d = self._csv_upload(
+            'role;key;region;name;email;regions_covered\r\n'
+            'head;GTR01;GTR01;Mohinder Sharma;m@apisindia.com;\r\n'
+            'head;GTR04 B;GTR04 B;Gulshan Kumar;g@apisindia.com;\r\n')
+        self.assertEqual(d['added'], 2, d)
+
+    def test_a_tab_separated_file_is_read(self):
+        """"Text (Tab delimited)" is one of the save-as options."""
+        d = self._csv_upload(
+            'role\tkey\tregion\tname\temail\tregions_covered\r\n'
+            'head\tGTR01\tGTR01\tMohinder Sharma\tm@apisindia.com\t\r\n')
+        self.assertEqual(d['added'], 1, d)
+
+    def test_a_comma_inside_a_name_cannot_outvote_the_real_separator(self):
+        """Counting the character would pick the comma here. The separator is
+        whichever one yields the most columns."""
+        d = self._csv_upload(
+            'role;key;region;name;email;regions_covered\r\n'
+            'head;GTR01;GTR01;"Sharma, Mohinder";m@apisindia.com;\r\n')
+        self.assertEqual(d['added'], 1, d)
+
+    def test_every_row_failing_the_same_way_is_reported_as_one_fault(self):
+        """Sixteen identical complaints is not sixteen mistakes, it is one:
+        the file was not read in the shape it was written."""
+        r = self.client.post(
+            '/api/sales/recipients/import/',
+            {'text': '\n'.join('head|GTR0%d|x' % i for i in range(1, 9))},
+            content_type='application/json')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('nothing was read', r.json()['error'])
+
     def test_a_manager_with_no_territory_is_reported_not_silently_added(self):
         """An empty coverage list means no territories, never all of them --
         so a manager row with an email and no regions is somebody who would
