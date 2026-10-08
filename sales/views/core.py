@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
 from ..models import (SalesUpload, SalesRecord, sync_actual_source, sheet_months,
-                      elected_sources)
+                      elected_sources, ReviewSnapshot, ReviewRow)
 from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       NAME_FIELDS, normalise_name, clean_cell,
                       is_return_remark, is_not_a_sale, is_vacant,
@@ -20,6 +20,7 @@ from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       parse_bool, is_return_type, partition_unknown,
                       state_from_code, state_from_subregion, find_header_row)
 from .. import aop as AOP
+from .. import review as REVIEW
 
 from ..forecasting import forecast_series, forecast_from_plan
 from .. import status as STATUS
@@ -122,6 +123,163 @@ def _reconcile_against_sheet(upload, watermark, stated, scale):
             f'loaded as sales: it measures a different thing from the primary '
             f'figures beside it and adding the two would double the month.')
     return out
+
+
+def _ingest_review(request, upload, ws, header_row, header_row_index=1):
+    """Load the daily GTR-head review sheet into its own snapshot tables.
+
+    Not into SalesRecord. Every money column here is a sum of transactions
+    already held -- MTD contains today's invoices, YTD contains MTD, FY
+    contains YTD -- so loading it as sales would report the same rupee three
+    times and inflate every headline on the dashboard the moment somebody
+    uploaded the morning review.
+    """
+    cols, checks, as_of_month, unknown = REVIEW.map_columns(header_row)
+
+    missing = [f for f in ('head_name', 'mtd_primary', 'month_target') if f not in cols]
+    if missing:
+        return Response({'error': 'This looks like the daily review sheet but is '
+                                  'missing ' + ', '.join(missing).replace('_', ' ') +
+                                  '. Expected columns like "GTR HEAD", '
+                                  '"MTD Sep-26 PRI SALES" and "Sep-26 AOP".'},
+                        status=400)
+
+    # The day the sheet describes is not written on it anywhere -- only the
+    # month is, in the column headers. It can be supplied with the upload;
+    # otherwise today, which is right for a sheet circulated this morning and
+    # wrong for one uploaded late, so it is stored where it can be corrected.
+    as_of_date = parse_date(request.query_params.get('as_of')) or date.today()
+
+    snapshot = ReviewSnapshot.objects.create(
+        upload=upload,
+        filename=(upload.filename or '')[:255],
+        sheet_name=(ws.title or '')[:120],
+        uploaded_by=str(request.query_params.get('user') or '')[:200],
+        as_of_month=as_of_month,
+        as_of_date=as_of_date,
+    )
+
+    # Same reasoning as the AOP sheet: this file is written in lakhs and the
+    # invoice dump beside it in rupees, so the unit is settled before a single
+    # row is stored. Nothing is written until it is known -- rows are held
+    # here and scaled on the way out.
+    pending, sample = [], []
+    stated = {}
+    channel = region = ''
+    skipped = 0
+
+    for row_no, row in enumerate(
+            ws.iter_rows(min_row=header_row_index + 1, values_only=True),
+            start=header_row_index + 1):
+        if not row or not any(v is not None and str(v).strip() != '' for v in row):
+            continue
+
+        vals = REVIEW.read_row(row, cols)
+
+        # Merged cells read as blank below the first row of the merge, so a
+        # split territory's second line arrives with no region at all.
+        channel = REVIEW.carry_forward(vals.get('channel'), channel)
+        region = REVIEW.carry_forward(vals.get('region'), region)
+
+        total_row = REVIEW.is_total_row(row, cols)
+        if total_row:
+            # The sheet's own addition, kept to check ours against.
+            for name, ci in checks.items():
+                if ci < len(row):
+                    stated.setdefault(name, parse_num(row[ci], 0.0))
+            for f in REVIEW.MONEY_FIELDS:
+                stated.setdefault('total_' + f, 0.0)
+            label = (vals.get('channel') or vals.get('region')
+                     or vals.get('head_name') or '')
+            if 'grand' in label.lower():
+                for f in REVIEW.MONEY_FIELDS:
+                    stated['total_' + f] = vals.get(f, 0.0)
+
+        name = (vals.get('head_name') or '').strip()
+        money = [vals.get(f, 0.0) for f in REVIEW.MONEY_FIELDS]
+        if not total_row and not name and not any(money):
+            skipped += 1
+            continue
+
+        sample.extend(abs(v) for v in money if v)
+        pending.append((row_no, total_row, channel, region, name, vals))
+
+    if not pending:
+        snapshot.delete()
+        return Response({'error': 'No rows found under the header on this sheet.'},
+                        status=400)
+
+    scale, unit = AOP.detect_money_scale(sample)
+    snapshot.source_unit = unit
+
+    # The head's identity, from the AOP sheet's own ID columns. A name is not
+    # an identity -- it is spelled several ways across a year of exports --
+    # and a report addressed to a spelling goes to nobody.
+    codes = {}
+    for nm, code in (SalesRecord.objects
+                     .filter(source=SalesRecord.SOURCE_PLAN)
+                     .exclude(rsm_code='').exclude(rsm='')
+                     .values_list('rsm', 'rsm_code').distinct()):
+        codes.setdefault(normalise_name(nm).lower(), code)
+
+    rows = []
+    for row_no, total_row, ch, rg, name, vals in pending:
+        rows.append(ReviewRow(
+            snapshot=snapshot,
+            channel=(ch or '')[:60],
+            region=(rg or '')[:60],
+            head_name=normalise_name(name)[:200],
+            head_code=codes.get(normalise_name(name).lower(), '')[:60],
+            sfo_count=vals.get('sfo_count', 0),
+            is_total=total_row,
+            row_no=row_no,
+            **{f: round(vals.get(f, 0.0) * scale, 2) for f in REVIEW.MONEY_FIELDS}
+        ))
+    ReviewRow.objects.bulk_create(rows, batch_size=500)
+
+    heads = [r for r in rows if not r.is_total]
+    snapshot.row_count = len(heads)
+
+    warnings, notes = [], []
+    if unknown:
+        warnings.append('Columns not recognised and not loaded: ' + ', '.join(unknown[:8]))
+    if as_of_month is None:
+        warnings.append('No month could be read from the column headers, so this '
+                        'snapshot is not filed under a month. Expected a column '
+                        'headed like "Sep-26 AOP".')
+
+    # Our addition against the sheet's own Grand Total. A mismatch is reported
+    # rather than resolved: the sheet is what the business circulated, and an
+    # importer that quietly prefers its own sum is an importer nobody can
+    # check.
+    for field in ('mtd_primary', 'ytd_actual', 'fy_target'):
+        claimed = stated.get('total_' + field)
+        if not claimed:
+            continue
+        ours = sum(float(getattr(r, field)) for r in heads)
+        claimed = claimed * scale
+        if claimed and abs(ours - claimed) > max(abs(claimed) * 0.005, 1.0):
+            warnings.append(
+                f'{field.replace("_", " ")}: the head rows add up to '
+                f'{ours:,.0f} but the sheet\'s Grand Total says {claimed:,.0f}.')
+
+    notes.append(f'{len(heads)} heads read from "{ws.title}"'
+                 + (f', {as_of_month:%B %Y}' if as_of_month else '')
+                 + f'; figures read as {unit}.')
+    if skipped:
+        notes.append(f'{skipped} blank rows skipped.')
+    vacant = sum(1 for r in heads if not r.head_code)
+    if vacant:
+        notes.append(f'{vacant} of {len(heads)} heads could not be matched to an '
+                     f'APIS ID on the AOP sheet, so their report cannot be '
+                     f'addressed automatically yet.')
+
+    snapshot.warnings, snapshot.notes = warnings, notes
+    snapshot.save(update_fields=['row_count', 'source_unit', 'warnings', 'notes'])
+
+    return Response({'rows': len(heads), 'skipped': skipped,
+                     'warnings': warnings, 'notes': notes,
+                     'review_snapshot': snapshot.id})
 
 
 def _ingest_aop(request, upload, ws, header_row, header_row_index=1):
@@ -334,10 +492,14 @@ class SalesUploadView(SalesIQAdminView):
             header_row, header_at = find_header_row(
                 ws, recognises=lambda r: max(len(map_headers(r)[0]),
                                              len(AOP.map_columns(r)[0])
-                                             + len(AOP.map_columns(r)[1])))
+                                             + len(AOP.map_columns(r)[1]),
+                                             len(REVIEW.map_columns(r)[0])
+                                             + len(REVIEW.map_columns(r)[1])))
             if header_row is None:
                 continue        # an empty tab is not an error
-            if AOP.looks_like_aop_sheet(header_row):
+            if REVIEW.looks_like_review_sheet(header_row):
+                resp = _ingest_review(request, upload, ws, header_row, header_at)
+            elif AOP.looks_like_aop_sheet(header_row):
                 resp = _ingest_aop(request, upload, ws, header_row, header_at)
             else:
                 resp = _ingest_dump(request, upload, ws, header_row, header_at)

@@ -7,6 +7,8 @@ from .views import (
     SalesSeasonalityView, SalesHeatmapView, SalesRFMView, SalesCohortsView,
     SalesNewRepeatView, SalesYoYView, SalesPacingView, SalesPriceView,
     SalesLoginView, SalesOrgView,
+    SalesReviewView, SalesReviewReportView, SalesReviewDeleteView,
+    SalesReviewReportHtmlView, SalesReviewReportBundleView,
 )
 
 urlpatterns = [
@@ -37,4 +39,10 @@ urlpatterns = [
     path('price/',       SalesPriceView.as_view()),
     # The selling organisation: who reports to whom, and what each sold.
     path('org/',         SalesOrgView.as_view()),
+    # The daily GTR-head review sheet, and one head's own report off it.
+    path('review/',             SalesReviewView.as_view()),
+    path('review/report/',      SalesReviewReportView.as_view()),
+    path('review/report/file/', SalesReviewReportHtmlView.as_view()),
+    path('review/bundle/',      SalesReviewReportBundleView.as_view()),
+    path('review/<int:pk>/',    SalesReviewDeleteView.as_view()),
 ]

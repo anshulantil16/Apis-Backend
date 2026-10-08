@@ -321,3 +321,154 @@ def elected_sources():
         if r['period']:
             out[r['period']] = 'invoice'
     return out
+
+
+# ── the daily review sheet ────────────────────────────────────────────────
+#
+# A third file, beside the AOP sheet and the invoice dump: the one circulated
+# each morning, one row per GTR head, carrying that head's MTD / YTD / FY
+# position. It is deliberately NOT stored as SalesRecord rows.
+#
+# Every money figure on it is a sum of transactions already in this database.
+# Loading it as sales would report the same rupee two and three times over --
+# once as the invoice line, again inside MTD, again inside YTD -- and every
+# headline on the dashboard would inflate the moment somebody uploaded the
+# morning review.
+#
+# What it is instead: the business's own published statement of where each
+# head stood on a given day. That has value the transactions do not have --
+# it is what was circulated and acted on -- and it is what the per-person
+# report is generated from. So it lives in its own two tables, read by the
+# report and by nothing on the dashboard.
+class ReviewSnapshot(models.Model):
+    """One upload of the daily GTR-head review sheet."""
+    upload = models.ForeignKey(SalesUpload, on_delete=models.CASCADE,
+                               related_name='review_snapshots',
+                               null=True, blank=True)
+    filename    = models.CharField(max_length=255, blank=True)
+    sheet_name  = models.CharField(max_length=120, blank=True)
+    uploaded_by = models.CharField(max_length=200, blank=True)
+
+    # The month the MTD columns describe, read off the sheet's own headers
+    # ("Sep-26 AOP", "MTD Sep-26 PRI SALES") rather than from the clock, so
+    # a sheet uploaded late still files itself under the month it reports.
+    as_of_month = models.DateField(null=True, blank=True, db_index=True)
+    # The day it describes is not on the sheet. Defaults to the upload date
+    # and can be corrected, because "as at" is the one thing a report sent to
+    # a person must not get wrong.
+    as_of_date  = models.DateField(null=True, blank=True, db_index=True)
+
+    # 'lakhs' or 'rupees' -- what the file was written in. Detected, not
+    # assumed; everything below is stored in rupees whichever it was.
+    source_unit = models.CharField(max_length=20, blank=True)
+
+    row_count  = models.IntegerField(default=0)
+    warnings   = models.JSONField(default=list, blank=True)
+    notes      = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-as_of_date', '-created_at']
+
+    def __str__(self):
+        return f"review {self.as_of_date or self.created_at:%Y-%m-%d} — {self.row_count} heads"
+
+
+class ReviewRow(models.Model):
+    """One GTR head's line on the review sheet.
+
+    Only the sheet's INPUT columns are stored. Every percentage and backlog
+    on it -- AOP ACH %, Growth Over LM, Backlog TGT FTM / YTD / FY -- is
+    arithmetic over the columns beside it, and is recomputed on read. Keeping
+    a derived figure next to the figures it derives from is how the report
+    and the sheet end up disagreeing after somebody edits one cell.
+    """
+    snapshot = models.ForeignKey(ReviewSnapshot, on_delete=models.CASCADE,
+                                 related_name='rows')
+
+    # Who and where. channel is GT / OT; region is the GTR code for GT and
+    # the format name (MT, E-COM, Govt. Bus.) for OT.
+    channel   = models.CharField(max_length=60, blank=True, db_index=True)
+    region    = models.CharField(max_length=60, blank=True, db_index=True)
+    head_name = models.CharField(max_length=200, blank=True, db_index=True)
+    # Carried over from the AOP sheet's ID columns where the name matches, so
+    # a report can be addressed to a person rather than to a spelling.
+    head_code = models.CharField(max_length=60, blank=True, db_index=True)
+
+    sfo_count = models.IntegerField(default=0)
+
+    # Rupees. Month to date.
+    lmtd              = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    month_target      = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    yesterday_billing = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    mtd_primary       = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    mtd_secondary     = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    # Rupees. April to date, and the full financial year.
+    ytd_target = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    ytd_actual = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    fy_target  = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    fy_actual  = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    # A subtotal line (GT Total / OT Total / Grand Total). Kept rather than
+    # dropped, because it is the sheet's own statement of the total and so is
+    # what the import checks its own addition against -- but never mixed in
+    # with the head rows it is made of.
+    is_total = models.BooleanField(default=False, db_index=True)
+    row_no   = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['row_no']
+        indexes = [models.Index(fields=['snapshot', 'is_total'])]
+
+    # ── everything the sheet derives, derived ─────────────────────────────
+    @staticmethod
+    def _pct(part, whole):
+        """A percentage, or None where there is nothing to measure against.
+
+        Zero is not the answer to "what percent of no plan": the handover row
+        on the real sheet carries sales against a blank AOP, and reporting
+        that as 0% tells the person they achieved nothing.
+        """
+        whole = float(whole or 0)
+        if whole == 0:
+            return None
+        return round(float(part or 0) / whole * 100, 1)
+
+    @property
+    def month_pct(self):
+        return self._pct(self.mtd_primary, self.month_target)
+
+    @property
+    def ytd_pct(self):
+        return self._pct(self.ytd_actual, self.ytd_target)
+
+    @property
+    def fy_pct(self):
+        """Progress through the annual plan, NOT performance against it.
+
+        FY ACH equals YTD ACH all year -- nothing has been sold past today --
+        so this reads low by construction until March. It is the one figure
+        on the sheet most often mistaken for a score.
+        """
+        return self._pct(self.fy_actual, self.fy_target)
+
+    @property
+    def growth_pct(self):
+        return None if not float(self.lmtd or 0) else round(
+            (float(self.mtd_primary) / float(self.lmtd) - 1) * 100, 1)
+
+    @property
+    def month_backlog(self):
+        return float(self.month_target) - float(self.mtd_primary)
+
+    @property
+    def ytd_backlog(self):
+        return float(self.ytd_target) - float(self.ytd_actual)
+
+    @property
+    def fy_backlog(self):
+        return float(self.fy_target) - float(self.fy_actual)
+
+    def __str__(self):
+        return f"{self.region} {self.head_name}"

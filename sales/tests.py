@@ -34,10 +34,13 @@ class TestCase(_TestCase):
     client_class = Client
 
 from sales import aop as AOP
+from sales import review as REVIEW
+from sales import report as REPORT
 
 from sales.ingest import (PRE_SALES_DUMP, build_template, is_return_type,
                           map_headers, parse_bool)
-from sales.models import SalesRecord, SalesUpload
+from sales.models import (SalesRecord, SalesUpload,
+                          ReviewSnapshot, ReviewRow)
 
 
 def header_names():
@@ -3278,3 +3281,293 @@ class TheRealReviewSheet(TestCase):
         upload(aop_workbook([aop_row(ly=-0.80)]))
         ly = SalesRecord.objects.get(period=date(2025, 4, 1))
         self.assertLess(float(ly.measured_amount), 0)
+
+
+# -- the daily GTR-head review sheet ----------------------------------------
+REVIEW_HEADERS = [
+    'CHANEL TYPE', 'REGION', 'GTR HEAD', 'NO OF SFO', 'LMTD', 'Sep-26 AOP',
+    'YESTERDAY BILLING', 'MTD Sep-26 PRI SALES', 'MTD Sec sales', 'AOP ACH %',
+    'Growth Over LM', 'Backlog TGT FTM', 'YTD AOP', 'YTD ACH', 'YTD ACH %',
+    'BACKLOG TGT YTD', "FY'26-27 AOP", "FY'26-27 ACH", 'FY ACH %', 'BACKLOG FY',
+]
+
+# Mohinder Sharma's line, exactly as it reads on the sheet (lakhs).
+GTR01 = ['GT', 'GTR01', 'MOHINDER SHARMA', 20, 57.61, 114.08, 21.09, 83.91,
+         77.50, 0.74, 0.46, 30.17, 619.69, 300.75, 0.49, 318.94,
+         1423.73, 300.75, 0.21, 1122.98]
+# Gulshan Kumar, whose REGION cell is merged upward on the real sheet.
+GTR04B = ['GT', 'GTR04 B', 'GULSHAN KUMAR', 23, 86.86, 91.44, 6.25, 110.33,
+          94.54, 1.21, 0.27, -18.89, 496.69, 454.59, 0.92, 42.10,
+          1141.15, 454.59, 0.40, 686.56]
+
+
+def review_workbook(rows, headers=None):
+    """A workbook shaped like the real review file: a merged banner row above
+    the headers, then the head rows, then the subtotals."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append([None, None, None, None, "MTD FOR SEPT'26"])
+    ws.append(list(headers or REVIEW_HEADERS))
+    for r in rows:
+        ws.append(list(r))
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+class TheDailyReviewSheet(TestCase):
+
+    def test_it_is_recognised_as_its_own_sheet(self):
+        self.assertTrue(REVIEW.looks_like_review_sheet(REVIEW_HEADERS))
+
+    def test_it_is_not_mistaken_for_the_aop_sheet_or_the_dump(self):
+        """It carries LMTD, YTD AOP and MTD SEC SALES, which the AOP sheet
+        carries too -- so those cannot be what tells them apart."""
+        self.assertFalse(AOP.looks_like_aop_sheet(REVIEW_HEADERS))
+        self.assertFalse(REVIEW.looks_like_review_sheet(AOP_HEADERS))
+
+    def test_the_month_is_read_off_the_column_headers(self):
+        _, _, as_of, _ = REVIEW.map_columns(REVIEW_HEADERS)
+        self.assertEqual(as_of, date(2026, 9, 1))
+
+    def test_every_column_on_the_sheet_is_understood(self):
+        _, _, _, unknown = REVIEW.map_columns(REVIEW_HEADERS)
+        self.assertEqual(unknown, [])
+
+    def test_the_mtd_primary_column_carries_the_month_in_its_name(self):
+        cols, _, _, _ = REVIEW.map_columns(REVIEW_HEADERS)
+        self.assertEqual(cols['mtd_primary'], REVIEW_HEADERS.index('MTD Sep-26 PRI SALES'))
+        self.assertEqual(cols['month_target'], REVIEW_HEADERS.index('Sep-26 AOP'))
+
+    def test_the_fy_columns_survive_the_apostrophe_and_the_dash(self):
+        cols, _, _, _ = REVIEW.map_columns(REVIEW_HEADERS)
+        self.assertIn('fy_target', cols)
+        self.assertIn('fy_actual', cols)
+
+    def test_it_loads_into_its_own_tables_and_not_into_sales(self):
+        """The whole point. Every figure on this sheet is a sum of rows
+        already held, so one loaded as a sale is a rupee counted twice."""
+        before = SalesRecord.objects.count()
+        upload(review_workbook([GTR01, GTR04B]))
+        self.assertEqual(SalesRecord.objects.count(), before)
+        self.assertEqual(ReviewRow.objects.filter(is_total=False).count(), 2)
+
+    def test_lakhs_are_converted_to_rupees_like_the_aop_sheet(self):
+        upload(review_workbook([GTR01, GTR04B]))
+        snap = ReviewSnapshot.objects.first()
+        self.assertEqual(snap.source_unit, 'lakhs')
+        me = snap.rows.get(region='GTR01')
+        self.assertEqual(float(me.mtd_primary), 83.91 * 100_000)
+        self.assertEqual(float(me.fy_target), 1423.73 * 100_000)
+
+    def test_the_percentages_we_compute_match_the_ones_the_sheet_prints(self):
+        upload(review_workbook([GTR01]))
+        me = ReviewSnapshot.objects.first().rows.get(region='GTR01')
+        self.assertEqual(round(me.month_pct), 74)      # sheet: 74%
+        self.assertAlmostEqual(me.ytd_pct, 48.5, places=1)   # sheet prints 49%
+        self.assertEqual(round(me.fy_pct), 21)         # sheet: 21%
+        self.assertEqual(round(me.growth_pct), 46)     # sheet: 46%
+
+    def test_the_backlogs_we_compute_match_the_ones_the_sheet_prints(self):
+        upload(review_workbook([GTR01]))
+        me = ReviewSnapshot.objects.first().rows.get(region='GTR01')
+        self.assertAlmostEqual(me.month_backlog / 100_000, 30.17, places=2)
+        self.assertAlmostEqual(me.ytd_backlog / 100_000, 318.94, places=2)
+        self.assertAlmostEqual(me.fy_backlog / 100_000, 1122.98, places=2)
+
+    def test_a_backlog_can_be_negative_when_the_head_is_ahead(self):
+        upload(review_workbook([GTR04B]))
+        me = ReviewSnapshot.objects.first().rows.get(region='GTR04 B')
+        self.assertAlmostEqual(me.month_backlog / 100_000, -18.89, places=2)
+
+    def test_sales_against_no_plan_are_not_reported_as_zero_percent(self):
+        """The handover row: ARUN MISHRA (ARNAB GHOSH) bills 30.30 against a
+        blank AOP. Reported as 0% it tells the person they achieved nothing."""
+        handover = ['GT', '', 'ARUN MISHRA ( ARNAB GHOSH)', 0, 0.0, 0.0, 15.22,
+                    30.30, 0.0, 0, 0, -30.30, 0.0, 30.30, 0, -30.30,
+                    0.0, 30.30, 0, -30.30]
+        upload(review_workbook([GTR01, handover]))
+        me = ReviewSnapshot.objects.first().rows.get(head_name__startswith='ARUN')
+        self.assertIsNone(me.month_pct)
+        self.assertIsNone(me.growth_pct)
+
+    def test_a_merged_region_cell_is_carried_down_to_the_row_beneath_it(self):
+        """GTR04 A spans two rows on the real sheet, so the second arrives
+        with no region at all and would drop out of every grouping."""
+        handover = ['', '', 'ARUN MISHRA ( ARNAB GHOSH)', 0, 0.0, 0.0, 15.22,
+                    30.30, 0.0, 0, 0, -30.30, 0.0, 30.30, 0, -30.30,
+                    0.0, 30.30, 0, -30.30]
+        upload(review_workbook([GTR01, handover]))
+        me = ReviewSnapshot.objects.first().rows.get(head_name__startswith='ARUN')
+        self.assertEqual(me.region, 'GTR01')
+        self.assertEqual(me.channel, 'GT')
+
+    def test_subtotal_rows_are_kept_apart_from_the_heads_they_are_made_of(self):
+        total = ['GT Total', '', '', 43, 144.47, 205.52, 27.34, 194.24,
+                 172.04, 0.95, 0.34, 11.28, 1116.38, 755.34, 0.68, 361.04,
+                 2564.88, 755.34, 0.29, 1809.54]
+        upload(review_workbook([GTR01, GTR04B, total]))
+        snap = ReviewSnapshot.objects.first()
+        self.assertEqual(snap.rows.filter(is_total=True).count(), 1)
+        self.assertEqual(snap.row_count, 2)
+
+    def test_the_head_is_matched_to_an_apis_id_from_the_aop_sheet(self):
+        """A name is not an identity. A report addressed to a spelling goes
+        to nobody."""
+        upload(aop_workbook([aop_row(**{'GTR HEAD': 'MOHINDER SHARMA',
+                                        'APIS ID': 'SL04492'})]))
+        upload(review_workbook([GTR01]))
+        me = ReviewSnapshot.objects.first().rows.get(region='GTR01')
+        self.assertEqual(me.head_code, 'SL04492')
+
+    def test_the_report_endpoint_answers_for_one_head(self):
+        upload(review_workbook([GTR01, GTR04B]))
+        d = self.client.get('/api/sales/review/report/?head=GTR01').json()
+        self.assertEqual(d['head']['head_name'], 'Mohinder Sharma')
+        self.assertEqual(round(d['head']['month_pct']), 74)
+
+    def test_the_report_says_what_the_rest_of_the_year_has_to_run_at(self):
+        """The most useful number on the sheet, and the one it does not
+        print: 1,122.98 of backlog over the six months from October."""
+        upload(review_workbook([GTR01]))
+        d = self.client.get('/api/sales/review/report/?head=GTR01').json()
+        self.assertEqual(d['year']['months_elapsed'], 6)
+        self.assertEqual(d['year']['months_remaining'], 6)
+        self.assertAlmostEqual(d['year']['required_monthly'] / 100_000,
+                               1122.98 / 6, places=1)
+
+    def test_the_report_ranks_a_head_only_against_its_own_channel(self):
+        """A GT head measured against E-COM, whose field force is zero and
+        whose plan is phased differently, is a comparison that reads as a
+        judgement and means nothing."""
+        ecom = ['OT', 'E-COM', 'HARI OM SOLANKI', 0, 225.46, 260.39, 12.46,
+                274.14, 274.14, 1.05, 0.22, -13.74, 1555.72, 1102.77, 0.71,
+                452.95, 3843.91, 1102.77, 0.29, 2741.14]
+        upload(review_workbook([GTR01, GTR04B, ecom]))
+        d = self.client.get('/api/sales/review/report/?head=GTR01').json()
+        self.assertEqual(d['rank']['month_pct']['of'], 2)
+        self.assertEqual(d['rank']['month_pct']['position'], 2)
+
+    def test_a_head_can_be_asked_for_by_id_region_or_name(self):
+        upload(review_workbook([GTR01]))
+        for key in ('GTR01', 'MOHINDER SHARMA', 'mohinder sharma'):
+            r = self.client.get(f'/api/sales/review/report/?head={key}')
+            self.assertEqual(r.status_code, 200, key)
+
+    def test_asking_for_a_head_that_is_not_on_the_sheet_says_so(self):
+        upload(review_workbook([GTR01]))
+        r = self.client.get('/api/sales/review/report/?head=GTR99')
+        self.assertEqual(r.status_code, 404)
+
+    def test_the_import_reports_a_disagreement_with_the_sheets_own_total(self):
+        """An importer that quietly prefers its own sum is one nobody can
+        check."""
+        wrong = ['Grand Total', '', '', 43, 144.47, 205.52, 27.34, 999.99,
+                 172.04, 0, 0, 0, 1116.38, 755.34, 0, 0,
+                 2564.88, 755.34, 0, 0]
+        r = upload(review_workbook([GTR01, GTR04B, wrong]))
+        snap = ReviewSnapshot.objects.first()
+        self.assertTrue(any('Grand Total' in w for w in snap.warnings), snap.warnings)
+
+    def test_the_snapshot_is_filed_under_the_month_the_sheet_reports(self):
+        """Not under the day it was uploaded -- a sheet uploaded late still
+        belongs to the month it describes."""
+        upload(review_workbook([GTR01]))
+        self.assertEqual(ReviewSnapshot.objects.first().as_of_month, date(2026, 9, 1))
+
+    def test_deleting_a_snapshot_takes_its_rows_with_it(self):
+        upload(review_workbook([GTR01, GTR04B]))
+        snap = ReviewSnapshot.objects.first()
+        self.client.delete(f'/api/sales/review/{snap.id}/')
+        self.assertEqual(ReviewRow.objects.count(), 0)
+
+
+class TheReportFile(TestCase):
+    """The file that actually gets sent to a person."""
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04B]))
+
+    def test_it_renders_a_whole_html_document(self):
+        r = self.client.get('/api/sales/review/report/file/?head=GTR01')
+        self.assertEqual(r.status_code, 200)
+        body = r.content.decode()
+        self.assertTrue(body.startswith('<!doctype html>'))
+        self.assertIn('Mohinder Sharma', body)
+
+    def test_it_is_self_contained(self):
+        """It has to survive being emailed, opened offline and printed. A
+        report that needs the network to render arrives blank."""
+        body = self.client.get('/api/sales/review/report/file/?head=GTR01').content.decode()
+        self.assertNotIn('<script', body.lower())
+        self.assertNotIn('http://', body)
+        self.assertNotIn('<link', body.lower())
+
+    def test_the_figures_in_the_file_are_the_sheets_own(self):
+        body = self.client.get('/api/sales/review/report/file/?head=GTR01').content.decode()
+        for figure in ('83.91', '114.08', '619.69', '300.75', '1,423.73',
+                       '1,122.98', '30.17', '318.94'):
+            self.assertIn(figure, body, figure)
+
+    def test_it_says_what_the_rest_of_the_year_needs(self):
+        """1,122.98 over six months. The number the sheet does not print."""
+        body = self.client.get('/api/sales/review/report/file/?head=GTR01').content.decode()
+        self.assertIn('187.16', body)
+
+    def test_it_splits_the_annual_backlog_into_its_two_halves(self):
+        """804.04 is the months ahead carrying their own plan; 318.94 is
+        catching up on months already closed. The sheet prints only the sum,
+        and they are different problems."""
+        body = self.client.get('/api/sales/review/report/file/?head=GTR01').content.decode()
+        self.assertIn('804.04', body)
+        self.assertIn('134.01', body)      # required just to stay on plan
+
+    def test_downloading_names_the_file_after_the_head_and_the_date(self):
+        r = self.client.get('/api/sales/review/report/file/?head=GTR01&download=1')
+        self.assertIn('attachment', r['Content-Disposition'])
+        self.assertIn('GTR01', r['Content-Disposition'])
+
+    def test_the_bundle_holds_one_file_per_head(self):
+        """One file each rather than one document with everybody in it: a
+        head who can read the whole sheet is being shown their peers'
+        numbers whether or not that was intended."""
+        import zipfile, io as _io
+        r = self.client.get('/api/sales/review/bundle/')
+        self.assertEqual(r.status_code, 200)
+        z = zipfile.ZipFile(_io.BytesIO(r.content))
+        self.assertEqual(len(z.namelist()), 2)
+        self.assertTrue(all(n.endswith('.html') for n in z.namelist()))
+
+    def test_each_file_in_the_bundle_is_that_heads_own_report(self):
+        import zipfile, io as _io
+        z = zipfile.ZipFile(_io.BytesIO(self.client.get('/api/sales/review/bundle/').content))
+        mine = next(n for n in z.namelist() if 'GTR01' in n)
+        body = z.read(mine).decode()
+        self.assertIn('Mohinder Sharma', body)
+        self.assertNotIn('Gulshan Kumar', body.split('Against the other heads')[0])
+
+    def test_a_head_ahead_of_plan_is_not_told_they_are_behind(self):
+        """The opening line is assembled from what is true of this head, not
+        from one template with the numbers swapped in."""
+        body = self.client.get('/api/sales/review/report/file/?head=GTR04 B').content.decode()
+        self.assertIn('past plan', body)
+
+    def test_no_plan_is_not_rendered_as_zero_per_cent(self):
+        handover = ['GT', 'GTR05', 'ARUN MISHRA ( ARNAB GHOSH)', 0, 0.0, 0.0,
+                    15.22, 30.30, 0.0, 0, 0, -30.30, 0.0, 30.30, 0, -30.30,
+                    0.0, 30.30, 0, -30.30]
+        ReviewSnapshot.objects.all().delete()
+        upload(review_workbook([GTR01, handover]))
+        body = self.client.get(
+            '/api/sales/review/report/file/?head=GTR05').content.decode()
+        self.assertIn('--', body)
+
+    def test_lakhs_are_grouped_the_indian_way(self):
+        self.assertEqual(REPORT.lakh(1122.98 * 100_000), '1,122.98')
+        self.assertEqual(REPORT.lakh(83.91 * 100_000), '83.91')
+        self.assertEqual(REPORT.lakh(31927.46 * 100_000), '31,927.46')
+
+    def test_a_name_with_a_slash_in_it_cannot_escape_the_zip(self):
+        self.assertNotIn('/', REPORT._safe('GTR04 A/B'))
+        self.assertNotIn('..', REPORT._safe('../../etc/passwd'))
