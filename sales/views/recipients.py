@@ -20,6 +20,7 @@ from rest_framework.response import Response
 from .auth import SalesIQView, SalesIQAdminView, SalesIQOwnerView
 from ..models import ReportRecipient, UploaderGrant, ReviewSnapshot
 from .. import report as REPORT
+from .. import mail as MAIL
 
 
 def _rows(snap):
@@ -365,3 +366,61 @@ class SalesTeamReportHtmlView(SalesIQView):
             name = REPORT._safe(resp.data.get('name') or 'team')
             out['Content-Disposition'] = f'attachment; filename="{name}_{stamp}.html"'
         return out
+
+
+class SalesMailPreviewView(SalesIQView):
+    """The mail as it will arrive, for one recipient.
+
+    Rendered rather than described: the table inside it is cut to the reader,
+    so the only way to be sure somebody is not about to be shown another
+    territory is to look at the one they will get.
+    """
+
+    def get(self, request):
+        rid = request.query_params.get('recipient')
+        rec = ReportRecipient.objects.filter(id=rid).first() if rid else None
+        if not rec:
+            return HttpResponse('No such recipient.', status=404,
+                                content_type='text/plain')
+
+        req = request._request
+        req.GET = req.GET.copy()
+
+        if rec.role == ReportRecipient.ROLE_HEAD:
+            req.GET['head'] = rec.head_key
+            from .review import SalesReviewReportView
+            resp = SalesReviewReportView.as_view()(req)
+            if resp.status_code != 200:
+                return HttpResponse(resp.data.get('error', 'Not found'),
+                                    status=resp.status_code,
+                                    content_type='text/plain')
+            subject, html = MAIL.for_head(resp.data)
+        else:
+            snap = _latest()
+            covers = rec.covered_regions(
+                list(dict.fromkeys(r.region for r in _rows(snap) if r.region)))
+            if not covers:
+                return HttpResponse(
+                    'No regions are set against this manager yet, so there is '
+                    'nothing to send them. An empty coverage list means no '
+                    'territories, never all of them.',
+                    status=400, content_type='text/plain')
+            req.GET['regions'] = ','.join(covers)
+            req.GET['name'] = rec.name or 'Group'
+            resp = SalesTeamReportView.as_view()(req)
+            if resp.status_code != 200:
+                return HttpResponse(resp.data.get('error', 'Not found'),
+                                    status=resp.status_code,
+                                    content_type='text/plain')
+            subject, html = MAIL.for_manager(resp.data)
+
+        # The subject shown above the body rather than only in a header, so
+        # what is being checked is the whole of what arrives.
+        head = (
+            '<div style="font-family:Calibri,Arial,sans-serif;font-size:12px;'
+            'border:1px solid #D8DEE7;background:#F6F8FB;padding:10px 12px;'
+            'margin-bottom:14px">'
+            '<b>To</b> ' + REPORT.e(rec.email) + '<br>'
+            '<b>Subject</b> ' + REPORT.e(subject) + '</div>')
+        return HttpResponse(head + html,
+                            content_type='text/html; charset=utf-8')

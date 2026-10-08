@@ -433,7 +433,8 @@ class ReviewRow(models.Model):
         whole = float(whole or 0)
         if whole == 0:
             return None
-        return round(float(part or 0) / whole * 100, 1)
+        from .report import round_half_up
+        return round_half_up(float(part or 0) / whole * 100, 1)
 
     @property
     def month_pct(self):
@@ -455,7 +456,10 @@ class ReviewRow(models.Model):
 
     @property
     def growth_pct(self):
-        return None if not float(self.lmtd or 0) else round(
+        if not float(self.lmtd or 0):
+            return None
+        from .report import round_half_up
+        return round_half_up(
             (float(self.mtd_primary) / float(self.lmtd) - 1) * 100, 1)
 
     @property

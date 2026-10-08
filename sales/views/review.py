@@ -120,18 +120,35 @@ class SalesReviewReportView(SalesIQView):
 
         rows = [r for r in snap.rows.all() if not r.is_total]
         key = (request.query_params.get('head') or '').strip()
-        if not key:
+        if not key and not request.query_params.get('row'):
             return Response({'error': 'Which head? Pass ?head= an APIS ID, a '
-                                      'region code, or the name on the sheet.'},
+                                      'region code, or the name on the sheet '
+                                      '-- or ?row= the row id, which is the '
+                                      'only one of these the sheet guarantees '
+                                      'is unique.'},
                             status=400)
 
-        low = key.lower()
-        me = next((r for r in rows
-                   if r.head_code.lower() == low
-                   or r.region.lower() == low
-                   or r.head_name.lower() == low), None)
-        if me is None:
-            return Response({'error': f'No row for "{key}" on this sheet.'}, status=404)
+        # By row id first, because a region is NOT unique on this sheet. The
+        # handover line carries GTR04 A, merged down from Arnab Ghosh above
+        # it, so asking for that region gives whichever row comes first --
+        # and the bundle wrote two files, differently named, holding the same
+        # person's report. Anything that sends a file per person has to be
+        # able to name the row, not just the territory.
+        row_id = request.query_params.get('row')
+        if row_id:
+            me = next((r for r in rows if str(r.id) == str(row_id)), None)
+            if me is None:
+                return Response({'error': 'That row is not on this sheet.'},
+                                status=404)
+        else:
+            low = key.lower()
+            me = next((r for r in rows
+                       if r.head_code.lower() == low
+                       or r.region.lower() == low
+                       or r.head_name.lower() == low), None)
+            if me is None:
+                return Response({'error': f'No row for "{key}" on this sheet.'},
+                                status=404)
 
         peers = [r for r in rows if r.channel == me.channel]
         totals = {r.channel: r for r in snap.rows.filter(is_total=True)}
@@ -142,11 +159,16 @@ class SalesReviewReportView(SalesIQView):
             has not come bottom, it has not been measured."""
             vals = [(r, getattr(r, attr)) for r in peers]
             vals = [(r, v) for r, v in vals if v is not None]
-            vals.sort(key=lambda t: t[1], reverse=True)
-            for i, (r, _) in enumerate(vals, start=1):
-                if r.id == me.id:
-                    return {'position': i, 'of': len(vals)}
-            return None
+            mine = next((v for r, v in vals if r.id == me.id), None)
+            if mine is None:
+                return None
+            # Competition ranking: everyone on the same figure gets the same
+            # place. Ordered by position in a sorted list instead, two people
+            # doing identically well are told one of them did better, and
+            # which one is whatever the sort happened to do that morning.
+            better = sum(1 for _, v in vals if v > mine)
+            return {'position': better + 1, 'of': len(vals),
+                    'tied': sum(1 for _, v in vals if v == mine) > 1}
 
         # Where the year stands. The sheet carries only the month, so the
         # count of months behind and ahead comes from the fiscal calendar.
@@ -298,6 +320,10 @@ class SalesReviewReportBundleView(SalesIQAdminView):
                 req = request._request
                 # Each head answered through the same view the browser uses.
                 req.GET = req.GET.copy()
+                # By row id: a region is not unique on this sheet, and a
+                # bundle that keys on it writes two differently named files
+                # holding the same person's report.
+                req.GET['row'] = str(row.id)
                 req.GET['head'] = row.head_code or row.region or row.head_name
                 req.GET['snapshot'] = str(snap.id)
                 resp = SalesReviewReportView.as_view()(req)

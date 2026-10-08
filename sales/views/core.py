@@ -211,6 +211,7 @@ def _ingest_review(request, upload, ws, header_row, header_row_index=1):
     # row is stored. Nothing is written until it is known -- rows are held
     # here and scaled on the way out.
     pending, sample = [], []
+    row_cache = {}
     stated = {}
     channel = region = ''
     skipped = 0
@@ -250,6 +251,7 @@ def _ingest_review(request, upload, ws, header_row, header_row_index=1):
 
         sample.extend(abs(v) for v in money if v)
         pending.append((row_no, total_row, channel, region, name, vals))
+        row_cache[row_no] = row
 
     if not pending:
         snapshot.delete()
@@ -309,6 +311,36 @@ def _ingest_review(request, upload, ws, header_row, header_row_index=1):
             warnings.append(
                 f'{field.replace("_", " ")}: the head rows add up to '
                 f'{ours:,.0f} but the sheet\'s Grand Total says {claimed:,.0f}.')
+
+    # The sheet states its own ACH %, growth and backlogs. We recompute all of
+    # them -- but the sheet's versions are the best available test of whether
+    # we read the columns correctly, so they are checked rather than ignored.
+    # A paisa is Excel rounding what it derived from full precision; anything
+    # larger means a column was read wrongly, and that is worth seeing before
+    # the morning's reports go out.
+    PAISA = 0.011
+    off = []
+    for (row_no, total_row, _ch, _rg, _name, vals), stored in zip(pending, rows):
+        if total_row:
+            continue
+        for field, ours in (('month_backlog', stored.month_backlog),
+                            ('ytd_backlog', stored.ytd_backlog),
+                            ('fy_backlog', stored.fy_backlog)):
+            ci = checks.get(field)
+            if ci is None or ci >= len(row_cache.get(row_no, ())):
+                continue
+            claimed = parse_num(row_cache[row_no][ci], None)
+            if claimed is None:
+                continue
+            if abs(ours / scale - claimed) > PAISA:
+                off.append(f'{stored.region or stored.head_name} '
+                           f'{field.replace("_", " ")}: we make it '
+                           f'{ours / scale:,.2f}, the sheet says {claimed:,.2f}')
+    if off:
+        warnings.append(
+            f'{len(off)} row(s) disagree with the sheet\'s own derived columns '
+            f'by more than a paisa, which is not rounding: ' + '; '.join(off[:4])
+            + ('...' if len(off) > 4 else '') + '.')
 
     notes.append(f'{len(heads)} heads read from "{ws.title}"'
                  + (f', {as_of_month:%B %Y}' if as_of_month else '')

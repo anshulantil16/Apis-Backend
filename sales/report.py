@@ -17,7 +17,23 @@ the downloaded file and anything mailed later all render through here, so
 there is no second copy to drift.
 """
 import re
+from decimal import Decimal, ROUND_HALF_UP
 from html import escape
+
+
+def round_half_up(v, dp=0):
+    """Round the way a spreadsheet does, not the way Python does.
+
+    Python rounds a half to the nearest EVEN digit, so round(48.5) is 48 and
+    round(49.5) is 50. Excel rounds a half away from zero, so both go up.
+    The review sheet is read in Excel and this report is checked against it
+    line by line, so a figure that disagrees in the last digit reads as the
+    report being wrong -- and on a percentage, it reads as a whole point.
+    """
+    if v is None:
+        return None
+    q = Decimal(1).scaleb(-dp)
+    return float(Decimal(repr(float(v))).quantize(q, rounding=ROUND_HALF_UP))
 
 LAKH = 100_000
 
@@ -56,13 +72,15 @@ def lakh(v, dp=2):
 
 
 def pct(v, dp=0):
-    return '--' if v is None else f'{v:.{dp}f}%'
+    # Rounded half-up before formatting rather than left to the format spec,
+    # which rounds half to even and prints 48.5 as "48".
+    return '--' if v is None else f'{round_half_up(v, dp):.{dp}f}%'
 
 
 def signed(v):
     if v is None:
         return '--'
-    return ('+' if v > 0 else '') + f'{v:.0f}%'
+    return ('+' if v > 0 else '') + f'{round_half_up(v):.0f}%'
 
 
 def ordinal(n):
@@ -368,10 +386,10 @@ def render(d):
     # -- peer board -------------------------------------------------------
     rows_svg, Y = '', 10
     PW = 330.0
-    pmax = max([p['month_pct'] for p in peers] + [100]) * 1.1
+    pmax = max([max(p['month_pct'], 0) for p in peers] + [100]) * 1.1
     for p in peers:
         mine = p['id'] == h['id']
-        bw2 = p['month_pct'] / pmax * PW
+        bw2 = max(p['month_pct'], 0) / pmax * PW
         if mine:
             rows_svg += (
                 f'<g class="me"><rect x="244" y="{Y - 3}" width="446" height="24" fill="#F3F8FE"/>'
@@ -428,7 +446,14 @@ def render(d):
         if dw < 418:
             out += (f'<rect x="{dw + 2:.1f}" y="{yy + 8}" width="{418 - dw:.1f}" '
                     f'height="18" rx="3" fill="var(--owed)"/>')
-        out += f'<text x="8" y="{yy + 21}" class="val" fill="#06281B">{lakh(done)}</text>'
+        # Inside the bar while there is room for it, after it when there is
+        # not. A figure printed over the join of two fills is unreadable.
+        if dw >= 58:
+            out += (f'<text x="8" y="{yy + 21}" class="val" '
+                    f'fill="#06281B">{lakh(done)}</text>')
+        else:
+            out += (f'<text x="{dw + 8:.1f}" y="{yy + 21}" class="val" '
+                    f'fill="#2B1710">{lakh(done)}</text>')
         if dw < 360:
             out += (f'<text x="412" y="{yy + 21}" text-anchor="end" class="val" '
                     f'fill="#2B1710">{lakh(t - float(done))}</text>')
@@ -653,8 +678,10 @@ def render(d):
       f" and uploaded on {e(snap['created_at'][:10])}" if snap.get('created_at') else ''}.
     Every percentage and backlog here is recomputed from the AOP and sales columns
     rather than copied across, so these figures agree with the sheet by arithmetic
-    rather than by transcription. Achievement is measured on primary sales. All
-    figures in &#8377; lakhs.
+    rather than by transcription. A backlog here can differ from the sheet&#8217;s own
+    by up to a paisa: the sheet derives those columns from full precision and prints
+    them rounded, and only the rounded figures reach this report. Achievement is
+    measured on primary sales. All figures in &#8377; lakhs.
   </footer>
 </div>
 </body></html>'''
@@ -712,7 +739,11 @@ def render_team(d):
             board += label + (f'<text x="274" y="{Y + 13}" class="val" '
                               f'fill="#8A94A6">no plan</text>')
         else:
-            w = p / top * BW
+            # Clamped at nothing: a negative width is not drawn at all, and a
+            # vanished bar reads as "billed nothing", which is kinder than
+            # the truth and therefore worse. The figure beside it is printed
+            # whatever its sign.
+            w = max(p, 0) / top * BW
             board += label + (
                 f'<rect x="266" y="{Y}" width="{w:.1f}" height="18" rx="3" '
                 f'fill="{TONE[rag(p)]}"/>'

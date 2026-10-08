@@ -11,7 +11,7 @@ from .views import (
     SalesReviewReportHtmlView, SalesReviewReportBundleView,
     SalesRecipientsView, SalesRecipientsEditView, SalesRecipientsTemplateView,
     SalesRecipientsImportView, SalesUploaderView, SalesUploaderEditView,
-    SalesTeamReportView, SalesTeamReportHtmlView,
+    SalesTeamReportView, SalesTeamReportHtmlView, SalesMailPreviewView,
 )
 
 urlpatterns = [
@@ -57,6 +57,7 @@ urlpatterns = [
     path('recipients/edit/<int:pk>/', SalesRecipientsEditView.as_view()),
     path('recipients/template/',      SalesRecipientsTemplateView.as_view()),
     path('recipients/import/',        SalesRecipientsImportView.as_view()),
+    path('recipients/mail/',          SalesMailPreviewView.as_view()),
     path('uploaders/',                SalesUploaderView.as_view()),
     path('uploaders/edit/',           SalesUploaderEditView.as_view()),
     path('uploaders/edit/<int:pk>/',  SalesUploaderEditView.as_view()),
