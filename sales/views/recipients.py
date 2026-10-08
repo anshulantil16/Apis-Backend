@@ -14,12 +14,15 @@ deliberately rather than as a side effect of pasting a spreadsheet column.
 import csv
 import io
 
+import openpyxl
+
 from django.http import HttpResponse
 from rest_framework.response import Response
 
 from .auth import SalesIQView, SalesIQAdminView, SalesIQOwnerView
 from ..models import ReportRecipient, UploaderGrant, ReviewSnapshot
 from .. import report as REPORT
+from .. import recipients_sheet as SHEET
 from .. import mail as MAIL
 
 
@@ -56,6 +59,34 @@ def match_head(key, rows):
             if (getattr(r, attr) or '').strip().lower() == low:
                 return r
     return None
+
+
+def _read_workbook(f):
+    """-> [[cell, ...], ...] from an uploaded .xlsx, or from a .csv.
+
+    Read as rows of text rather than by header name on purpose: the file
+    people fill in is the one we generated, its columns are in a known order,
+    and matching by position means a renamed header does not silently drop a
+    column. Anything that is not in that order fails loudly in the loop
+    below, line by line, which is the behaviour we want anyway.
+    """
+    name = (getattr(f, 'name', '') or '').lower()
+    if name.endswith('.csv') or name.endswith('.txt'):
+        raw = f.read()
+        if isinstance(raw, bytes):
+            raw = raw.decode('utf-8-sig', errors='replace')
+        return list(csv.reader(io.StringIO(raw)))
+
+    wb = openpyxl.load_workbook(f, data_only=True, read_only=True)
+    out = []
+    # The first sheet only. The second is the instructions, and reading it
+    # would report every sentence on it as a line that could not be parsed.
+    ws = wb.worksheets[0]
+    for row in ws.iter_rows(values_only=True):
+        cells = ['' if v is None else str(v) for v in row]
+        if any(c.strip() for c in cells):
+            out.append(cells)
+    return out
 
 
 class SalesRecipientsView(SalesIQView):
@@ -154,74 +185,33 @@ class SalesRecipientsEditView(SalesIQAdminView):
 
 
 class SalesRecipientsTemplateView(SalesIQView):
-    """A CSV with every head on the latest sheet and an empty email column.
+    """The list to fill in, as a workbook.
 
-    Filled in and pasted back, this is the whole of setting the list up. It
-    is generated from the sheet rather than typed out, so the APIS IDs in it
-    are the ones the reports are actually keyed on and cannot be mistyped.
+    Generated from the sales sheet rather than typed out, so the keys the
+    reports are actually built on are already in it and cannot be mistyped.
+    See recipients_sheet for why it is a workbook and not a CSV.
     """
 
     def get(self, request):
-        """The list, with the table FIRST.
-
-        An earlier version opened with fifteen lines of instructions, which in
-        Excel is fifteen rows of text spilling across empty columns before the
-        header -- it reads as a broken file rather than as a form. The table
-        comes first now and the notes sit under it, where they can be read
-        without being in the way.
-        """
         snap = _latest()
-        rows = _rows(snap)
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow(['role', 'key_or_regions', 'name', 'email'])
+        existing = list(ReportRecipient.objects.all())
+        heads = SHEET.heads_for(
+            _rows(snap),
+            [r for r in existing if r.role == ReportRecipient.ROLE_HEAD])
+        managers = [r for r in existing
+                    if r.role == ReportRecipient.ROLE_MANAGER]
 
-        for r in rows:
-            rec = ReportRecipient.objects.filter(
-                role=ReportRecipient.ROLE_HEAD,
-                head_key__in=[k for k in (r.head_code, r.region) if k]).first()
-            w.writerow(['head', r.head_code or r.region, r.head_name,
-                        rec.email if rec else ''])
-
-        if not rows:
-            # Said in the file itself. An empty list downloaded with no
-            # explanation reads as the feature being broken, when what has
-            # actually happened is that the Region Summary tab has not been
-            # loaded -- and that is fixable in one upload.
-            w.writerow([])
-            w.writerow(['# NO HEADS YET. The Region Summary tab has not been '
-                        'uploaded, so there is nothing to list here.'])
-            w.writerow(['# Upload the daily workbook with that tab in it and '
-                        'download this again -- every head will be filled in.'])
-
-        w.writerow([])
-        existing = list(ReportRecipient.objects.filter(
-            role=ReportRecipient.ROLE_MANAGER))
-        for rec in existing:
-            w.writerow(['manager',
-                        'ALL' if rec.covers_all else ';'.join(rec.regions or []),
-                        rec.name, rec.email])
-        for _ in range(max(6 - len(existing), 2)):
-            w.writerow(['manager', '', '', ''])
-
-        for line in (
-                '',
-                '# ---- how to fill this in ----',
-                '# head     gets their own territory only. Leave column 2 as '
-                'it is: it is the key their report is built from.',
-                '# manager  gets one report across the territories in column '
-                '2, plus each of those heads own files.',
-                '#          Put their regions in column 2 separated by '
-                'SEMICOLONS (GTR01;GTR02), or the word ALL.',
-                '#',
-                '# Fill in the email column and paste the whole file back into '
-                'SalesIQ. Nothing is guessed from it.',
-                '# A row with no email is simply not set up yet, so this can '
-                'be done a few at a time.'):
-            w.writerow([line])
-
-        out = HttpResponse(buf.getvalue(), content_type='text/csv; charset=utf-8')
-        out['Content-Disposition'] = 'attachment; filename="report_recipients.csv"'
+        buf = io.BytesIO()
+        SHEET.build(heads, managers).save(buf)
+        buf.seek(0)
+        stamp = (snap.as_of_date.isoformat() if snap and snap.as_of_date
+                 else 'latest')
+        out = HttpResponse(
+            buf.read(),
+            content_type='application/vnd.openxmlformats-officedocument.'
+                         'spreadsheetml.sheet')
+        out['Content-Disposition'] = (
+            f'attachment; filename="report recipients {stamp}.xlsx"')
         return out
 
 
@@ -234,39 +224,78 @@ class SalesRecipientsImportView(SalesIQAdminView):
     """
 
     def post(self, request):
-        text = request.data.get('text') or ''
-        if not text.strip():
-            return Response({'error': 'Nothing was pasted.'}, status=400)
+        f = request.FILES.get('file')
+        if f:
+            try:
+                lines = _read_workbook(f)
+            except Exception as e:
+                return Response({'error': f'Cannot read that file: {e}'},
+                                status=400)
+            if not lines:
+                return Response({'error': 'That file has no rows in it.'},
+                                status=400)
+        else:
+            text = request.data.get('text') or ''
+            if not text.strip():
+                return Response({'error': 'Nothing was uploaded or pasted.'},
+                                status=400)
+            lines = list(csv.reader(io.StringIO(text)))
 
         snap = _latest()
         rows = _rows(snap)
         known = list(dict.fromkeys(r.region for r in rows if r.region))
 
         added, updated, skipped = 0, 0, []
-        reader = csv.reader(io.StringIO(text))
-        for n, line in enumerate(reader, start=1):
+        for n, line in enumerate(lines, start=1):
             cells = [c.strip() for c in line]
             if not any(cells) or cells[0].startswith('#'):
                 continue
             if cells[0].lower() in ('role', 'r'):
                 continue                      # the header row
             if len(cells) < 4:
-                skipped.append(f'line {n}: needs four columns')
+                skipped.append(f'line {n}: needs at least four columns')
                 continue
 
-            role, key, name, email = cells[0].lower(), cells[1], cells[2], cells[3].lower()
+            # Two shapes are accepted. The workbook has one column per job --
+            # role, key, region, name, email, regions_covered -- because a
+            # column that means two things is how a manager ends up with an
+            # APIS ID in their coverage. The older four-column CSV is still
+            # read, so a list filled in before this change is not wasted.
+            if len(cells) >= 6:
+                role, key, _region, name = (cells[0].lower(), cells[1],
+                                            cells[2], cells[3])
+                email, covered = cells[4].lower(), cells[5]
+            else:
+                role, key, name = cells[0].lower(), cells[1], cells[2]
+                email, covered = cells[3].lower(), cells[1]
+
+            # The role decides whether this is a data row at all, so it is
+            # checked FIRST. The workbook carries a title, a row of hints and
+            # a section heading above each block; the hint row begins "head
+            # or manager", so an email check that ran first reported its
+            # "WHERE TO SEND IT" cell as a bad address.
+            if role not in ('head', 'manager'):
+                # Furniture is skipped in silence. A row carrying an address
+                # is somebody's real line with the role mistyped, and that
+                # has to be said.
+                if '@' in ' '.join(cells):
+                    skipped.append(f'line {n}: role must be head or manager, '
+                                   f'not "{cells[0]}"')
+                continue
             if not email:
                 continue                      # not filled in yet, not an error
             if '@' not in email:
                 skipped.append(f'line {n}: "{email}" is not an email address')
                 continue
-            if role not in ('head', 'manager'):
-                skipped.append(f'line {n}: role must be head or manager')
-                continue
 
             if role == 'manager':
-                regions = [] if key.upper() == 'ALL' else [
-                    p.strip() for p in key.split(';') if p.strip()]
+                if not covered.strip():
+                    skipped.append(f'line {n}: {name or email} covers no '
+                                   f'territory. Put their regions in '
+                                   f'regions_covered, or the word ALL.')
+                    continue
+                regions = [] if covered.upper() == 'ALL' else [
+                    p.strip() for p in covered.split(';') if p.strip()]
                 unknown = [r for r in regions if r not in known]
                 if unknown:
                     skipped.append(f'line {n}: no region named '
@@ -275,7 +304,7 @@ class SalesRecipientsImportView(SalesIQAdminView):
                 _, made = ReportRecipient.objects.update_or_create(
                     email=email, role='manager', head_key='',
                     defaults={'name': name, 'regions': regions,
-                              'covers_all': key.upper() == 'ALL',
+                              'covers_all': covered.upper() == 'ALL',
                               'is_active': True})
             else:
                 if not match_head(key, rows):

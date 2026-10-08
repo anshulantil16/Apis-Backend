@@ -3814,12 +3814,59 @@ class WhoGetsWhichReport(TestCase):
         d = self.client.get('/api/sales/recipients/').json()
         self.assertEqual(len(d['heads_without_a_recipient']), 2)
 
-    def test_the_csv_template_lists_every_head_with_an_empty_email(self):
-        """Filled in and pasted back, this is the whole of setting it up."""
-        body = self.client.get('/api/sales/recipients/template/').content.decode()
-        self.assertIn('GTR01', body)
-        self.assertIn('Mohinder Sharma', body)
-        self.assertIn('role,key_or_regions,name,email', body)
+    def test_the_template_lists_every_head_with_an_empty_email(self):
+        """Filled in and uploaded back, this is the whole of setting it up."""
+        import openpyxl
+        r = self.client.get('/api/sales/recipients/template/')
+        self.assertEqual(r.status_code, 200)
+        ws = openpyxl.load_workbook(io.BytesIO(r.content)).worksheets[0]
+        cells = [[('' if c is None else str(c)) for c in row]
+                 for row in ws.iter_rows(values_only=True)]
+        flat = [' '.join(row) for row in cells]
+        self.assertTrue(any('GTR01' in f for f in flat), flat[:8])
+        self.assertTrue(any('Mohinder Sharma' in f for f in flat))
+        # The head rows carry a key and no email: the email is the work.
+        head = next(row for row in cells if row and row[0] == 'head')
+        self.assertEqual(head[4], '')
+
+    def test_the_instructions_are_a_second_tab_not_rows_above_the_table(self):
+        """Comment rows above the header show in Excel as text spilling
+        across empty cells, which reads as a broken file."""
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(
+            self.client.get('/api/sales/recipients/template/').content))
+        self.assertEqual(wb.sheetnames, ['Recipients', 'How to fill this in'])
+
+    def test_the_filled_in_workbook_can_be_uploaded_back(self):
+        import openpyxl
+        r = self.client.get('/api/sales/recipients/template/')
+        wb = openpyxl.load_workbook(io.BytesIO(r.content))
+        ws = wb.worksheets[0]
+        for row in ws.iter_rows():
+            if row[0].value == 'head' and row[1].value == 'GTR01':
+                row[4].value = 'mohinder@apisindia.com'
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'report recipients.xlsx'
+        d = self.client.post('/api/sales/recipients/import/',
+                             {'file': buf}).json()
+        self.assertEqual(d['added'], 1, d)
+        self.assertEqual(d['skipped'], [])
+        self.assertTrue(ReportRecipient.objects.filter(
+            email='mohinder@apisindia.com', head_key='GTR01').exists())
+
+    def test_a_manager_with_no_territory_is_reported_not_silently_added(self):
+        """An empty coverage list means no territories, never all of them --
+        so a manager row with an email and no regions is somebody who would
+        receive an empty report every morning."""
+        # role, key, region, name, email, regions_covered -- the last empty
+        text = 'manager,,,A Manager,mgr@apisindia.com,\n'
+        d = self.client.post('/api/sales/recipients/import/', {'text': text},
+                             content_type='application/json').json()
+        self.assertEqual(d['added'], 0)
+        self.assertEqual(len(d['skipped']), 1)
+        self.assertIn('covers no territory', d['skipped'][0])
 
     def test_pasting_the_filled_in_template_adds_everybody(self):
         text = ('role,key_or_regions,name,email\n'
