@@ -864,7 +864,21 @@ class SalesOverviewView(SalesIQView):
 
         run_rate = (round(like_for_like['revenue'] / like_for_like['months'], 2)
                     if like_for_like['months'] else None)
-        required_rate = (round(like_for_like['target_ahead'] / like_for_like['months_ahead'], 2)
+
+        # What is still owed on the plan, divided by the months left to owe
+        # it in -- the blueprint's "remaining target gap / remaining
+        # periods", and the gap is the operative word.
+        #
+        # This divided the remaining PLAN instead, which quietly forgave
+        # every rupee already missed. Six months in at 79% of plan, it read
+        # "needs Rs 30.74 Cr a month", when delivering exactly that lands the
+        # year Rs 28.26 Cr short -- precisely the shortfall shown as "behind
+        # by" two cards to its left. A pace figure that does not make up the
+        # deficit is not the pace required to hit the target; it is the pace
+        # required to miss it by the amount you are already missing it by.
+        full_plan = like_for_like['target'] + like_for_like['target_ahead']
+        still_owed = full_plan - like_for_like['revenue']
+        required_rate = (round(max(0.0, still_owed) / like_for_like['months_ahead'], 2)
                          if like_for_like['months_ahead'] else None)
 
         return Response({
@@ -938,6 +952,11 @@ class SalesOverviewView(SalesIQView):
                 'months_elapsed': like_for_like['months'],
                 'months_ahead': like_for_like['months_ahead'],
                 'target_ahead': like_for_like['target_ahead'],
+                # The two numbers the required rate is made of, so it can be
+                # checked rather than taken on trust.
+                'full_plan': round(full_plan, 2),
+                'still_owed': round(max(0.0, still_owed), 2),
+                'already_ahead': still_owed < 0,
                 'ahead_from': like_for_like['ahead_from'],
                 'ahead_to': like_for_like['ahead_to'],
                 # Whether the business has to lift its pace to land the plan,

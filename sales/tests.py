@@ -3016,12 +3016,34 @@ class TheControlTowerRules(TestCase):
         self.assertAlmostEqual(d['run_rate'],
                                d['achievement_basis']['revenue'] / 6, places=2)
 
-    def test_the_required_rate_is_what_is_left_over_the_months_left(self):
+    def test_the_required_rate_makes_up_the_shortfall_as_well(self):
+        """The blueprint's "remaining target GAP / remaining periods", and
+        gap is the operative word.
+
+        Dividing the remaining PLAN instead forgave every rupee already
+        missed: six months in at 60% of plan it said "needs 100,000 a
+        month", and delivering exactly that lands the year 240,000 short --
+        the same shortfall the screen reports two cards to the left.
+
+        Fixture: 6 months done at 60,000 against 100,000 of plan each, and
+        6 months of plan still to come. Owed: 1,200,000 planned less
+        360,000 sold = 840,000, over 6 months = 140,000 a month."""
         d = self.ov()
         basis = d['run_rate_basis']
         self.assertEqual(basis['months_ahead'], 6)
-        self.assertAlmostEqual(d['required_run_rate'],
-                               basis['target_ahead'] / 6, places=2)
+        self.assertAlmostEqual(basis['full_plan'], 1200000, places=2)
+        self.assertAlmostEqual(basis['still_owed'], 840000, places=2)
+        self.assertAlmostEqual(d['required_run_rate'], 140000, places=2)
+        # And it is strictly more than just finishing the plan would need.
+        self.assertGreater(d['required_run_rate'], basis['target_ahead'] / 6)
+
+    def test_a_business_already_ahead_is_not_asked_for_a_negative_pace(self):
+        SalesRecord.objects.filter(source=SalesRecord.SOURCE_PLAN,
+                                   measured_amount__gt=0).update(
+            measured_amount=500000, net_amount=500000)
+        d = self.ov()
+        self.assertTrue(d['run_rate_basis']['already_ahead'])
+        self.assertEqual(d['required_run_rate'], 0.0)
 
     def test_the_rate_is_reported_per_month_and_says_so(self):
         """The blueprint asks for these per working day. The review sheet --
@@ -3033,8 +3055,10 @@ class TheControlTowerRules(TestCase):
     def test_it_says_how_much_the_pace_has_to_lift(self):
         d = self.ov()
         lift = d['run_rate_basis']['lift_needed_pct']
-        # Running at 60,000 a month, needs 100,000 -- a lift of two thirds.
-        self.assertAlmostEqual(lift, 66.7, places=1)
+        # Running at 60,000 a month and needing 140,000 to land the plan --
+        # which is a different business from needing 100,000, and the
+        # difference is the half year already behind.
+        self.assertAlmostEqual(lift, 133.3, places=1)
 
     def test_a_finished_year_asks_for_no_lift_rather_than_dividing_by_nought(self):
         SalesRecord.objects.filter(measured_amount=0).update(measured_amount=1,
