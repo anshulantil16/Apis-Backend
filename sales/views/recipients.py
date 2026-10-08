@@ -162,32 +162,18 @@ class SalesRecipientsTemplateView(SalesIQView):
     """
 
     def get(self, request):
+        """The list, with the table FIRST.
+
+        An earlier version opened with fifteen lines of instructions, which in
+        Excel is fifteen rows of text spilling across empty columns before the
+        header -- it reads as a broken file rather than as a form. The table
+        comes first now and the notes sit under it, where they can be read
+        without being in the way.
+        """
         snap = _latest()
         rows = _rows(snap)
         buf = io.StringIO()
         w = csv.writer(buf)
-
-        # Instructions in the file rather than on a screen somebody has
-        # closed by the time they are filling it in. Lines starting with #
-        # are ignored on the way back.
-        for line in (
-                '# WHO GETS WHICH REPORT. Fill in the email column and paste',
-                '# the whole file back into SalesIQ. Nothing is guessed from',
-                '# it -- a row with no email is simply not set up yet.',
-                '#',
-                '# role    head    = gets their own territory only',
-                '#         manager = gets one report across the territories',
-                '#                   named in column 2, plus each of those',
-                '#                   heads own files',
-                '#',
-                '# column 2  for a head: leave it as it is -- it is the key',
-                '#                       their report is built from',
-                '#           for a manager: the regions they cover, separated',
-                '#                       by SEMICOLONS, or the word ALL',
-                '#',
-                '# Add as many manager rows as you need. Blank rows are fine.'):
-            w.writerow([line])
-        w.writerow([])
         w.writerow(['role', 'key_or_regions', 'name', 'email'])
 
         for r in rows:
@@ -197,19 +183,42 @@ class SalesRecipientsTemplateView(SalesIQView):
             w.writerow(['head', r.head_code or r.region, r.head_name,
                         rec.email if rec else ''])
 
+        if not rows:
+            # Said in the file itself. An empty list downloaded with no
+            # explanation reads as the feature being broken, when what has
+            # actually happened is that the Region Summary tab has not been
+            # loaded -- and that is fixable in one upload.
+            w.writerow([])
+            w.writerow(['# NO HEADS YET. The Region Summary tab has not been '
+                        'uploaded, so there is nothing to list here.'])
+            w.writerow(['# Upload the daily workbook with that tab in it and '
+                        'download this again -- every head will be filled in.'])
+
         w.writerow([])
-        w.writerow(['# managers below -- column 2 is their regions, '
-                    'semicolon separated, or ALL'])
         existing = list(ReportRecipient.objects.filter(
             role=ReportRecipient.ROLE_MANAGER))
         for rec in existing:
             w.writerow(['manager',
                         'ALL' if rec.covers_all else ';'.join(rec.regions or []),
                         rec.name, rec.email])
-        # Blank rows to type into, so nobody has to work out the shape of a
-        # line from a sentence about it.
         for _ in range(max(6 - len(existing), 2)):
             w.writerow(['manager', '', '', ''])
+
+        for line in (
+                '',
+                '# ---- how to fill this in ----',
+                '# head     gets their own territory only. Leave column 2 as '
+                'it is: it is the key their report is built from.',
+                '# manager  gets one report across the territories in column '
+                '2, plus each of those heads own files.',
+                '#          Put their regions in column 2 separated by '
+                'SEMICOLONS (GTR01;GTR02), or the word ALL.',
+                '#',
+                '# Fill in the email column and paste the whole file back into '
+                'SalesIQ. Nothing is guessed from it.',
+                '# A row with no email is simply not set up yet, so this can '
+                'be done a few at a time.'):
+            w.writerow([line])
 
         out = HttpResponse(buf.getvalue(), content_type='text/csv; charset=utf-8')
         out['Content-Disposition'] = 'attachment; filename="report_recipients.csv"'
