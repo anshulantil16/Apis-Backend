@@ -156,9 +156,18 @@ def _supersede(upload):
     for u in SalesUpload.objects.filter(id__in=touched).exclude(id=upload.id):
         agg = u.records.aggregate(n=Count('id'), lo=Min('order_date'),
                                   hi=Max('order_date'))
-        if not agg['n'] and not u.review_snapshots.exists():
-            u.delete()          # nothing left of it; an entry reading nought
-            continue            # rows reads as a failed import, not a replaced one
+        if not agg['n']:
+            # Nothing left of it. An entry reading nought rows looks like a
+            # failed import rather than a replaced one, which is exactly the
+            # confusion this is meant to remove.
+            #
+            # Its review snapshots are detached rather than cascaded away:
+            # the dated morning position is history we keep on purpose, and
+            # it carries its own filename and date, so it does not need the
+            # upload row to stand on.
+            u.review_snapshots.update(upload=None)
+            u.delete()
+            continue
         earned = (in_plan_scope(u.records.exclude(is_cancelled=True)
                                 .exclude(is_not_sales=True))
                   .aggregate(rev=Sum('net_amount'))['rev'])

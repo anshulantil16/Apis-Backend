@@ -369,3 +369,91 @@ class TheMailThatGoesOut(_TC):
         MAIL.for_head(self._head('GTR01'))
         self.client.get('/api/sales/review/bundle/')
         self.assertEqual(len(djmail.outbox), 0)
+
+
+class TheSameFileEveryMorning(_TC):
+    """Yesterday's workbook, then today's. The dashboard must show today's
+    figures, not yesterday's added to today's."""
+
+    def _book(self, aop, pri):
+        """A three-tab workbook shaped like the daily file."""
+        import openpyxl
+        from .tests import AOP_HEADERS, aop_row, header_names, a_row
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+
+        ws = wb.create_sheet('Region Summary')
+        ws.append([None, None, None, None, "MTD FOR SEPT'26"])
+        ws.append(list(HEADERS))
+        row = list(SHEET[0])
+        row[7] = pri / 1e5
+        ws.append(row)
+
+        ws = wb.create_sheet('YTD,AOP vs.ACH')
+        ws.append(list(AOP_HEADERS))
+        r = aop_row(aop=aop)
+        ws.append([r.get(h) for h in AOP_HEADERS])
+
+        ws = wb.create_sheet('PRI SALES DUMP')
+        names = header_names()
+        ws.append(names)
+        r = a_row(**{'Invoice No.': 'INV-1'})
+        ws.append([r.get(n, '') for n in names])
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'Primary Master.xlsx'
+        return buf
+
+    def test_todays_file_replaces_yesterdays_rather_than_adding_to_it(self):
+        from .tests import upload
+        from .models import SalesRecord
+        from django.db.models import Sum
+
+        upload(self._book(aop=100000, pri=83.91e5))
+        day1_rows = SalesRecord.objects.count()
+
+        upload(self._book(aop=120000, pri=90.00e5))
+        self.assertEqual(SalesRecord.objects.count(), day1_rows,
+                         'rows were added to, not replaced')
+        plan = float(SalesRecord.objects.filter(
+            source=SalesRecord.SOURCE_PLAN,
+            period=date(2026, 4, 1)).aggregate(s=Sum('target_amount'))['s'])
+        self.assertEqual(plan, 120000)
+
+    def test_the_dashboard_headline_does_not_climb_on_a_repeat_upload(self):
+        """The figure on the screen, not the rows underneath it."""
+        from .tests import upload, Client
+        c = Client()
+        upload(self._book(aop=100000, pri=83.91e5))
+        first = c.get('/api/sales/overview/').json()
+        upload(self._book(aop=100000, pri=83.91e5))
+        again = c.get('/api/sales/overview/').json()
+        for k in ('revenue', 'target', 'orders'):
+            self.assertEqual(again.get(k), first.get(k), k)
+
+    def test_a_third_morning_does_not_treble_it(self):
+        from .tests import upload
+        from .models import SalesRecord
+        upload(self._book(aop=100000, pri=83.91e5))
+        one = SalesRecord.objects.count()
+        upload(self._book(aop=100000, pri=83.91e5))
+        upload(self._book(aop=100000, pri=83.91e5))
+        self.assertEqual(SalesRecord.objects.count(), one)
+
+    def test_only_one_upload_row_survives_a_repeat(self):
+        from .tests import upload
+        from .models import SalesUpload
+        upload(self._book(aop=100000, pri=83.91e5))
+        upload(self._book(aop=100000, pri=83.91e5))
+        self.assertEqual(SalesUpload.objects.count(), 1)
+
+    def test_the_review_snapshot_keeps_its_history_but_the_sales_do_not(self):
+        from .tests import upload
+        from .models import ReviewSnapshot, SalesRecord
+        upload(self._book(aop=100000, pri=83.91e5))
+        n = SalesRecord.objects.count()
+        upload(self._book(aop=100000, pri=90.00e5))
+        self.assertEqual(ReviewSnapshot.objects.count(), 2)
+        self.assertEqual(SalesRecord.objects.count(), n)
