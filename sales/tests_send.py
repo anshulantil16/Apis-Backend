@@ -673,3 +673,139 @@ class WhatTheScreenFlagsAsAProblem(TestCase):
         flagged = [x for x in self.rows_json() if not x['addressable']]
         self.assertEqual(len(flagged), 2)
         self.assertTrue(all(x['clashes_with'] for x in flagged))
+
+
+class TheManagersReportIsWorthOpening(TestCase):
+    """It was a bar chart, three tiles and a table -- correct, and thin
+    enough that the one question a manager has each week ("where do I spend
+    Tuesday?") was left to be worked out from the table."""
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04A, GTR04B, HANDOVER]),
+               name="Primary Master till 30th Sept'2026.xlsx")
+
+    def report(self):
+        regions = ','.join(sorted({r.region for r in rows()}))
+        r = self.client.get('/api/sales/review/team/file/?regions='
+                            + regions + '&name=Anshul+Antil')
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode('utf-8')
+
+    def test_it_answers_three_different_questions_not_one(self):
+        html = self.report()
+        for h in ('Where each territory stands',     # who is behind
+                  'Where the shortfall sits',        # where the money is
+                  'Which way each is moving'):       # which way they are going
+            self.assertIn(h, html)
+
+    def test_the_shortfall_is_shown_in_money_not_only_percent(self):
+        """An achievement board read on its own sends a manager to the
+        smallest territory they have."""
+        html = self.report()
+        self.assertIn('lakhs, largest gap first', html)
+        self.assertIn('owed', html)
+
+    def test_the_group_gets_the_same_three_gauges_a_head_does(self):
+        """One visual language across both documents: a manager who reads
+        fourteen of these should not have to learn two."""
+        self.assertEqual(self.report().count('A 78 78 0 0 1 178 112'), 6)
+
+    def test_every_territory_is_still_listed_with_a_group_line(self):
+        html = self.report()
+        for r in rows():
+            self.assertIn(r.head_name, html)
+        self.assertIn('Group', html)
+
+    def test_the_terms_are_explained_as_they_are_on_a_head_report(self):
+        self.assertIn('What the terms mean', self.report())
+
+
+class BothReportsPrintInColour(TestCase):
+    """Printed, the report was a white sheet with a blue chip on it --
+    correct and characterless, and the first thing anybody sees of it."""
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04B]),
+               name="Primary Master till 30th Sept'2026.xlsx")
+
+    def both(self):
+        me = rows()[0]
+        head = self.client.get('/api/sales/review/report/file/?row=%d' % me.id)
+        regions = ','.join(sorted({r.region for r in rows()}))
+        team = self.client.get('/api/sales/review/team/file/?regions=' + regions)
+        return head.content.decode('utf-8'), team.content.decode('utf-8')
+
+    def test_the_masthead_carries_colour_on_both(self):
+        for html in self.both():
+            self.assertIn('linear-gradient(118deg', html)
+
+    def test_and_the_colour_survives_the_print_path(self):
+        """Without this the band comes out white again, which is exactly the
+        version this was meant to stop being."""
+        for html in self.both():
+            self.assertIn('print-color-adjust:exact', html)
+
+
+class NothingIsDrawnOutsideItsChart(TestCase):
+    """A mark outside the viewBox is simply not drawn, and a chart that
+    quietly loses its worst bar is worse than one that looks wrong."""
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04A, GTR04B, HANDOVER]),
+               name="Primary Master till 30th Sept'2026.xlsx")
+
+    def test_every_mark_stays_inside_every_svg(self):
+        import re
+        regions = ','.join(sorted({r.region for r in rows()}))
+        me = rows()[0]
+        pages = [
+            self.client.get('/api/sales/review/team/file/?regions=' + regions)
+                .content.decode('utf-8'),
+            self.client.get('/api/sales/review/report/file/?row=%d' % me.id)
+                .content.decode('utf-8'),
+        ]
+        problems = []
+        for html in pages:
+            for sv in re.finditer(r'<svg viewBox="0 0 ([\d.]+) ([\d.]+)"(.*?)</svg>',
+                                  html, re.S):
+                W, H, body = float(sv.group(1)), float(sv.group(2)), sv.group(3)
+                for m in re.finditer(
+                        r'<rect[^>]*?x="([-\d.]+)"[^>]*?width="([-\d.]+)"', body):
+                    x, w = float(m.group(1)), float(m.group(2))
+                    if w < 0 or x + w > W + 1:
+                        problems.append(('rect', x, w, W))
+                for m in re.finditer(r'<circle cx="([-\d.]+)" cy="([-\d.]+)"', body):
+                    cx, cy = float(m.group(1)), float(m.group(2))
+                    if not (0 <= cx <= W and 0 <= cy <= H):
+                        problems.append(('circle', cx, cy, W, H))
+        self.assertEqual(problems, [])
+
+
+class AMonthWithMoreReturnedThanSold(TestCase):
+    """The sheet writes it as a minus, and it is a real thing. A negative
+    width is not drawn by any browser, so the bar vanishes -- and the
+    territory in the worst trouble is the one that disappears."""
+
+    def test_the_shortfall_chart_still_draws_every_territory(self):
+        upload(review_workbook([GTR01, GTR04B]),
+               name="Primary Master till 30th Sept'2026.xlsx")
+        # In rupees, as the rows are stored: a figure that rounds to a
+        # whisker below zero is how negative zero gets into a width.
+        bad = rows()[0]
+        bad.mtd_primary = -12.40 * 100000
+        bad.save()
+        tiny = rows()[1]
+        tiny.mtd_primary = -0.4
+        tiny.save()
+        regions = ','.join(sorted({r.region for r in rows()}))
+        html = self.client.get(
+            '/api/sales/review/team/file/?regions=' + regions
+        ).content.decode('utf-8')
+        import re
+        self.assertEqual(
+            re.findall(r'(?:width|height|r)="(-[\d.]+|nan|NaN|inf)"', html), [])
+        # And the figure itself is still printed, whatever its sign.
+        self.assertIn('-12.40', html)
+        # width="-0.0" is not a valid SVG length either, and max(-0.0, 0) is
+        # -0.0 in Python -- which is exactly what a near-zero figure gives.
+        self.assertNotIn('"-0.0"', html)

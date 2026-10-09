@@ -21,6 +21,24 @@ from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 
 
+def drawable(v):
+    """-> a length that can be drawn: never negative, never negative zero.
+
+    A month with more returned than sold is a real thing and the sheet
+    writes it as a minus. A negative width is not drawn by any browser, so
+    the bar vanishes -- and the territory in the worst trouble is the one
+    that disappears off the chart, which is kinder than the truth and
+    therefore worse.
+
+    Clamping with max() alone is not enough: max(-0.0, 0) is -0.0 in Python,
+    because max returns the first of two equal values, and width="-0.0" is
+    not a valid SVG length. A figure that rounds to a whisker below zero is
+    exactly how that arises.
+    """
+    v = v or 0
+    return v if v > 0 else 0.0
+
+
 def round_half_up(v, dp=0):
     """Round the way a spreadsheet does, not the way Python does.
 
@@ -138,8 +156,20 @@ body{background:var(--paper); color:var(--ink); font-family:var(--f-body);
 h1,h2,h3{font-family:var(--f-display); margin:0; text-wrap:balance}
 .num,.val,td.n{font-family:var(--f-mono); font-variant-numeric:tabular-nums}
 
-.band{background:var(--card); border-bottom:1px solid var(--line);
-      padding-block:30px 26px; margin-bottom:34px}
+/* The masthead carries the colour. Printed, the report was a white sheet
+   with a blue chip on it -- correct and characterless, and the first thing
+   anybody sees of it. One band does more for how this reads than any amount
+   of tinting further down the page, and it costs the charts nothing. */
+.band{background:#143C6B;
+      background:linear-gradient(118deg,#0E2C50 0%,#1B5A96 58%,#2a78d6 100%);
+      color:#FFFFFF; border-bottom:none;
+      padding-block:34px 30px; margin-bottom:34px}
+.band h1{color:#FFFFFF}
+.band .who p{color:#D6E4F5}
+.band .code{color:#FFFFFF; background:rgba(255,255,255,.17);
+            border-color:rgba(255,255,255,.34)}
+.band .stamp{color:#C3D7EE}
+.band .stamp b{color:#FFFFFF}
 .band .wrap{padding-block:0}
 .idrow{display:flex; flex-wrap:wrap; align-items:flex-end; gap:16px 28px}
 .code{display:inline-block; font-family:var(--f-display); font-size:12px;
@@ -231,6 +261,9 @@ footer{border-top:1px solid var(--line); padding-top:17px; font-size:11.5px;
        color:var(--ink-3); line-height:1.65}
 @media print{
   body{background:#fff; font-size:11pt}
+  /* Without this the band prints as bare text on white, which is exactly
+     the version this was meant to stop being. */
+  *{-webkit-print-color-adjust:exact; print-color-adjust:exact}
   .band{padding-block:14px}
   section{break-inside:avoid; margin-bottom:22px}
   figure,.tile{break-inside:avoid}
@@ -392,10 +425,10 @@ def render(d):
     # named table belongs on the manager's report, where the team is the
     # subject.
     SW, SX = 420.0, 150.0
-    vals = sorted(max(p['month_pct'], 0) for p in peers)
+    vals = sorted(drawable(p['month_pct']) for p in peers)
     smax = max(vals + [100]) * 1.12 or 100
     def sx(v):
-        return SX + max(v, 0) / smax * SW
+        return SX + drawable(v) / smax * SW
 
     marks = ''
     for p in peers:
@@ -705,6 +738,26 @@ def render(d):
 # between them, where the head report leads with one territory and keeps the
 # comparison to a chart near the bottom.
 def render_team(d):
+    """-> a complete HTML document for a manager's rolled-up report.
+
+    A different document, not the head report with more rows in it. A head is
+    being asked about their own month; a manager is being asked which of
+    their territories needs attention this week, and where the shortfall
+    actually sits. So this leads with the comparison between territories,
+    where the head report leads with one territory and keeps the comparison
+    to a strip near the bottom.
+
+    Three charts, each answering a different question, because one bar chart
+    of achievement answers only the first of them:
+
+      * which territories are behind plan  -- the achievement board;
+      * where the money is                 -- the shortfall in lakhs, since a
+        territory 20% behind on a large plan is a bigger problem than one 40%
+        behind on a small one, and a percentage cannot say that;
+      * which way they are moving          -- achievement against growth, so
+        a territory that is behind but climbing is not read the same as one
+        that is behind and falling.
+    """
     t, y = d['totals'], d['year']
     snap = d['snapshot']
     # Sorted by achievement rather than by region code, so the ones that need
@@ -715,20 +768,174 @@ def render_team(d):
                    key=lambda h: (h['month_pct'] is None, -(h['month_pct'] or 0)))
     month = snap.get('as_of_month_label') or 'this month'
     name = d.get('name') or 'Team'
+    n = len(heads)
 
     behind = [h for h in heads if h['month_pct'] is not None and h['month_pct'] < 70]
     ahead = [h for h in heads if h['month_pct'] is not None and h['month_pct'] >= 100]
 
-    rows = ''
+    TONE = {'good': '#1baf7a', 'warn': '#eda100', 'bad': '#eb6834',
+            'none': '#8A94A6'}
+
+    # -- the group at a glance --------------------------------------------
+    ARC = 245.0
+
+    def gauge(label, value, a, b, colour, caption):
+        p = min(max(value or 0, 0), 150) / 150 * ARC
+        return f'''<figure>
+      <svg viewBox="0 0 200 134" role="img" aria-label="{e(label)}: {pct(value)}">
+        <path d="M22 112 A 78 78 0 0 1 178 112" fill="none" stroke="#E8EDF4"
+              stroke-width="13" stroke-linecap="round"/>
+        <path d="M22 112 A 78 78 0 0 1 178 112" fill="none" stroke="{colour}"
+              stroke-width="13" stroke-linecap="round" stroke-dasharray="{p:.1f} {ARC}"/>
+        <text x="100" y="97" text-anchor="middle" class="num" fill="#121826"
+              style="font-size:36px;font-weight:600">{pct(value)}</text>
+        <text x="100" y="124" text-anchor="middle" class="axis"
+              style="font-size:10.5px">{e(lakh(a))} of {e(lakh(b))}</text>
+      </svg>
+      <figcaption>{caption}</figcaption>
+    </figure>'''
+
+    gauges = (
+        gauge('This month', t['month_pct'], t['mtd_primary'], t['month_target'],
+              TONE[rag(t['month_pct'])],
+              f"<b>This month, against this month&#8217;s AOP.</b> "
+              f"{lakh(t['month_backlog'])} lakh still owed across the group, "
+              f"and the month is not finished.")
+        + gauge('April to date', t['ytd_pct'], t['ytd_actual'], t['ytd_target'],
+                TONE[rag(t['ytd_pct'])],
+                f"<b>April to now, against the plan for those months.</b> "
+                f"The same measure over {y['months_elapsed']} months instead "
+                f"of one.")
+        + gauge('Full year', t['fy_pct'], t['fy_actual'], t['fy_target'],
+                '#2a78d6',
+                "<b>Progress, not a score.</b> Nothing is sold past today, so "
+                "this reads low by construction until March. It is the figure "
+                "on the sheet most often mistaken for a result."))
+
+    # -- board 1: achievement ---------------------------------------------
+    board, Y = '', 10
+    top = max([h['month_pct'] or 0 for h in heads] + [100]) * 1.12
+    BW = 300.0
     for h in heads:
         p = h['month_pct']
+        label = (f'<text x="248" y="{Y + 13}" text-anchor="end" class="lab">'
+                 f'{e(h["region"])} &#183; {e(h["head_name"])}</text>')
+        if p is None:
+            board += label + (f'<text x="264" y="{Y + 13}" class="val" '
+                              f'fill="#8A94A6">no plan against this territory</text>')
+        else:
+            # Clamped at nothing: a negative width is not drawn at all, and a
+            # vanished bar reads as "billed nothing", which is kinder than
+            # the truth and therefore worse. The figure beside it is printed
+            # whatever its sign.
+            w = drawable(p) / top * BW
+            board += label + (
+                f'<rect x="256" y="{Y}" width="{w:.1f}" height="18" rx="3" '
+                f'fill="{TONE[rag(p)]}"/>'
+                f'<text x="{256 + w + 9:.1f}" y="{Y + 13}" class="val">{pct(p)}</text>'
+                f'<text x="{256 + w + 56:.1f}" y="{Y + 13}" class="val" '
+                f'fill="#8A94A6" style="font-size:10.5px">'
+                f'{lakh(h["mtd_primary"])} of {lakh(h["month_target"])}</text>')
+        Y += 26
+    plan_x = 256 + 100 / top * BW
+    board_h = Y + 30
+
+    # -- board 2: where the shortfall sits --------------------------------
+    #
+    # In lakhs, not percent. A territory 20% behind on a plan of 400 is a
+    # bigger hole than one 40% behind on a plan of 90, and the achievement
+    # board above cannot say so -- it is the same chart every month telling
+    # a manager to go and talk to the smallest territory they have.
+    owed = sorted((h for h in heads if h['month_target']),
+                  key=lambda h: -(h['month_backlog'] or 0))
+    gap, G = '', 10
+    span = max([abs(h['month_backlog'] or 0) for h in owed]
+               + [max((h['mtd_primary'] or 0) for h in owed) if owed else 0]
+               + [1])
+    GW = 290.0
+    for h in owed:
+        b = h['month_backlog'] or 0
+        billed = h['mtd_primary'] or 0
+        # Clamped at nothing. A month with more returned than sold is a real
+        # thing and the sheet writes it as a minus; a negative width is not
+        # drawn by any browser, so the bar vanishes and the territory in the
+        # worst trouble is the one that disappears off the chart.
+        bw = drawable(min(billed, span)) / span * GW
+        gap += (f'<text x="248" y="{G + 13}" text-anchor="end" class="lab">'
+                f'{e(h["region"])}</text>'
+                f'<rect x="256" y="{G}" width="{bw:.1f}" height="18" rx="3" '
+                f'fill="var(--done)" opacity=".85"/>')
+        if b > 0:
+            ow = min(b, span) / span * GW
+            gap += (f'<rect x="{256 + bw:.1f}" y="{G}" width="{ow:.1f}" '
+                    f'height="18" rx="3" fill="var(--owed)"/>'
+                    f'<text x="{256 + bw + ow + 9:.1f}" y="{G + 13}" class="val" '
+                    f'fill="#8f3c12">{lakh(b)} owed</text>')
+        else:
+            gap += (f'<text x="{256 + bw + 9:.1f}" y="{G + 13}" class="val" '
+                    f'fill="#0f7a44">past plan by {lakh(-b)}</text>')
+        G += 26
+    gap_h = G + 14
+    total_owed = sum(max(h['month_backlog'] or 0, 0) for h in owed)
+    worst = owed[0] if owed and (owed[0]['month_backlog'] or 0) > 0 else None
+    worst_share = (round_half_up((worst['month_backlog'] or 0) / total_owed * 100)
+                   if worst and total_owed else None)
+
+    # -- board 3: achievement against growth ------------------------------
+    plotted = [h for h in heads
+               if h['month_pct'] is not None and h['growth_pct'] is not None]
+    SX0, SX1, SY0, SY1 = 70.0, 650.0, 30.0, 290.0
+    xs = [h['month_pct'] for h in plotted] + [100]
+    ys = [h['growth_pct'] for h in plotted] + [0]
+    xlo, xhi = min(xs + [0]), max(xs)
+    ylo, yhi = min(ys), max(ys)
+    xpad, ypad = max((xhi - xlo) * .12, 8), max((yhi - ylo) * .14, 8)
+    xlo, xhi = xlo - xpad, xhi + xpad
+    ylo, yhi = ylo - ypad, yhi + ypad
+
+    def px(v):
+        return SX0 + (v - xlo) / (xhi - xlo) * (SX1 - SX0)
+
+    def py(v):
+        return SY1 - (v - ylo) / (yhi - ylo) * (SY1 - SY0)
+
+    dots = ''
+    for h in plotted:
+        x, yy = px(h['month_pct']), py(h['growth_pct'])
+        dots += (f'<circle cx="{x:.1f}" cy="{yy:.1f}" r="6.5" '
+                 f'fill="{TONE[rag(h["month_pct"])]}" stroke="#FFFFFF" '
+                 f'stroke-width="2"/>'
+                 f'<text x="{x:.1f}" y="{yy - 11:.1f}" text-anchor="middle" '
+                 f'class="lab" style="font-size:10px">{e(h["region"])}</text>')
+    qx, qy = px(100), py(0)
+    rising_behind = [h for h in plotted
+                     if h['month_pct'] < 100 and h['growth_pct'] > 0]
+    falling_behind = [h for h in plotted
+                      if h['month_pct'] < 100 and h['growth_pct'] <= 0]
+
+    def tile(k, v, s, tone=''):
+        return (f'<div class="tile"><div class="k">{k}</div>'
+                f'<div class="v {tone}">{v}</div><div class="s">{s}</div></div>')
+
+    # -- the table --------------------------------------------------------
+    rows = ''
+    tmax = max([h['month_pct'] or 0 for h in heads] + [100]) * 1.05
+    for h in heads:
+        p = h['month_pct']
+        # A bar behind the figure, so the column can be read down at a glance
+        # instead of thirteen numbers being compared in the head.
+        bar = ''
+        if p is not None:
+            bar = (f'<span class="minib">'
+                   f'<i style="width:{drawable(p) / tmax * 100:.1f}%;'
+                   f'background:{TONE[rag(p)]}"></i></span>')
         rows += (
             '<tr>'
             f'<td>{e(h["region"])}</td>'
             f'<td class="nm">{e(h["head_name"])}</td>'
             f'<td class="n">{lakh(h["month_target"])}</td>'
             f'<td class="n">{lakh(h["mtd_primary"])}</td>'
-            f'<td class="n {rag(p)}"><b>{pct(p)}</b></td>'
+            f'<td class="n {rag(p)}"><b>{pct(p)}</b>{bar}</td>'
             f'<td class="n {"good" if (h["growth_pct"] or 0) > 0 else "bad"}">'
             f'{signed(h["growth_pct"])}</td>'
             f'<td class="n">{lakh(h["month_backlog"])}</td>'
@@ -736,38 +943,9 @@ def render_team(d):
             f'<td class="n">{lakh(h["fy_backlog"])}</td>'
             '</tr>')
 
-    TONE = {'good': 'var(--done)', 'warn': 'var(--sec)',
-            'bad': 'var(--owed)', 'none': '#8A94A6'}
-    board, Y = '', 10
-    top = max([h['month_pct'] or 0 for h in heads] + [100]) * 1.1
-    BW = 330.0
-    for h in heads:
-        p = h['month_pct']
-        label = (f'<text x="258" y="{Y + 13}" text-anchor="end" class="lab">'
-                 f'{e(h["region"])} &#183; {e(h["head_name"])}</text>')
-        if p is None:
-            board += label + (f'<text x="274" y="{Y + 13}" class="val" '
-                              f'fill="#8A94A6">no plan</text>')
-        else:
-            # Clamped at nothing: a negative width is not drawn at all, and a
-            # vanished bar reads as "billed nothing", which is kinder than
-            # the truth and therefore worse. The figure beside it is printed
-            # whatever its sign.
-            w = max(p, 0) / top * BW
-            board += label + (
-                f'<rect x="266" y="{Y}" width="{w:.1f}" height="18" rx="3" '
-                f'fill="{TONE[rag(p)]}"/>'
-                f'<text x="{266 + w + 9:.1f}" y="{Y + 13}" class="val">{pct(p)}</text>')
-        Y += 26
-    plan_x = 266 + 100 / top * BW
-
-    def tile(k, v, s, tone=''):
-        return (f'<div class="tile"><div class="k">{k}</div>'
-                f'<div class="v {tone}">{v}</div><div class="s">{s}</div></div>')
-
     regions = ', '.join(d['regions'][:6]) + ('...' if len(d['regions']) > 6 else '')
     asat = (f" &#183; as at {e(snap['as_of_date'])}" if snap.get('as_of_date') else '')
-    ahead_line = (f"{len(ahead)} of {len(heads)} territories are at or past plan. "
+    ahead_line = (f"{len(ahead)} of {n} territories are at or past plan. "
                   if ahead else '')
     behind_line = ('<b>' + str(len(behind)) + ' need a conversation</b>: '
                    + e(', '.join(h['region'] for h in behind)) + '. ') if behind else ''
@@ -781,12 +959,15 @@ def render_team(d):
 th.nm,td.nm{{text-align:left}}
 td.nm{{font-family:var(--f-body); color:var(--ink-2); font-weight:400}}
 tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
+.minib{{display:block; height:3px; margin-top:4px; background:var(--line-2);
+        border-radius:2px; overflow:hidden}}
+.minib i{{display:block; height:100%}}
 </style>
 </head><body>
 
 <div class="band"><div class="wrap"><div class="idrow">
   <div class="who">
-    <span class="code">{len(heads)} territories &#183; {e(regions)}</span>
+    <span class="code">{n} territories &#183; {e(regions)}</span>
     <h1>{e(name)}</h1>
     <p>{t['sfo_count']} sales field officers across the group</p>
   </div>
@@ -807,12 +988,22 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
   </div>
 
   <section>
+    <div class="shead"><h2>The group</h2>
+      <span>Three horizons, added from the territory rows</span></div>
+    <div class="grid g3">{gauges}</div>
+    <p class="note"><b>These are added from the territory rows, not read off the
+      sheet&#8217;s own total line.</b> A group covering part of a channel has no
+      subtotal on the sheet at all, and taking the one that is there would quietly
+      report the whole channel as this group&#8217;s.</p>
+  </section>
+
+  <section>
     <div class="shead"><h2>Where each territory stands</h2>
       <span>This month against this month&#8217;s AOP</span></div>
     <figure>
-      <div class="scroll"><svg viewBox="0 0 700 {Y + 30}" role="img"
+      <div class="scroll"><svg viewBox="0 0 700 {board_h}" role="img"
         aria-label="Achievement against AOP this month, by territory">
-        <line x1="266" y1="4" x2="266" y2="{Y - 4}" stroke="#D5DCE6"/>
+        <line x1="256" y1="4" x2="256" y2="{Y - 4}" stroke="#D5DCE6"/>
         <line x1="{plan_x:.1f}" y1="4" x2="{plan_x:.1f}" y2="{Y - 4}"
               stroke="var(--plan)" stroke-width="1.5"/>
         <text x="{plan_x:.1f}" y="{Y + 16}" text-anchor="middle" class="axis"
@@ -821,29 +1012,80 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
       </svg></div>
       <figcaption>Sorted by achievement rather than by region code, so the
         territories needing attention sit together at the bottom instead of
-        being scattered through the list.</figcaption>
+        being scattered through the list. Billed and planned are printed
+        beside each bar, because two territories at 74% are not the same
+        conversation if one of them is ten times the size.</figcaption>
     </figure>
   </section>
 
   <section>
-    <div class="shead"><h2>The group</h2>
-      <span>Added from the territory rows below</span></div>
+    <div class="shead"><h2>Where the shortfall sits</h2>
+      <span>In &#8377; lakhs, largest gap first</span></div>
+    <figure>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--done)"></i>Billed</span>
+        <span><i class="sw" style="background:var(--owed)"></i>Still owed this month</span>
+      </div>
+      <div class="scroll"><svg viewBox="0 0 700 {gap_h}" role="img"
+        aria-label="Billed and still owed this month, by territory, in lakhs">
+        <line x1="256" y1="4" x2="256" y2="{G - 4}" stroke="#D5DCE6"/>
+        {gap}
+      </svg></div>
+      <figcaption>The same month as the chart above, measured in money rather
+        than in percent. A territory 20% behind on a large plan is a bigger
+        hole than one 40% behind on a small one, and an achievement board
+        cannot say so &mdash; read on its own it sends a manager to the
+        smallest territory they have.{
+        f" Of the {lakh(total_owed)} lakh owed across the group, {worst_share:.0f}% of it is in {e(worst['region'])} alone."
+        if worst_share is not None else ''}</figcaption>
+    </figure>
+  </section>
+{f'''
+  <section>
+    <div class="shead"><h2>Which way each is moving</h2>
+      <span>Achievement this month against growth over last month</span></div>
+    <figure>
+      <div class="scroll"><svg viewBox="0 0 700 320" role="img"
+        aria-label="Achievement against growth, by territory">
+        <rect x="{SX0}" y="{SY0}" width="{SX1 - SX0}" height="{SY1 - SY0}"
+              fill="#FBFCFD" stroke="#EEF2F7"/>
+        <line x1="{qx:.1f}" y1="{SY0}" x2="{qx:.1f}" y2="{SY1}"
+              stroke="var(--plan)" stroke-width="1.5"/>
+        <line x1="{SX0}" y1="{qy:.1f}" x2="{SX1}" y2="{qy:.1f}"
+              stroke="#9AA6B8" stroke-dasharray="4 4"/>
+        <text x="{SX1 - 6:.1f}" y="{SY0 + 15:.1f}" text-anchor="end"
+              class="axis" fill="#0f7a44">past plan and growing</text>
+        <text x="{SX0 + 6:.1f}" y="{SY1 - 8:.1f}" class="axis"
+              fill="#b4252c">behind plan and falling</text>
+        <text x="{qx:.1f}" y="{SY1 + 20:.1f}" text-anchor="middle" class="axis"
+              fill="var(--plan)">100% of plan</text>
+        <text x="{SX0 - 8:.1f}" y="{qy + 4:.1f}" text-anchor="end" class="axis">
+          level with LM</text>
+        {dots}
+      </svg></div>
+      <figcaption>Left to right is achievement against this month&#8217;s plan;
+        up and down is growth over the same point last month. A territory
+        behind plan but climbing is not the same conversation as one behind
+        plan and falling, and a single ranked list cannot tell them apart.
+        {len(rising_behind)} of {n} are behind plan but ahead of last month;
+        {len(falling_behind)} are behind on both.</figcaption>
+    </figure>
+  </section>''' if len(plotted) >= 3 else ''}
+
+  <section>
+    <div class="shead"><h2>The year ahead</h2>
+      <span>{y['months_elapsed']} months gone, {y['months_remaining']} to go</span></div>
     <div class="grid g3">
-      {tile('This month', pct(t['month_pct']),
-            f"{lakh(t['mtd_primary'])} against a plan of {lakh(t['month_target'])}.",
-            rag(t['month_pct']))}
       {tile('April to date', pct(t['ytd_pct']),
             f"{lakh(t['ytd_actual'])} against {lakh(t['ytd_target'])}. "
             f"{lakh(t['ytd_backlog'])} behind.", rag(t['ytd_pct']))}
+      {tile('Annual backlog', lakh(t['fy_backlog']),
+            f"Of a {lakh(t['fy_target'])} lakh plan, {lakh(t['fy_actual'])} "
+            f"is banked.")}
       {tile('Needed each month', lakh(y['required_monthly']),
-            f"To close {lakh(t['fy_backlog'])} across the "
-            f"{y['months_remaining']} months left. This month&#8217;s plan is "
-            f"{lakh(t['month_target'])}.")}
+            f"To close it across the {y['months_remaining']} months left. "
+            f"This month&#8217;s plan is {lakh(t['month_target'])}.")}
     </div>
-    <p class="note"><b>These are added from the territory rows, not read off the
-      sheet&#8217;s own total line.</b> A group covering part of a channel has no
-      subtotal on the sheet at all, and taking the one that is there would quietly
-      report the whole channel as this group&#8217;s.</p>
   </section>
 
   <section>
@@ -855,7 +1097,7 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
         <th>FY backlog</th></tr></thead>
       <tbody>{rows}</tbody>
       <tfoot><tr class="hl"><td>Group</td>
-        <td class="nm">{len(heads)} territories</td>
+        <td class="nm">{n} territories</td>
         <td class="n">{lakh(t['month_target'])}</td>
         <td class="n">{lakh(t['mtd_primary'])}</td>
         <td class="n">{pct(t['month_pct'])}</td>
@@ -870,6 +1112,22 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
       the same thing in a way that can be acted on.</p>
   </section>
 
+  <section>
+    <div class="shead"><h2>What the terms mean</h2>
+      <span>So nothing here has to be taken on trust</span></div>
+    <dl class="gloss">
+      <dt>AOP</dt><dd>The target for the period, as planned at the start of the year.</dd>
+      <dt>Primary sales</dt><dd>Billed from the company to the distributor.
+        Achievement is measured on this.</dd>
+      <dt>LMTD</dt><dd>Last month to the same day, so growth compares like with
+        like rather than a part month against a whole one.</dd>
+      <dt>Backlog</dt><dd>AOP minus what has been billed. Negative means ahead
+        of plan.</dd>
+      <dt>Group</dt><dd>Added from the territory rows on this report, never read
+        off the sheet&#8217;s own channel total.</dd>
+    </dl>
+  </section>
+
   <footer>
     Built from the review sheet for {e(month)}, as circulated. Every percentage and
     backlog is recomputed from the AOP and sales columns rather than copied across.
@@ -877,6 +1135,7 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
   </footer>
 </div>
 </body></html>"""
+
 
 
 # -- the covering email ---------------------------------------------------
