@@ -1,4 +1,5 @@
 from django.urls import path
+from .views.send import SalesMailOutboxView, SalesMailSendView
 from .views import (
     SalesTemplateView, SalesUploadView, SalesOverviewView, SalesBreakdownView,
     SalesTrendView, SalesForecastView, SalesFiltersView, SalesInsightsView,
@@ -58,6 +59,8 @@ urlpatterns = [
     path('recipients/template/',      SalesRecipientsTemplateView.as_view()),
     path('recipients/import/',        SalesRecipientsImportView.as_view()),
     path('recipients/mail/',          SalesMailPreviewView.as_view()),
+    path('mail/outbox/',              SalesMailOutboxView.as_view()),
+    path('mail/send/',                SalesMailSendView.as_view()),
     path('uploaders/',                SalesUploaderView.as_view()),
     path('uploaders/edit/',           SalesUploaderEditView.as_view()),
     path('uploaders/edit/<int:pk>/',  SalesUploaderEditView.as_view()),

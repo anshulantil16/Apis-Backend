@@ -141,11 +141,19 @@ class SalesReviewReportView(SalesIQView):
                 return Response({'error': 'That row is not on this sheet.'},
                                 status=404)
         else:
-            low = key.lower()
-            me = next((r for r in rows
-                       if r.head_code.lower() == low
-                       or r.region.lower() == low
-                       or r.head_name.lower() == low), None)
+            from .recipients import candidates
+            hits = candidates(key, rows)
+            if len(hits) > 1:
+                # Not resolved to the first of them. Being handed somebody
+                # else's numbers under your own name is the one failure this
+                # report must never have.
+                return Response(
+                    {'error': f'"{key}" is on {len(hits)} rows of this sheet ('
+                              + ', '.join(h.head_name for h in hits)
+                              + '), so it does not say whose report to build. '
+                                'Ask for ?row= the row id instead.'},
+                    status=400)
+            me = hits[0] if hits else None
             if me is None:
                 return Response({'error': f'No row for "{key}" on this sheet.'},
                                 status=404)

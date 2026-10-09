@@ -44,21 +44,50 @@ def recipient_json(r):
     }
 
 
-def match_head(key, rows):
-    """The row a recipient's key points at.
+def candidates(key, rows):
+    """Every row a recipient's key could mean.
 
-    APIS ID first, then region, then name. An ID because a name is not an
-    identity -- the same person is spelled several ways across a year of
-    exports, and a report addressed to a spelling goes to nobody.
+    APIS ID first, then region, then the name on the sheet. An ID because a
+    name is not an identity -- the same person is spelled several ways across
+    a year of exports, and a report addressed to a spelling goes to nobody.
     """
     low = (key or '').strip().lower()
     if not low:
-        return None
+        return []
     for attr in ('head_code', 'region', 'head_name'):
-        for r in rows:
-            if (getattr(r, attr) or '').strip().lower() == low:
-                return r
-    return None
+        hits = [r for r in rows
+                if (getattr(r, attr) or '').strip().lower() == low]
+        if hits:
+            return hits
+    return []
+
+
+def match_head(key, rows):
+    """The one row a key means, or None if it means none -- or several.
+
+    A key matching two rows used to resolve to whichever came first. REGION
+    is not unique on this sheet: the handover line carries GTR04 A, merged
+    down from the row above it, so "GTR04 A" names two people and the second
+    of them would have been sent the first one's numbers. Ambiguity is not a
+    match; it is reported.
+    """
+    hits = candidates(key, rows)
+    return hits[0] if len(hits) == 1 else None
+
+
+def unique_key(row, rows):
+    """The shortest identifier that names this row and no other.
+
+    The template used to hand out the APIS ID, or the region where there was
+    no ID. That is fine for fifteen of sixteen rows and wrong for the one
+    that matters -- so the key is checked against the sheet as it is built,
+    and falls back to the name where the region is shared.
+    """
+    for v in (row.head_code, row.region, row.head_name):
+        v = (v or '').strip()
+        if v and len(candidates(v, rows)) == 1:
+            return v
+    return (row.head_name or row.region or '').strip()
 
 
 def _csv_stream(text):
@@ -162,9 +191,15 @@ class SalesRecipientsView(SalesIQView):
         for rec in ReportRecipient.objects.all():
             j = recipient_json(rec)
             if rec.role == ReportRecipient.ROLE_HEAD:
-                row = match_head(rec.head_key, rows)
+                hits = candidates(rec.head_key, rows)
+                row = hits[0] if len(hits) == 1 else None
                 j['matched'] = bool(row)
                 j['matched_to'] = f'{row.region} — {row.head_name}' if row else None
+                # Said, not swallowed. A key naming two people used to resolve
+                # to the first of them, so the second was sent somebody else's
+                # numbers and the screen showed nothing wrong.
+                j['ambiguous'] = ([h.head_name for h in hits]
+                                  if len(hits) > 1 else None)
                 if row:
                     covered.add(row.id)
             else:
@@ -176,7 +211,7 @@ class SalesRecipientsView(SalesIQView):
         # against them is a head whose report is built every morning and sent
         # to no one.
         missing = [{'region': r.region, 'head_name': r.head_name,
-                    'head_code': r.head_code}
+                    'head_code': r.head_code, 'key': unique_key(r, rows)}
                    for r in rows if r.id not in covered]
 
         return Response({
@@ -364,7 +399,16 @@ class SalesRecipientsImportView(SalesIQAdminView):
                               'covers_all': covered.upper() == 'ALL',
                               'is_active': True})
             else:
-                if not match_head(key, rows):
+                hits = candidates(key, rows)
+                if len(hits) > 1:
+                    skipped.append(
+                        f'line {n}: "{key}" is on {len(hits)} rows of the '
+                        f'sheet (' + ', '.join(h.head_name for h in hits)
+                        + '), so it does not say who this is. Download the '
+                          'list again — it now carries a key that names one '
+                          'row only.')
+                    continue
+                if not hits:
                     skipped.append(f'line {n}: no head matching "{key}" '
                                    f'on the latest sheet')
                     continue

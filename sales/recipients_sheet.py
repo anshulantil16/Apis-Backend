@@ -36,7 +36,7 @@ def build(heads, managers):
 
     r = 2
     for h in heads:
-        for i, v in enumerate(['head', h.head_code or h.region, h.region or '',
+        for i, v in enumerate(['head', h.sheet_key, h.region or '',
                                h.head_name, h.email_prefill, ''], start=1):
             ws.cell(row=r, column=i, value=v)
         r += 1
@@ -58,12 +58,25 @@ def build(heads, managers):
 
 
 def heads_for(rows, existing):
-    """Attach whatever email is already on file to each head row."""
+    """Give each head row the key it will be addressed by, and any email
+    already on file against it."""
+    from .views.recipients import candidates, unique_key
+
     by_key = {}
     for rec in existing:
         if rec.head_key:
             by_key[rec.head_key.strip().lower()] = rec.email
     for r in rows:
-        r.email_prefill = (by_key.get((r.head_code or '').strip().lower())
-                           or by_key.get((r.region or '').strip().lower()) or '')
+        r.sheet_key = unique_key(r, rows)
+        # Looked up by whichever identifier the list was filled in with, not
+        # only the one we would hand out today -- a list set up before the
+        # key changed still finds its own rows.
+        r.email_prefill = ''
+        for ident in (r.sheet_key, r.head_code, r.region, r.head_name):
+            got = by_key.get((ident or '').strip().lower())
+            # Only where that identifier names this row and no other, or a
+            # shared region would copy one head's address onto another's row.
+            if got and candidates(ident, rows) == [r]:
+                r.email_prefill = got
+                break
     return rows
