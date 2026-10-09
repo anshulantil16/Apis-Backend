@@ -160,14 +160,19 @@ class TheMorningSend(TestCase):
         self.assertEqual(d['sent'], 2)
         self.assertEqual(len(DJMAIL.outbox), 2)
 
-    def test_a_manager_gets_the_roll_up_and_each_head_s_own_file(self):
+    def test_a_manager_gets_one_report_covering_all_of_it(self):
+        """Not the roll-up plus one file per head. For a manager holding the
+        whole channel that arrived as fourteen attachments -- a strip of
+        thumbnails to scroll through rather than a report to read -- and the
+        other thirteen were the same figures the roll-up already carried."""
         ReportRecipient.objects.create(role='manager', name='North',
                                        email='mgr@apisindia.com',
                                        regions=['GTR01', 'GTR04 B'])
         self.send(recipients=[ReportRecipient.objects.get(
             email='mgr@apisindia.com').id])
         m = DJMAIL.outbox[0]
-        self.assertEqual(len(m.attachments), 3)        # the group, plus two
+        self.assertEqual(len(m.attachments), 1)
+        self.assertIn('North', m.attachments[0][0])
         self.assertIn('GTR01', m.alternatives[0][0])
         self.assertIn('GTR04 B', m.alternatives[0][0])
 
@@ -519,8 +524,17 @@ class TheManagersCumulatedMail(TestCase):
                     if r.region in ('GTR01', 'GTR04 A', 'GTR04 B'))
         self.assertIn(lakh(total), self.html)
 
-    def test_he_gets_the_group_report_and_every_head_s_own_file(self):
-        self.assertEqual(len(DJMAIL.outbox[0].attachments), 4)
+    def test_one_attachment_not_one_per_territory(self):
+        self.assertEqual(len(DJMAIL.outbox[0].attachments), 1)
+
+    def test_and_that_one_file_carries_every_territory(self):
+        """Which is what makes a single attachment the right answer rather
+        than a thing left out."""
+        body = DJMAIL.outbox[0].attachments[0][1]
+        if isinstance(body, bytes):          # a PDF, where one can be built
+            self.skipTest('rendered to PDF; the HTML is checked above')
+        for r in ('GTR01', 'GTR04 A', 'GTR04 B'):
+            self.assertIn(r, body)
 
 
 class TwoPeopleInOneGTR(TestCase):

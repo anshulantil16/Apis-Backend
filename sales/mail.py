@@ -235,9 +235,9 @@ def for_manager(d):
 
     intro = ('Please find attached the Subzone-wise and ASM/TSM-wise B2C '
              'Primary Sales Report for the month of <b>' + month_label(snap)
-             + '</b> (as of ' + as_of(snap) + '), across your '
-             + str(len(heads)) + ' territories, with each territory&#8217;s '
-             'own report alongside it. ' + OT_NOTE)
+             + '</b> (as of ' + as_of(snap) + '), across all '
+             + str(len(heads)) + ' of your territories in one report. '
+             + OT_NOTE)
     html = _shell('Hi Team,', intro,
                   summary_table(heads, snap.get('as_of_month_label'),
                                 totals=t, total_label='Group'),

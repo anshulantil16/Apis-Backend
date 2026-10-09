@@ -131,17 +131,15 @@ def compose(rec, req, snap, rows):
     subject, html = MAIL.for_manager(resp.data)
     _, text = REPORT.team_email_for(resp.data)
 
+    # One file, covering every territory they hold. It used to be the
+    # roll-up plus a separate report per head, which for a manager covering
+    # the whole channel arrived as fourteen attachments -- a strip of
+    # thumbnails to scroll through rather than a report to read. The roll-up
+    # already carries every territory by name, with the group line under
+    # them, so the other thirteen were the same figures a second time.
     files = [_attach('{}_{}'.format(REPORT._safe(rec.name or 'group'),
                                     _stamp(snap)),
                      REPORT.render_team(resp.data))]
-    # Each territory's own report alongside the roll-up, which is what the
-    # covering note says is attached.
-    for row in rows:
-        if row.region in covers:
-            one = _one_head(req, snap, row)
-            if one.status_code == 200:
-                files.append(_attach(_file_name(row, snap),
-                                     REPORT.render(one.data)))
     return {'subject': subject, 'html': html, 'text': text, 'files': files}
 
 
