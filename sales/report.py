@@ -383,33 +383,32 @@ def render(d):
             f'<text x="{204 + rw + 9:.1f}" y="167" class="val" fill="var(--owed)">'
             f'{lakh(y["required_monthly"])}</text>')
 
-    # -- peer board -------------------------------------------------------
-    rows_svg, Y = '', 10
-    PW = 330.0
-    pmax = max([max(p['month_pct'], 0) for p in peers] + [100]) * 1.1
-    for p in peers:
-        mine = p['id'] == h['id']
-        bw2 = max(p['month_pct'], 0) / pmax * PW
-        if mine:
-            rows_svg += (
-                f'<g class="me"><rect x="244" y="{Y - 3}" width="446" height="24" fill="#F3F8FE"/>'
-                f'<text x="258" y="{Y + 13}" text-anchor="end" class="lab">'
-                f'{e(p["region"])} &#183; {e(p["head_name"])}</text>'
-                f'<rect x="266" y="{Y}" width="{bw2:.1f}" height="18" rx="3" fill="var(--done)"/>'
-                f'<text x="{266 + bw2 + 9:.1f}" y="{Y + 13}" class="val">'
-                f'{pct(p["month_pct"])}</text></g>')
-        else:
-            rows_svg += (
-                f'<text x="258" y="{Y + 13}" text-anchor="end" class="lab">'
-                f'{e(p["region"])} &#183; {e(p["head_name"])}</text>'
-                f'<rect x="266" y="{Y}" width="{bw2:.1f}" height="18" rx="3" '
-                f'fill="var(--peer)" opacity=".55"/>'
-                f'<text x="{266 + bw2 + 9:.1f}" y="{Y + 13}" class="val" '
-                f'fill="#4A5568">{pct(p["month_pct"])}</text>')
-        Y += 26
-    plan_x = 266 + 100 / pmax * PW
-    peer_h = Y + 34
+    # -- where this head stands ------------------------------------------
+    # A strip of unlabelled marks, not a named league table. The report goes
+    # to one person; a board listing eleven colleagues by name and figure
+    # hands every reader their peers' numbers, which is somebody else's
+    # information and not ours to circulate. What is theirs is where they
+    # stand -- so the spread stays, the position stays, the names go. The
+    # named table belongs on the manager's report, where the team is the
+    # subject.
+    SW, SX = 420.0, 150.0
+    vals = sorted(max(p['month_pct'], 0) for p in peers)
+    smax = max(vals + [100]) * 1.12 or 100
+    def sx(v):
+        return SX + max(v, 0) / smax * SW
 
+    marks = ''
+    for p in peers:
+        if p['id'] == h['id']:
+            continue
+        marks += (f'<circle cx="{sx(p["month_pct"]):.1f}" cy="40" r="5.5" '
+                  f'fill="var(--peer)" opacity=".5"/>')
+    mine_pct = h['month_pct'] or 0
+    mine_x = sx(mine_pct)
+    # The median rather than the mean: one territory at 139% drags an average
+    # above most of the people it is meant to describe.
+    mid = vals[len(vals) // 2] if vals else 0
+    strip_h = 108
     # -- the year ahead ---------------------------------------------------
     year_pts = []
     if y.get('plan_due_by_now_pct') is not None:
@@ -603,24 +602,35 @@ def render(d):
   </section>
 {sfo_block}
   <section>
-    <div class="shead"><h2>Against the other heads</h2>
-      <span>{e(chan)} only &mdash; {len(peers)} heads</span></div>
+    <div class="shead"><h2>Where you stand</h2>
+      <span>{e(chan)} only &mdash; {of} heads</span></div>
     <figure>
-      <div class="scroll"><svg viewBox="0 0 700 {peer_h}" role="img"
-        aria-label="Achievement against AOP this month, by head">
-        <line x1="266" y1="4" x2="266" y2="{Y - 4}" stroke="#D5DCE6"/>
-        <line x1="{plan_x:.1f}" y1="4" x2="{plan_x:.1f}" y2="{Y - 4}"
+      <div class="scroll"><svg viewBox="0 0 700 {strip_h}" role="img"
+        aria-label="This territory's achievement against the spread of the channel">
+        <line x1="{SX}" y1="40" x2="{SX + SW}" y2="40" stroke="#E3E8EF"
+              stroke-width="2"/>
+        <line x1="{sx(100):.1f}" y1="18" x2="{sx(100):.1f}" y2="62"
               stroke="var(--plan)" stroke-width="1.5"/>
-        <text x="{plan_x:.1f}" y="{Y + 16}" text-anchor="middle" class="axis"
+        <text x="{sx(100):.1f}" y="78" text-anchor="middle" class="axis"
               fill="var(--plan)">100% &mdash; plan</text>
-        {rows_svg}
+        <line x1="{sx(mid):.1f}" y1="24" x2="{sx(mid):.1f}" y2="56"
+              stroke="#9AA6B8" stroke-dasharray="3 3"/>
+        <text x="{sx(mid):.1f}" y="96" text-anchor="middle" class="axis">
+          {pct(mid)} &mdash; middle of {e(chan)}</text>
+        {marks}
+        <circle cx="{mine_x:.1f}" cy="40" r="9" fill="var(--done)"/>
+        <text x="{SX - 12:.1f}" y="45" text-anchor="end" class="lab"><tspan
+          font-weight="700">You</tspan> &#183; {e(h['region'])}</text>
+        <text x="{mine_x:.1f}" y="22" text-anchor="middle" class="val"
+              fill="var(--done)" font-weight="700">{pct(h['month_pct'])}</text>
       </svg></div>
-      <figcaption>{ordinal(m_rank)} of {of} on the month{
-        f", {ordinal((rank.get('ytd_pct') or {}).get('position'))} of {of} on the year to date" if rank.get('ytd_pct') else ''}{
+      <figcaption>Each faint mark is another territory in {e(chan)}, unnamed:
+        their figures are theirs. Yours is {ordinal(m_rank)} of {of} on the
+        month{f", {ordinal((rank.get('ytd_pct') or {}).get('position'))} of {of} on the year to date" if rank.get('ytd_pct') else ''}{
         f", and <b>{ordinal(g_rank)} of {of} on growth</b>" if g_rank else ''}.
-        Ranked within {e(chan)} only: measured against a channel with a different
-        field force and a differently phased plan, the comparison would mean
-        nothing.</figcaption>
+        Ranked within {e(chan)} only: measured against a channel with a
+        different field force and a differently phased plan, the comparison
+        would mean nothing.</figcaption>
     </figure>
   </section>
 

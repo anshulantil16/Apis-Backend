@@ -212,3 +212,61 @@ class WithNoSendingAccountConfigured(TestCase):
         self.assertIn('.env', r.json()['error'])
         self.assertFalse(self.client.get(
             '/api/sales/mail/outbox/').json()['configured'])
+
+
+class AnIndividualReportIsOnlyTheirOwn(TestCase):
+    """The report goes to one person.
+
+    A board listing eleven colleagues by name and figure hands every reader
+    their peers' numbers. That is somebody else's information, and circulating
+    it to sixteen inboxes every morning is not a thing to do by accident.
+    """
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04A, GTR04B, HANDOVER]))
+
+    def report_for(self, region):
+        rs = rows()
+        me = next(r for r in rs if r.region == region)
+        r = self.client.get('/api/sales/review/report/file/?row=%d' % me.id)
+        self.assertEqual(r.status_code, 200)
+        return me, rs, r.content.decode('utf-8')
+
+    def test_no_other_head_is_named_anywhere_in_it(self):
+        me, rs, html = self.report_for('GTR01')
+        for other in rs:
+            if other.id == me.id:
+                continue
+            self.assertNotIn(other.head_name, html,
+                             '%s is named in %s report'
+                             % (other.head_name, me.head_name))
+            # The surname on its own too: "Kumar" in a caption is still a
+            # colleague's figure attached to a colleague.
+            last = other.head_name.split()[-1].strip('()')
+            if len(last) > 3 and last.lower() not in me.head_name.lower():
+                self.assertNotIn(last, html)
+
+    def test_it_still_says_where_they_stand(self):
+        """Taking the names out must not take the standing out -- that is
+        the reader's own position and the point of the section."""
+        _, _, html = self.report_for('GTR01')
+        flat = ' '.join(html.split())           # the markup wraps its lines
+        self.assertIn('Where you stand', flat)
+        self.assertIn('of 4 on the month', flat)
+        self.assertIn('middle of GT', flat)
+
+    def test_the_spread_is_still_drawn(self):
+        """One mark per territory, so the shape of the channel is visible
+        without anybody being named."""
+        _, rs, html = self.report_for('GTR01')
+        self.assertEqual(html.count('fill="var(--peer)"'), len(rs) - 1)
+
+    def test_the_manager_report_does_name_them(self):
+        """There the team IS the subject, and a roll-up that will not say
+        which territory is behind is useless to the person who has to act."""
+        regions = ','.join(sorted({r.region for r in rows()}))
+        r = self.client.get('/api/sales/review/team/file/?regions=' + regions)
+        self.assertEqual(r.status_code, 200)
+        html = r.content.decode('utf-8')
+        for row in rows():
+            self.assertIn(row.head_name, html)
