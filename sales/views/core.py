@@ -385,11 +385,27 @@ def _ingest_review(request, upload, ws, header_row, header_row_index=1):
                  + f'; figures read as {unit}.')
     if skipped:
         notes.append(f'{skipped} blank rows skipped.')
-    vacant = sum(1 for r in heads if not r.head_code)
-    if vacant:
-        notes.append(f'{vacant} of {len(heads)} heads could not be matched to an '
-                     f'APIS ID on the AOP sheet, so their report cannot be '
-                     f'addressed automatically yet.')
+    # Not "how many have no APIS ID". A head with no ID is addressed by
+    # region, or by name where the region is shared, and nothing about their
+    # report is held up -- saying it could not be addressed was true when the
+    # ID was the only key and false afterwards. What is worth saying is the
+    # row that cannot be told apart from another at all.
+    from .recipients import candidates, unique_key
+    clashing = [r for r in heads if len(candidates(unique_key(r, heads), heads)) != 1]
+    if clashing:
+        warnings.append(
+            str(len(clashing)) + ' of ' + str(len(heads)) + ' heads cannot be '
+            'told apart from another row — same name, same region and no APIS '
+            'ID on either: ' + ', '.join(r.head_name for r in clashing[:4])
+            + '. Their reports cannot be addressed to one person.')
+    else:
+        by_name = sum(1 for r in heads
+                      if unique_key(r, heads) == (r.head_name or ''))
+        if by_name:
+            notes.append(
+                str(by_name) + ' of ' + str(len(heads)) + ' heads share a '
+                'region with another row, so they are identified by name '
+                'rather than by region. Nothing is held up by it.')
 
     snapshot.warnings, snapshot.notes = warnings, notes
     snapshot.save(update_fields=['row_count', 'source_unit', 'warnings', 'notes'])

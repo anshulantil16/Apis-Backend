@@ -631,3 +631,45 @@ class TwoPeopleInOneGTR(TestCase):
                         'Arun Mishra ( Arnab Ghosh)', 'h@apisindia.com', '']])
         self.assertEqual(d['skipped'], [])
         self.assertEqual(d['added'], 1)
+
+
+class WhatTheScreenFlagsAsAProblem(TestCase):
+    """A head with no APIS ID used to be flagged in amber on every card. That
+    mattered when the ID was the only key. It is now addressed by region, or
+    by name where the region is shared, and nothing is held up -- so the tag
+    marked working rows as faulty, which is how people learn to ignore a
+    colour that is sometimes real."""
+
+    def rows_json(self):
+        return self.client.get('/api/sales/review/').json()['rows']
+
+    def test_a_head_with_no_apis_id_is_not_flagged(self):
+        upload(review_workbook([GTR01, GTR04A, HANDOVER]),
+               name="Primary Master till 30th Sept'2026.xlsx")
+        for r in self.rows_json():
+            self.assertTrue(r['addressable'], r['head_name'])
+            self.assertEqual(r['clashes_with'], [])
+
+    def test_the_handover_line_is_addressed_by_name(self):
+        upload(review_workbook([GTR01, GTR04A, HANDOVER]))
+        by = {r['head_name'].upper(): r for r in self.rows_json()}
+        self.assertEqual(by['MOHINDER SHARMA']['addressed_by'], 'region')
+        self.assertEqual(by['ARUN MISHRA ( ARNAB GHOSH)']['addressed_by'], 'name')
+
+    def test_the_upload_no_longer_claims_it_cannot_be_addressed(self):
+        r = upload(review_workbook([GTR01, GTR04A, HANDOVER]))
+        said = ' '.join((r.json().get('notes') or [])
+                        + (r.json().get('warnings') or []))
+        self.assertNotIn('cannot be', said)
+        self.assertNotIn('APIS ID', said)
+
+    def test_two_rows_that_really_cannot_be_told_apart_are_flagged(self):
+        """Same name, same region, no ID on either. Then there genuinely is
+        no way to say whose report is whose."""
+        twin = list(HANDOVER)
+        r = upload(review_workbook([GTR01, HANDOVER, twin]))
+        said = ' '.join(r.json().get('warnings') or [])
+        self.assertIn('cannot be told apart', said)
+        flagged = [x for x in self.rows_json() if not x['addressable']]
+        self.assertEqual(len(flagged), 2)
+        self.assertTrue(all(x['clashes_with'] for x in flagged))

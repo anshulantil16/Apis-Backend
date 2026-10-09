@@ -78,6 +78,32 @@ def _pick(request):
     return qs.first()          # Meta.ordering puts the newest first
 
 
+def _identity(row, heads):
+    """How this row is addressed, and whether that works.
+
+    The screen used to flag every row with no APIS ID in amber. That mattered
+    when the ID was the only key; now a head with no ID is addressed by
+    region, or by name where the region is shared, and nothing is blocked.
+    An amber tag on a row whose report sends perfectly well reads as a fault
+    and trains people to ignore the colour.
+
+    What is worth flagging is the row that cannot be told apart from another
+    at all -- same name, same region, no ID on either. Then there genuinely
+    is no way to say whose report is whose.
+    """
+    from .recipients import candidates, unique_key
+    key = unique_key(row, heads)
+    hits = candidates(key, heads)
+    return {
+        'key': key,
+        'addressed_by': ('apis_id' if key == (row.head_code or '')
+                         else 'region' if key == (row.region or '')
+                         else 'name'),
+        'addressable': len(hits) == 1,
+        'clashes_with': [h.head_name for h in hits if h.id != row.id],
+    }
+
+
 class SalesReviewView(SalesIQView):
     """The snapshots on file, and one snapshot's rows."""
 
@@ -88,8 +114,10 @@ class SalesReviewView(SalesIQView):
         snap = _pick(request)
         if snap:
             rows = list(snap.rows.all())
+            heads = [r for r in rows if not r.is_total]
             out['snapshot'] = snapshot_json(snap)
-            out['rows'] = [row_json(r) for r in rows if not r.is_total]
+            out['rows'] = [dict(row_json(r), **_identity(r, heads))
+                           for r in heads]
             out['totals'] = [row_json(r) for r in rows if r.is_total]
         return Response(out)
 
