@@ -10,7 +10,8 @@ from django.core import mail as DJMAIL
 from django.test import override_settings
 
 from .models import ReportRecipient, ReviewSnapshot
-from .tests import TestCase, Client, GTR01, GTR04B, review_workbook, upload
+from .tests import (TestCase, Client, GTR01, GTR04B, REVIEW_HEADERS,
+                    review_workbook, upload)
 from .views.recipients import candidates, match_head, unique_key
 
 
@@ -360,3 +361,66 @@ class TheMailBody(TestCase):
             self.assertEqual(
                 self.client.get('/api/sales/mail/outbox/').json()
                 ['attachment_format'], 'html')
+
+
+class WhenTheNameAndTheSheetDisagree(TestCase):
+    """The month is the sheet's own statement -- its headers read "MTD Sep-26
+    PRI SALES". A September workbook saved under an April name is a September
+    workbook with the wrong name on it, and dating its figures to April is
+    exactly the kind of quiet relabelling that makes a whole report wrong."""
+
+    def test_the_name_does_not_move_the_month(self):
+        upload(review_workbook([GTR01]), name='Primary Master till 01.04.2026.xlsx')
+        snap = ReviewSnapshot.objects.first()
+        self.assertEqual(snap.as_of_month.month, 9)      # the columns say Sep
+
+    def test_a_contradicting_date_is_refused_not_taken(self):
+        """It used to be taken silently, so the mail read "SEPT'26 (as of
+        01.04.26)" and left the reader to notice."""
+        from datetime import date
+        upload(review_workbook([GTR01]), name='Primary Master till 01.04.2026.xlsx')
+        snap = ReviewSnapshot.objects.first()
+        self.assertNotEqual(snap.as_of_date, date(2026, 4, 1))
+
+    def test_and_it_is_said_out_loud(self):
+        r = upload(review_workbook([GTR01]),
+                   name='Primary Master till 01.04.2026.xlsx')
+        said = ' '.join(r.json().get('warnings') or [])
+        self.assertIn('01 April 2026', said)
+        self.assertIn('September', said)
+
+    def test_a_name_that_agrees_is_used_as_before(self):
+        from datetime import date
+        upload(review_workbook([GTR01]),
+               name="Primary Master till 30th Sept'2026.xlsx")
+        snap = ReviewSnapshot.objects.first()
+        self.assertEqual(snap.as_of_date, date(2026, 9, 30))
+        self.assertEqual(snap.warnings, [])
+
+    def test_april_s_own_sheet_reads_april_without_being_told(self):
+        """Which is the case that actually happens: when April's file is
+        uploaded its columns say Apr-26, and nothing has to be renamed."""
+        apr = [h.replace("Sep-26", "Apr-26").replace("SEPT'26", "APR'26")
+               if isinstance(h, str) else h for h in REVIEW_HEADERS]
+        upload(review_workbook([GTR01], headers=apr),
+               name='Primary Master till 30.04.2026.xlsx')
+        snap = ReviewSnapshot.objects.first()
+        self.assertEqual((snap.as_of_month.year, snap.as_of_month.month),
+                         (2026, 4))
+        from datetime import date
+        self.assertEqual(snap.as_of_date, date(2026, 4, 30))
+        self.assertEqual(snap.warnings, [])
+
+    def test_the_mail_then_says_april(self):
+        apr = [h.replace("Sep-26", "Apr-26").replace("SEPT'26", "APR'26")
+               if isinstance(h, str) else h for h in REVIEW_HEADERS]
+        upload(review_workbook([GTR01], headers=apr),
+               name='Primary Master till 30.04.2026.xlsx')
+        ReportRecipient.objects.create(role='head', head_key='GTR01',
+                                       name='Mohinder Sharma',
+                                       email='m@apisindia.com')
+        from . import mail as MAIL
+        from .views.review import snapshot_json
+        snap = snapshot_json(ReviewSnapshot.objects.first())
+        self.assertEqual(MAIL.month_label(snap), 'APR&#8217;26')
+        self.assertEqual(MAIL.as_of(snap), '30.04.26')

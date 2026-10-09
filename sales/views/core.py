@@ -208,8 +208,29 @@ def _ingest_review(request, upload, ws, header_row, header_row_index=1):
     # This is not cosmetic. A sheet closing on the 30th of September uploaded
     # on the 9th of October was stamped the 9th of October, and that date went
     # out in the subject line of every mail built from it.
+    #
+    # And only when the name agrees with the sheet. The month is the sheet's
+    # own statement -- its headers read "MTD Sep-26 PRI SALES" -- so a
+    # September workbook saved under an April name is a September workbook
+    # with the wrong name on it. Taking the name would date September's
+    # figures to April; taking it silently, as this did, printed "SEPT'26
+    # (as of 01.04.26)" in the mail and left the reader to notice.
+    named = REVIEW.date_from_name(upload.filename)
+    name_clash = None
+    if named and as_of_month and (named.year, named.month) != (
+            as_of_month.year, as_of_month.month):
+        name_clash = (
+            'The file is named for ' + named.strftime('%d %B %Y')
+            + ', but its columns are ' + as_of_month.strftime('%B %Y')
+            + ' ("MTD ' + as_of_month.strftime('%b-%y')
+            + ' PRI SALES"). The sheet decides: the figures in it are '
+            + as_of_month.strftime('%B') + "'s. The date on the name was "
+            'not used — rename the file if it is wrong, or pass ?as_of= to '
+            'set the day deliberately.')
+        named = None
+
     as_of_date = (parse_date(request.query_params.get('as_of'))
-                  or REVIEW.date_from_name(upload.filename)
+                  or named
                   or date.today())
 
     snapshot = ReviewSnapshot.objects.create(
@@ -305,6 +326,8 @@ def _ingest_review(request, upload, ws, header_row, header_row_index=1):
     snapshot.row_count = len(heads)
 
     warnings, notes = [], []
+    if name_clash:
+        warnings.append(name_clash)
     if unknown:
         warnings.append('Columns not recognised and not loaded: ' + ', '.join(unknown[:8]))
     if as_of_month is None:
