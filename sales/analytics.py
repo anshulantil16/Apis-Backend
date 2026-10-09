@@ -11,7 +11,7 @@ Two rules throughout:
     work in one and silently break in the other.
 """
 from datetime import date, timedelta
-from django.db.models import Sum, Count, Min, Max, Avg
+from django.db.models import Sum, Count, Min, Max
 
 
 def _f(v):

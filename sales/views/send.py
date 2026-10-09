@@ -204,8 +204,9 @@ class SalesMailSendView(SalesIQOwnerView):
     def post(self, request):
         d = request.data or {}
         test_to = (d.get('test_to') or '').strip().lower()
-        if test_to and '@' not in test_to:
-            return Response({'error': 'That is not an email address.'},
+        from .recipients import looks_like_an_address
+        if test_to and not looks_like_an_address(test_to):
+            return Response({'error': f'"{test_to}" is not an email address.'},
                             status=400)
 
         if not _configured():

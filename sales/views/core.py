@@ -6,7 +6,6 @@ from datetime import date, timedelta
 import openpyxl
 from django.db.models import Count, Max, Min, Q, Sum
 from django.http import HttpResponse
-from rest_framework.views import APIView
 from .auth import SalesIQAdminView, SalesIQView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -19,16 +18,16 @@ from ..ingest import (map_headers, parse_date, parse_num, build_template,
                       TEXT_FIELDS, NUM_FIELDS, TEXT_MAX, DATE_FIELDS,
                       parse_bool, is_return_type, partition_unknown,
                       state_from_code, state_from_subregion, find_header_row,
-                      pick_sheets, sheet_key)
+                      pick_sheets)
 from .. import aop as AOP
 from .. import review as REVIEW
 
 from ..forecasting import forecast_series, forecast_from_plan
 from .. import status as STATUS
-from .filters import (DIMENSIONS, FILTERABLE, _multi, apply_filters, detail_qs,
+from .filters import (DIMENSIONS, FILTERABLE, apply_filters, detail_qs,
                       qs_for_dimension, money_base, sheet_fields,
                       apply_dim_filters, _period_bounds, _money, _pct_change,
-                      NOT_SALES_ZONES, _not_sales_zone_q, in_plan_scope,
+                      in_plan_scope,
                       FINISHED_GOODS_PREFIX, display_floor,
                       filters_the_dump_cannot_answer, why_empty,
                       with_actuals, comparable_window,
@@ -358,7 +357,14 @@ def _ingest_review(request, upload, ws, header_row, header_row_index=1):
     # the morning's reports go out.
     PAISA = 0.011
     off = []
-    for (row_no, total_row, _ch, _rg, _name, vals), stored in zip(pending, rows):
+    # strict=True on purpose. These two lists are built from each other, so
+    # they are the same length today -- and if a `continue` is ever added to
+    # the loop that builds `rows`, zip() would silently pair row N's claimed
+    # backlog with row M's stored one and the cross-check would quietly start
+    # comparing the wrong things. On the one path whose whole job is to catch
+    # a misread column, silence is the worst available failure.
+    for (row_no, total_row, _ch, _rg, _name, _vals), stored in zip(
+            pending, rows, strict=True):
         if total_row:
             continue
         for field, ours in (('month_backlog', stored.month_backlog),

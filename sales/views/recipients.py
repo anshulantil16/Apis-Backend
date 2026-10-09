@@ -53,6 +53,24 @@ def recipient_json(r):
 SPLIT_ON = re.compile(r'[;,\r\n]+')
 
 
+def looks_like_an_address(email):
+    """-> True only for something that could actually be delivered to.
+
+    "@" in the string was the whole of the check, so "a@" and "@b.com" were
+    accepted and stored. Nothing fails until the morning send, where it fails
+    one message at a time against the SMTP server -- so the first anybody
+    knows is a head who did not get their report, which is the quiet kind of
+    failure this list exists to avoid.
+    """
+    from django.core.exceptions import ValidationError
+    from django.core.validators import validate_email
+    try:
+        validate_email((email or '').strip())
+    except ValidationError:
+        return False
+    return True
+
+
 def regions_from_cell(text, known):
     """-> ([region, ...], [not on the sheet, ...]).
 
@@ -264,8 +282,9 @@ class SalesRecipientsEditView(SalesIQAdminView):
     def post(self, request):
         d = request.data or {}
         email = (d.get('email') or '').strip().lower()
-        if not email or '@' not in email:
-            return Response({'error': 'A real email address is needed.'}, status=400)
+        if not looks_like_an_address(email):
+            return Response({'error': f'"{email}" is not an email address.'},
+                            status=400)
 
         role = d.get('role') or ReportRecipient.ROLE_HEAD
         if role not in dict(ReportRecipient.ROLES):
@@ -410,7 +429,7 @@ class SalesRecipientsImportView(SalesIQAdminView):
                 continue
             if not email:
                 continue                      # not filled in yet, not an error
-            if '@' not in email:
+            if not looks_like_an_address(email):
                 skipped.append(f'line {n}: "{email}" is not an email address')
                 continue
 
@@ -530,8 +549,9 @@ class SalesUploaderEditView(SalesIQOwnerView):
 
     def post(self, request):
         email = (request.data.get('email') or '').strip().lower()
-        if '@' not in email:
-            return Response({'error': 'A real email address is needed.'}, status=400)
+        if not looks_like_an_address(email):
+            return Response({'error': f'"{email}" is not an email address.'},
+                            status=400)
         g, made = UploaderGrant.objects.update_or_create(
             email=email,
             defaults={'name': (request.data.get('name') or '').strip()[:200],

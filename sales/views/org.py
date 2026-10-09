@@ -10,8 +10,7 @@ RSM and ASM but no head, and an empty root labelled "" is noise, not structure.
 """
 from django.db.models import Count, Max, Q, Sum
 from rest_framework.response import Response
-from rest_framework.views import APIView
-from .auth import SalesIQAdminView, SalesIQView
+from .auth import SalesIQView
 
 from ..ingest import is_vacant
 from .. import status as STATUS

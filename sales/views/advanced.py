@@ -3,23 +3,14 @@
 Thin HTTP wrappers — all the maths lives in sales/analytics.py so the formulas
 can be unit-tested without going through a request.
 """
-import io
-from datetime import date, timedelta
 
-import openpyxl
-from django.db.models import Sum, Count, Min, Max
-from django.http import HttpResponse
-from rest_framework.views import APIView
-from .auth import SalesIQAdminView, SalesIQView
+from .auth import SalesIQView
 from rest_framework.response import Response
-from rest_framework.parsers import MultiPartParser, FormParser
 
-from ..models import SalesUpload, SalesRecord
-from ..ingest import (map_headers, parse_date, parse_num, build_template,
-                      TEXT_FIELDS, NUM_FIELDS, TEXT_MAX)
+from ..models import SalesRecord
 
 from .. import analytics as AN
-from .filters import (DIMENSIONS, apply_filters, apply_dim_filters, _period_bounds,
+from .filters import (DIMENSIONS, apply_filters, _period_bounds,
                       why_empty, dim_applied,
                      detail_qs, qs_for_dimension, money_base,
                       with_actuals)

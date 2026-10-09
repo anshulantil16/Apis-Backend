@@ -225,7 +225,6 @@ def for_manager(d):
     snap, t = d['snapshot'], d['totals']
     heads = sorted(d['heads'],
                    key=lambda r: (r['month_pct'] is None, -(r['month_pct'] or 0)))
-    mon = snap.get('as_of_month_label') or 'this month'
     name = d.get('name') or 'Team'
 
     behind = [r['region'] for r in heads

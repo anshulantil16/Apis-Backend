@@ -7,13 +7,12 @@ instead of three implementations of it.
 """
 import io
 import zipfile
-from datetime import date
 
 from django.http import HttpResponse
 from rest_framework.response import Response
 
 from .auth import SalesIQView, SalesIQAdminView
-from ..models import ReviewSnapshot, ReviewRow
+from ..models import ReviewSnapshot
 from .. import report as REPORT
 
 

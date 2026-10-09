@@ -4,19 +4,12 @@ One filter vocabulary (date window + dimension filters) lives here so the whole
 dashboard can drive every chart from a single filter bar, and so a query param
 can never reach an arbitrary DB column.
 """
-import io
 from datetime import date, timedelta
 
-import openpyxl
-from django.db.models import Sum, Count, Min, Max, Q
-from django.http import HttpResponse
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.parsers import MultiPartParser, FormParser
+from django.db.models import Q
 
-from ..models import SalesUpload, SalesRecord, sheet_months
-from ..ingest import (map_headers, parse_date, parse_num, build_template,
-                      TEXT_FIELDS, NUM_FIELDS, TEXT_MAX)
+from ..models import SalesRecord, sheet_months
+from ..ingest import (parse_date)
 
 
 # Dimensions a client is allowed to group/filter by. Whitelisted rather than
