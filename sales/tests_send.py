@@ -521,3 +521,99 @@ class TheManagersCumulatedMail(TestCase):
 
     def test_he_gets_the_group_report_and_every_head_s_own_file(self):
         self.assertEqual(len(DJMAIL.outbox[0].attachments), 4)
+
+
+class TwoPeopleInOneGTR(TestCase):
+    """A handover line carries the region of the row above it, merged down,
+    so the region names two people. The row carries the name as well, and
+    that is what tells them apart -- the importer should use it rather than
+    send somebody back to download a better list."""
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04A, HANDOVER]))
+        # The real shape: one of the pair carries an APIS ID and the other
+        # does not, which is why the region ends up doing the work.
+        for r in rows():
+            if r.head_name.upper() == 'ARNAB GHOSH':
+                r.head_code = 'SL00979'
+                r.save()
+
+    def send(self, lines):
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.active.append(['role', 'key', 'region', 'name', 'email',
+                          'regions_covered'])
+        for line in lines:
+            wb.active.append(line)
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'recipients.xlsx'
+        return self.client.post('/api/sales/recipients/import/',
+                                {'file': buf}).json()
+
+    def test_the_shared_region_plus_the_name_is_enough(self):
+        d = self.send([
+            ['head', 'SL00979', 'GTR04 A', 'Arnab Ghosh', 'a@apisindia.com', ''],
+            ['head', 'GTR04 A', 'GTR04 A', 'Arun Mishra ( Arnab Ghosh)',
+             'h@apisindia.com', ''],
+        ])
+        self.assertEqual(d['skipped'], [])
+        self.assertEqual(d['added'], 2)
+
+    def test_and_they_are_matched_to_different_rows(self):
+        """The whole point. Both resolving to Arnab means the handover line
+        is sent his numbers under his own name."""
+        self.send([
+            ['head', 'SL00979', 'GTR04 A', 'Arnab Ghosh', 'a@apisindia.com', ''],
+            ['head', 'GTR04 A', 'GTR04 A', 'Arun Mishra ( Arnab Ghosh)',
+             'h@apisindia.com', ''],
+        ])
+        got = {r['email']: r['matched_to']
+               for r in self.client.get('/api/sales/recipients/').json()['recipients']}
+        self.assertEqual(got['a@apisindia.com'], 'GTR04 A — Arnab Ghosh')
+        self.assertEqual(got['h@apisindia.com'],
+                         'GTR04 A — Arun Mishra ( Arnab Ghosh)')
+
+    def test_nobody_is_left_without_a_report(self):
+        self.send([
+            ['head', 'SL00979', 'GTR04 A', 'Arnab Ghosh', 'a@apisindia.com', ''],
+            ['head', 'GTR04 A', 'GTR04 A', 'Arun Mishra ( Arnab Ghosh)',
+             'h@apisindia.com', ''],
+            ['head', 'GTR01', 'GTR01', 'Mohinder Sharma', 'm@apisindia.com', ''],
+        ])
+        d = self.client.get('/api/sales/recipients/').json()
+        self.assertEqual(d['heads_without_a_recipient'], [])
+
+    def test_it_is_stored_under_a_key_that_can_only_mean_one_row(self):
+        """Settled once, at import, rather than every morning when the
+        report is built."""
+        self.send([['head', 'GTR04 A', 'GTR04 A', 'Arun Mishra ( Arnab Ghosh)',
+                    'h@apisindia.com', '']])
+        rec = ReportRecipient.objects.get(email='h@apisindia.com')
+        self.assertNotEqual(rec.head_key, 'GTR04 A')
+        self.assertEqual(len(candidates(rec.head_key, rows())), 1)
+
+    def test_the_old_ambiguous_row_does_not_linger(self):
+        """Left behind it would sit on the list unmatched for good."""
+        ReportRecipient.objects.create(role='head', head_key='GTR04 A',
+                                       email='h@apisindia.com', name='Arun')
+        self.send([['head', 'GTR04 A', 'GTR04 A', 'Arun Mishra ( Arnab Ghosh)',
+                    'h@apisindia.com', '']])
+        self.assertEqual(
+            list(ReportRecipient.objects.filter(email='h@apisindia.com')
+                 .values_list('head_key', flat=True)),
+            ['Arun Mishra ( Arnab Ghosh)'])
+
+    def test_a_name_that_matches_neither_is_reported_not_guessed(self):
+        d = self.send([['head', 'GTR04 A', 'GTR04 A', 'Somebody Else',
+                        'x@apisindia.com', '']])
+        self.assertEqual(d['added'], 0)
+        self.assertIn('does not say which', d['skipped'][0])
+
+    def test_the_name_alone_works_too(self):
+        """Which is what the template hands out now."""
+        d = self.send([['head', 'Arun Mishra ( Arnab Ghosh)', 'GTR04 A',
+                        'Arun Mishra ( Arnab Ghosh)', 'h@apisindia.com', '']])
+        self.assertEqual(d['skipped'], [])
+        self.assertEqual(d['added'], 1)

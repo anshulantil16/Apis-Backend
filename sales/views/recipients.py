@@ -444,21 +444,46 @@ class SalesRecipientsImportView(SalesIQAdminView):
                               'is_active': True})
             else:
                 hits = candidates(key, rows)
+                # Two people can share one GTR -- a handover line carries the
+                # region of the row above it, merged down -- so the key alone
+                # does not always say who this is. The row carries the name
+                # too, and that is what tells them apart. Asking somebody to
+                # download the list again to get a better key, when the
+                # answer is already in the row in front of them, is work we
+                # can do instead of them.
+                if len(hits) > 1 and name:
+                    narrowed = [h for h in hits
+                                if (h.head_name or '').strip().lower()
+                                == name.strip().lower()]
+                    if len(narrowed) == 1:
+                        hits = narrowed
                 if len(hits) > 1:
                     skipped.append(
                         f'line {n}: "{key}" is on {len(hits)} rows of the '
                         f'sheet (' + ', '.join(h.head_name for h in hits)
-                        + '), so it does not say who this is. Download the '
-                          'list again — it now carries a key that names one '
-                          'row only.')
+                        + ') and the name column does not say which. Put one '
+                          'of those names in the name column exactly as the '
+                          'sheet spells it.')
                     continue
                 if not hits:
                     skipped.append(f'line {n}: no head matching "{key}" '
                                    f'on the latest sheet')
                     continue
+
+                # Stored under a key that names one row and no other, whatever
+                # was typed. The ambiguity is settled once, here, rather than
+                # every morning when the report is built.
+                settled = unique_key(hits[0], rows)
                 _, made = ReportRecipient.objects.update_or_create(
-                    email=email, role='head', head_key=key,
-                    defaults={'name': name, 'is_active': True})
+                    email=email, role='head', head_key=settled,
+                    defaults={'name': name or hits[0].head_name,
+                              'is_active': True})
+                if settled.lower() != key.lower():
+                    # The same person, already on the list under the key that
+                    # could mean two people. Left behind, it would sit there
+                    # unmatched for good.
+                    ReportRecipient.objects.filter(
+                        email=email, role='head', head_key=key).delete()
             added, updated = added + bool(made), updated + (not made)
 
         # Every row coming out the wrong shape is not sixteen mistakes, it
