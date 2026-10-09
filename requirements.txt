@@ -17,6 +17,11 @@ python-dateutil>=2.8.0
 dj-database-url>=2.0.0
 mysqlclient>=2.2.0
 reportlab>=4.0.0
+# SalesIQ renders the morning report to PDF from the same HTML the screen
+# shows. Optional: without it the report is attached as .html, which Gmail
+# displays as its own source rather than as the report. Needs system libs on
+# Linux: apt-get install -y libpango-1.0-0 libpangoft2-1.0-0
+weasyprint>=61.0
 pypdf>=4.0.0
 
 # Pocket HRMS employee-master sync (accounts/services/hrms.py)

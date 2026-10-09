@@ -26,16 +26,33 @@ from .auth import SalesIQView, SalesIQOwnerView
 from ..models import ReportRecipient, ReviewSnapshot
 from .. import report as REPORT
 from .. import mail as MAIL
+from .. import pdf as PDF
 
 
 def _rows(snap):
     return [r for r in snap.rows.all() if not r.is_total] if snap else []
 
 
+def _stamp(snap):
+    return snap.as_of_date.isoformat() if snap.as_of_date else 'latest'
+
+
+def _attach(name, html):
+    """-> (filename, body, mimetype).
+
+    A PDF where one can be rendered, because Gmail previews a PDF and shows
+    an .html file as its own source -- so the first thing a reader would see
+    each morning is a wall of CSS, and only a download gets them the report.
+    """
+    body = PDF.render(html)
+    if body is not None:
+        return (name + '.pdf', body, 'application/pdf')
+    return (name + '.html', html, 'text/html')
+
+
 def _file_name(row, snap):
-    stamp = snap.as_of_date.isoformat() if snap.as_of_date else 'latest'
-    return '{}_{}_{}.html'.format(REPORT._safe(row.region),
-                                  REPORT._safe(row.head_name), stamp)
+    return '{}_{}_{}'.format(REPORT._safe(row.region),
+                             REPORT._safe(row.head_name), _stamp(snap))
 
 
 def _sub(req, **params):
@@ -96,7 +113,8 @@ def compose(rec, req, snap, rows):
         subject, html = MAIL.for_head(resp.data)
         _, text = REPORT.email_for(resp.data)
         return {'subject': subject, 'html': html, 'text': text,
-                'files': [(_file_name(hits[0], snap), REPORT.render(resp.data))]}
+                'files': [_attach(_file_name(hits[0], snap),
+                                  REPORT.render(resp.data))]}
 
     covers = rec.covered_regions(
         list(dict.fromkeys(r.region for r in rows if r.region)))
@@ -113,16 +131,17 @@ def compose(rec, req, snap, rows):
     subject, html = MAIL.for_manager(resp.data)
     _, text = REPORT.team_email_for(resp.data)
 
-    stamp = snap.as_of_date.isoformat() if snap.as_of_date else 'latest'
-    files = [('{}_{}.html'.format(REPORT._safe(rec.name or 'group'), stamp),
-              REPORT.render_team(resp.data))]
+    files = [_attach('{}_{}'.format(REPORT._safe(rec.name or 'group'),
+                                    _stamp(snap)),
+                     REPORT.render_team(resp.data))]
     # Each territory's own report alongside the roll-up, which is what the
     # covering note says is attached.
     for row in rows:
         if row.region in covers:
             one = _one_head(req, snap, row)
             if one.status_code == 200:
-                files.append((_file_name(row, snap), REPORT.render(one.data)))
+                files.append(_attach(_file_name(row, snap),
+                                     REPORT.render(one.data)))
     return {'subject': subject, 'html': html, 'text': text, 'files': files}
 
 
@@ -158,11 +177,14 @@ class SalesMailOutboxView(SalesIQView):
                 made = compose(rec, request._request, snap, rows)
                 d['error'] = made.get('error')
                 d['subject'] = made.get('subject')
-                d['attachments'] = [n for n, _ in made.get('files', [])]
+                d['attachments'] = [n for n, _, _ in made.get('files', [])]
             out.append(d)
         return Response({
             'from': settings.DEFAULT_FROM_EMAIL or '',
             'configured': _configured(),
+            # Said out loud. An .html attachment still works, but it shows in
+            # Gmail as its own source rather than as the report.
+            'attachment_format': 'pdf' if PDF.available() else 'html',
             'snapshot': ({'as_of_date': snap.as_of_date.isoformat()
                           if snap.as_of_date else None,
                           'filename': snap.filename,
@@ -239,8 +261,8 @@ class SalesMailSendView(SalesIQOwnerView):
                     subject=subject, body=m['text'], from_email=sender,
                     to=[test_to or rec.email], connection=conn)
                 msg.attach_alternative(m['html'], 'text/html')
-                for name, body in m['files']:
-                    msg.attach(name, body, 'text/html')
+                for name, body, mime in m['files']:
+                    msg.attach(name, body, mime)
                 try:
                     msg.send()
                 except Exception as e:

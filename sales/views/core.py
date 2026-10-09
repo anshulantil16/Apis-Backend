@@ -200,11 +200,17 @@ def _ingest_review(request, upload, ws, header_row, header_row_index=1):
                                   '"MTD Sep-26 PRI SALES" and "Sep-26 AOP".'},
                         status=400)
 
-    # The day the sheet describes is not written on it anywhere -- only the
-    # month is, in the column headers. It can be supplied with the upload;
-    # otherwise today, which is right for a sheet circulated this morning and
-    # wrong for one uploaded late, so it is stored where it can be corrected.
-    as_of_date = parse_date(request.query_params.get('as_of')) or date.today()
+    # The day the sheet describes is not written inside it anywhere -- only
+    # the month is, in the column headers. But the business writes it on the
+    # file: "Primary Master till 30th Sept'2026". So the name is read, and
+    # the upload day is the last resort it always was.
+    #
+    # This is not cosmetic. A sheet closing on the 30th of September uploaded
+    # on the 9th of October was stamped the 9th of October, and that date went
+    # out in the subject line of every mail built from it.
+    as_of_date = (parse_date(request.query_params.get('as_of'))
+                  or REVIEW.date_from_name(upload.filename)
+                  or date.today())
 
     snapshot = ReviewSnapshot.objects.create(
         upload=upload,

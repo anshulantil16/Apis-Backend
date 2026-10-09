@@ -83,8 +83,15 @@ def a_row(**over):
     return d
 
 
-def upload(buf):
-    return Client().post('/api/sales/upload/', {'file': buf})
+def upload(buf, name=None, **params):
+    """`name` matters: the as-of date is read off the file name."""
+    if name:
+        buf.name = name
+    url = '/api/sales/upload/'
+    if params:
+        from urllib.parse import urlencode
+        url += '?' + urlencode(params)
+    return Client().post(url, {'file': buf})
 
 
 class TheTemplateAndTheMapper(TestCase):

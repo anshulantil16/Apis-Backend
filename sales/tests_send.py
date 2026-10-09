@@ -270,3 +270,93 @@ class AnIndividualReportIsOnlyTheirOwn(TestCase):
         html = r.content.decode('utf-8')
         for row in rows():
             self.assertIn(row.head_name, html)
+
+
+class TheDateTheSheetDescribes(TestCase):
+    """It is not written inside the file -- only the month is, in the column
+    headers. A sheet closing on the 30th of September uploaded on the 9th of
+    October was stamped the 9th of October, and that date went out in the
+    subject line of every mail built from it."""
+
+    def test_it_is_read_off_the_name_the_business_writes_on_it(self):
+        upload(review_workbook([GTR01]), name="Primary Master till 30th Sept'2026.xlsx")
+        self.assertEqual(ReviewSnapshot.objects.first().as_of_date,
+                         __import__('datetime').date(2026, 9, 30))
+
+    def test_the_forms_the_business_actually_uses(self):
+        from .review import date_from_name as f
+        from datetime import date
+        self.assertEqual(f("Primary Master till 30th Sept'2026.xlsx"), date(2026, 9, 30))
+        self.assertEqual(f('Primary Master till 30.09.2026.xlsx'), date(2026, 9, 30))
+        self.assertEqual(f('Sales 30-Sep-26.xlsx'), date(2026, 9, 30))
+        self.assertEqual(f('Primary Master till 5 April 2026.xlsx'), date(2026, 4, 5))
+        # ISO, which the day-first pattern would read as the 26th of 2030.
+        self.assertEqual(f('report_2026-09-30.xlsx'), date(2026, 9, 30))
+
+    def test_something_that_is_not_a_date_is_not_guessed_at(self):
+        """Falling back to the upload day is better than inventing a day."""
+        from .review import date_from_name as f
+        self.assertIsNone(f('Primary Master till 31st Feb 2026.xlsx'))
+        self.assertIsNone(f('Region Summary v2.xlsx'))
+        self.assertIsNone(f(''))
+
+    def test_an_explicit_as_of_still_wins(self):
+        upload(review_workbook([GTR01]),
+               name="Primary Master till 30th Sept'2026.xlsx", as_of='2026-10-01')
+        self.assertEqual(ReviewSnapshot.objects.first().as_of_date,
+                         __import__('datetime').date(2026, 10, 1))
+
+    def test_the_mail_carries_that_date_and_not_the_upload_day(self):
+        upload(review_workbook([GTR01]), name="Primary Master till 30th Sept'2026.xlsx")
+        ReportRecipient.objects.create(role='head', head_key='GTR01',
+                                       name='Mohinder Sharma',
+                                       email='m@apisindia.com')
+        d = self.client.get('/api/sales/mail/outbox/').json()
+        self.assertIn('30.09.26', d['recipients'][0]['subject'])
+
+
+@override_settings(**MAIL_ON)
+class TheMailBody(TestCase):
+
+    def setUp(self):
+        upload(review_workbook([GTR01]), name="Primary Master till 30th Sept'2026.xlsx")
+        ReportRecipient.objects.create(role='head', head_key='GTR01',
+                                       name='Mohinder Sharma',
+                                       email='m@apisindia.com')
+        self.client.post('/api/sales/mail/send/', {},
+                         content_type='application/json')
+        self.html = DJMAIL.outbox[0].alternatives[0][0]
+
+    def test_it_reads_like_the_mail_the_business_already_sends(self):
+        self.assertIn('Subzone-wise and ASM/TSM-wise B2C Primary Sales Report',
+                      self.html)
+        self.assertIn("SEPT&#8217;26", self.html)
+        self.assertIn('(as of 30.09.26)', self.html)
+
+    def test_the_ot_caveat_is_highlighted_the_way_it_is_circulated(self):
+        """Yellow is how somebody scanning on a phone finds it. Reformatting
+        it into our own house style makes the mail harder to read for
+        everybody who already reads it."""
+        self.assertIn('background:#FFFF00', self.html)
+        self.assertIn('In OT channel Primary = Secondary.', self.html)
+
+    def test_the_cn_note_is_red(self):
+        self.assertIn('color:#FF0000', self.html)
+        self.assertIn('Sales Return-Damage Expiry &amp; Good SR', self.html)
+
+    def test_the_attachment_is_not_sent_as_its_own_source_code(self):
+        """An .html attachment shows in Gmail as a wall of CSS, and only a
+        download gets the reader the report."""
+        from . import pdf as PDF
+        name, _, mime = (DJMAIL.outbox[0].attachments[0][0],
+                         None, DJMAIL.outbox[0].attachments[0][2])
+        if PDF.available():
+            self.assertTrue(name.endswith('.pdf'), name)
+            self.assertEqual(mime, 'application/pdf')
+        else:
+            # Honest about the fallback rather than silently shipping the
+            # thing this test exists to prevent.
+            self.assertTrue(name.endswith('.html'), name)
+            self.assertEqual(
+                self.client.get('/api/sales/mail/outbox/').json()
+                ['attachment_format'], 'html')

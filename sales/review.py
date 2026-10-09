@@ -192,3 +192,70 @@ def carry_forward(value, previous):
     territory and drops out of every grouping in the report.
     """
     return value if value else previous
+
+
+# -- the day the sheet describes ------------------------------------------
+# It is not written anywhere inside the file. Only the month is, in the
+# column headers, so a sheet uploaded on the 9th of October was stamped the
+# 9th of October although every figure on it closed on the 30th of September
+# -- and that wrong date went out in the subject line of sixteen emails.
+#
+# The business writes it on the file: "Primary Master till 30th Sept'2026".
+# So the name is read, and the upload day is only the fallback it always was.
+MONTHS = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+          'jul': 7, 'aug': 8, 'sep': 9, 'sept': 9, 'oct': 10, 'nov': 11,
+          'dec': 12}
+
+# 30th Sept'2026 | 30 September 2026 | 30-Sep-26
+_WORDY = re.compile(
+    r'(\d{1,2})\s*(?:st|nd|rd|th)?[\s\-_.]*'
+    r"([a-z]{3,9})[\s\-_.']*(\d{2,4})", re.I)
+# 2026-09-30. Tried before the day-first pattern below, which would
+# otherwise read it as the 26th of September 2030.
+_ISO = re.compile(r'(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})')
+# 30.09.2026 | 30-09-26 | 30/09/2026
+_NUMERIC = re.compile(r'(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})')
+
+
+def _year(v):
+    """-> a four digit year. '26' is 2026, not 1926."""
+    n = int(v)
+    return n if n > 99 else 2000 + n
+
+
+def date_from_name(name):
+    """-> the date written on the file, or None.
+
+    Only a date that is actually a date: 32nd of September is somebody's
+    version number, not a day, and guessing at it would be worse than
+    falling back to the upload day.
+    """
+    if not name:
+        return None
+    stem = re.sub(r'\.[A-Za-z0-9]{1,5}$', '', str(name))
+
+    m = _WORDY.search(stem)
+    if m:
+        mon = MONTHS.get(m.group(2)[:4].lower()) or MONTHS.get(m.group(2)[:3].lower())
+        if mon:
+            try:
+                return date(_year(m.group(3)), mon, int(m.group(1)))
+            except ValueError:
+                pass
+
+    m = _ISO.search(stem)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+
+    m = _NUMERIC.search(stem)
+    if m:
+        # Day first. The business writes 30.09.26, and the one ordering that
+        # is never ambiguous here is the one they use.
+        try:
+            return date(_year(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            pass
+    return None

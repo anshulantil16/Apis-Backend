@@ -128,27 +128,54 @@ def summary_table(rows, month_label, totals=None, total_label='Total'):
             + head + body + '</table>')
 
 
-NOTES = (
-    '<p style="font-size:12px;font-family:Calibri,Arial,sans-serif;'
-    'color:#555555;margin:16px 0 0">'
-    '<b>Note *:</b> This report has been included CN (Sales Return-Damage '
-    'Expiry &amp; Good SR).<br>'
-    '<b>*</b> In OT channel Primary = Secondary.<br>'
-    'Figures in &#8377; lakhs. Achievement is measured on primary sales.'
-    '</p>')
+# Carried over from the mail the business already circulates, down to the
+# yellow highlight and the red note. They are the business's own statements,
+# written the way its readers have learnt to look for them -- the highlight
+# is how somebody scanning on a phone finds the OT caveat, and reformatting
+# it into our own house style would only make the mail harder to read for
+# everybody who already reads it.
+BODY = 'font-family:Calibri,Arial,sans-serif;font-size:13.5px;color:#000000'
+HILITE = 'background:#FFFF00;font-weight:bold'
+REDNOTE = ('font-family:Calibri,Arial,sans-serif;font-size:13.5px;'
+           'color:#FF0000;margin:14px 0 0')
+
+OT_NOTE = ('<b>*In this sheet, I have put the secondary sales and primary '
+           'sales against it, you can see it in the attached.</b> '
+           '<span style="' + HILITE + '">*In OT channel Primary = '
+           'Secondary.</span>')
+CN_NOTE = ('<p style="' + REDNOTE + '">Note *: This report has been included '
+           'CN (Sales Return-Damage Expiry &amp; Good SR)</p>')
+FOOT = ('<p style="font-family:Calibri,Arial,sans-serif;font-size:11.5px;'
+        'color:#777777;margin:18px 0 0">Figures in &#8377; lakhs. '
+        'Achievement is measured on primary sales.</p>')
 
 
 def _shell(greeting, intro, table, tail=''):
-    return ('<div style="font-family:Calibri,Arial,sans-serif;font-size:13px;'
-            'color:#222222">'
+    return ('<div style="' + BODY + '">'
             '<p>' + greeting + '</p>'
             '<p>' + intro + '</p>'
-            '<p style="font-size:13px;font-weight:bold;margin:18px 0 6px">'
+            '<p style="font-size:13.5px;font-weight:bold;margin:18px 0 6px">'
             'GTR Summary:-</p>'
-            + table + tail + NOTES + '</div>')
+            + table + tail + CN_NOTE + FOOT + '</div>')
 
 
 SUBJECT = 'FLASH PRIMARY SALES REPORT (B2C) - {scope} | (as of {asof})'
+
+
+# The business writes SEPT'26, not Sep 2026, and the banner row on its own
+# sheet reads "MTD FOR SEPT'26". The mail should look like the one that
+# landed yesterday.
+SHORT = {1: 'JAN', 2: 'FEB', 3: 'MAR', 4: 'APR', 5: 'MAY', 6: 'JUN',
+         7: 'JUL', 8: 'AUG', 9: 'SEPT', 10: 'OCT', 11: 'NOV', 12: 'DEC'}
+
+
+def month_label(snap):
+    """-> SEPT'26, from the month the sheet's own column headers carry."""
+    m = snap.get('as_of_month')
+    if not m:
+        return (snap.get('as_of_month_label') or '').upper()
+    y, mm = m.split('-')
+    return SHORT.get(int(mm), mm) + '&#8217;' + y[2:]
 
 
 def as_of(snap):
@@ -183,9 +210,9 @@ def for_head(d):
     else:
         tail = ''
 
-    intro = ('Please find attached your Primary Sales Report for <b>'
-             + escape(mon) + '</b> (as of ' + as_of(snap) + '), with the '
-             'secondary sales put against the primary.')
+    intro = ('Please find attached the Subzone-wise and ASM/TSM-wise B2C '
+             'Primary Sales Report for the month of <b>' + month_label(snap)
+             + '</b> (as of ' + as_of(snap) + '). ' + OT_NOTE)
     html = _shell('Hi ' + escape(first) + ',', intro,
                   summary_table([h], snap.get('as_of_month_label')),
                   '<p style="margin:14px 0 0">' + tail + '</p>' if tail else '')
@@ -206,10 +233,11 @@ def for_manager(d):
     tail = ('Needing attention: <b>' + escape(', '.join(behind)) + '</b>.'
             if behind else 'No territory is below 70% of plan.')
 
-    intro = ('Please find attached the Primary Sales Report for <b>'
-             + escape(mon) + '</b> (as of ' + as_of(snap) + ') across your '
+    intro = ('Please find attached the Subzone-wise and ASM/TSM-wise B2C '
+             'Primary Sales Report for the month of <b>' + month_label(snap)
+             + '</b> (as of ' + as_of(snap) + '), across your '
              + str(len(heads)) + ' territories, with each territory&#8217;s '
-             'own report alongside it.')
+             'own report alongside it. ' + OT_NOTE)
     html = _shell('Hi Team,', intro,
                   summary_table(heads, snap.get('as_of_month_label'),
                                 totals=t, total_label='Group'),
