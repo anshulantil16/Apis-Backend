@@ -111,45 +111,42 @@ def rows_from_text(text):
     return list(csv.reader(_csv_stream(text), delimiter=best))
 
 
+# A .xlsx is a zip, and every zip starts with these four bytes. Decided on
+# the content rather than the name: a workbook renamed .csv is still a
+# workbook, and -- the bug this replaces -- an .xlsx that openpyxl stumbled on
+# used to fall through to the text reader, which duly parsed the compressed
+# bytes and reported every line of a correctly filled list as malformed.
+XLSX = b'PK'
+
+
 def _read_workbook(f):
-    """-> [[cell, ...], ...] from an uploaded .xlsx, or from a .csv.
+    """-> [[cell, ...], ...] from an uploaded .xlsx or .csv.
 
-    Read as rows of text rather than by header name on purpose: the file
-    people fill in is the one we generated, its columns are in a known order,
-    and matching by position means a renamed header does not silently drop a
-    column. Anything that is not in that order fails loudly in the loop
-    below, line by line, which is the behaviour we want anyway.
+    Read by position, not by header name: the file people fill in is the one
+    we generated and its columns are in a known order.
     """
-    def as_text(data):
-        if isinstance(data, bytes):
-            # utf-8-sig, because Excel's "CSV UTF-8" writes a byte order mark
-            # and it lands on the first cell -- the header row then stops
-            # looking like a header and the first data row like a role.
-            return data.decode('utf-8-sig', errors='replace')
-        return data
-
-    name = (getattr(f, 'name', '') or '').lower()
-    if name.endswith('.csv') or name.endswith('.txt'):
-        return rows_from_text(as_text(f.read()))
-
-    try:
-        wb = openpyxl.load_workbook(f, data_only=True, read_only=True)
-    except Exception:
-        # Decided by content, not by the name on it. A spreadsheet saved as
-        # CSV and renamed, or a file arriving with no name at all, is still
-        # a list somebody filled in correctly, and refusing it over its
-        # extension is the kind of pedantry that gets worked around.
+    f.seek(0)
+    if f.read(4) == XLSX:
         f.seek(0)
-        return rows_from_text(as_text(f.read()))
-    out = []
-    # The first sheet only. The second is the instructions, and reading it
-    # would report every sentence on it as a line that could not be parsed.
-    ws = wb.worksheets[0]
-    for row in ws.iter_rows(values_only=True):
-        cells = ['' if v is None else str(v) for v in row]
-        if any(c.strip() for c in cells):
-            out.append(cells)
-    return out
+        # Deliberately not caught here. A workbook we cannot open is a thing
+        # to say out loud, with the reason; the caller turns it into one
+        # message. Guessing at it as text is what produced the wall of
+        # nonsense this replaces.
+        wb = openpyxl.load_workbook(f, data_only=True, read_only=True)
+        out = []
+        for row in wb.worksheets[0].iter_rows(values_only=True):
+            cells = ['' if v is None else str(v) for v in row]
+            if any(c.strip() for c in cells):
+                out.append(cells)
+        return out
+
+    f.seek(0)
+    # utf-8-sig, because Excel's "CSV UTF-8" writes a byte order mark and it
+    # lands on the first cell -- the header row then stops looking like one.
+    data = f.read()
+    if isinstance(data, bytes):
+        data = data.decode('utf-8-sig', errors='replace')
+    return rows_from_text(data)
 
 
 class SalesRecipientsView(SalesIQView):
@@ -308,7 +305,7 @@ class SalesRecipientsImportView(SalesIQAdminView):
         rows = _rows(snap)
         known = list(dict.fromkeys(r.region for r in rows if r.region))
 
-        added, updated, skipped = 0, 0, []
+        added, updated, skipped, shape = 0, 0, [], []
         for n, line in enumerate(lines, start=1):
             cells = [c.strip() for c in line]
             if not any(cells) or cells[0].startswith('#'):
@@ -316,10 +313,7 @@ class SalesRecipientsImportView(SalesIQAdminView):
             if cells[0].lower() in ('role', 'r'):
                 continue                      # the header row
             if len(cells) < 4:
-                skipped.append(
-                    f'line {n}: this row has {len(cells)} column(s), not the '
-                    f'six the list carries. Expected role, key, region, name, '
-                    f'email, regions_covered.')
+                shape.append(n)
                 continue
 
             # Two shapes are accepted. The workbook has one column per job --
@@ -336,14 +330,11 @@ class SalesRecipientsImportView(SalesIQAdminView):
                 email, covered = cells[3].lower(), cells[1]
 
             # The role decides whether this is a data row at all, so it is
-            # checked FIRST. The workbook carries a title, a row of hints and
-            # a section heading above each block; the hint row begins "head
-            # or manager", so an email check that ran first reported its
-            # "WHERE TO SEND IT" cell as a bad address.
+            # checked before the address. A row with neither is a spare line
+            # somebody did not use, and saying nothing is the right answer.
             if role not in ('head', 'manager'):
-                # Furniture is skipped in silence. A row carrying an address
-                # is somebody's real line with the role mistyped, and that
-                # has to be said.
+                # But a row carrying an address is somebody's real line with
+                # the role mistyped, and that has to be said.
                 if '@' in ' '.join(cells):
                     skipped.append(f'line {n}: role must be head or manager, '
                                    f'not "{cells[0]}"')
@@ -382,18 +373,19 @@ class SalesRecipientsImportView(SalesIQAdminView):
                     defaults={'name': name, 'is_active': True})
             added, updated = added + bool(made), updated + (not made)
 
-        # Every row failing the same way is not sixteen mistakes, it is one:
-        # the file was not read in the shape it was written. Said once, at
-        # the top, rather than left to be inferred from a wall of identical
-        # lines.
-        if not added and not updated and len(skipped) > 2 and all(
-                'column(s), not the six' in m for m in skipped):
+        # Every row coming out the wrong shape is not sixteen mistakes, it
+        # is one: the file was not read the way it was written. Said once,
+        # rather than left to be inferred from a wall of identical lines.
+        if shape and not added and not updated:
             return Response({
-                'error': 'None of the rows came out in the right shape, so '
-                         'nothing was read. Upload the file as it was '
-                         'downloaded (.xlsx), or save it as CSV and upload '
-                         'that — do not paste it in.',
-                'added': 0, 'updated': 0, 'skipped': skipped[:5]}, status=400)
+                'error': 'That file did not come through as a table — none of '
+                         'its rows had the six columns the list carries. '
+                         'Upload it as the .xlsx you downloaded.',
+                'added': 0, 'updated': 0, 'skipped': []}, status=400)
+        if shape:
+            skipped.append(str(len(shape)) + ' row(s) were not in the right '
+                           'shape and were left alone: line '
+                           + ', '.join(str(x) for x in shape[:8]))
 
         return Response({'added': added, 'updated': updated, 'skipped': skipped})
 

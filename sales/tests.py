@@ -3829,13 +3829,18 @@ class WhoGetsWhichReport(TestCase):
         head = next(row for row in cells if row and row[0] == 'head')
         self.assertEqual(head[4], '')
 
-    def test_the_instructions_are_a_second_tab_not_rows_above_the_table(self):
-        """Comment rows above the header show in Excel as text spilling
-        across empty cells, which reads as a broken file."""
+    def test_the_list_is_one_sheet_of_rows_and_nothing_else(self):
+        """It carried a title, a hint row, a section banner above each block
+        and a second tab. All of it was furniture the importer then had to
+        recognise and skip, and the once it misread a line of it the screen
+        filled with errors about rows nobody had typed."""
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(
             self.client.get('/api/sales/recipients/template/').content))
-        self.assertEqual(wb.sheetnames, ['Recipients', 'How to fill this in'])
+        self.assertEqual(wb.sheetnames, ['Recipients'])
+        first = [c.value for c in wb.worksheets[0][1]]
+        self.assertEqual(first, ['role', 'key', 'region', 'name', 'email',
+                                 'regions_covered'])
 
     def test_the_filled_in_workbook_can_be_uploaded_back(self):
         import openpyxl
@@ -3855,6 +3860,39 @@ class WhoGetsWhichReport(TestCase):
         self.assertEqual(d['skipped'], [])
         self.assertTrue(ReportRecipient.objects.filter(
             email='mohinder@apisindia.com', head_key='GTR01').exists())
+
+    def test_a_workbook_is_read_by_its_bytes_not_its_extension(self):
+        """The reader decided on the name. A workbook that arrived called
+        .csv -- which is what Excel leaves you with if you edit the download
+        and pick Save rather than Save As -- went to the text reader, which
+        duly parsed the compressed zip bytes and reported every line of a
+        correctly filled list as malformed."""
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(
+            self.client.get('/api/sales/recipients/template/').content))
+        for row in wb.worksheets[0].iter_rows():
+            if row[0].value == 'head' and row[1].value == 'GTR01':
+                row[4].value = 'mohinder@apisindia.com'
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'report recipients.csv'          # the wrong extension
+        d = self.client.post('/api/sales/recipients/import/',
+                             {'file': buf}).json()
+        self.assertEqual(d['added'], 1, d)
+        self.assertEqual(d['skipped'], [])
+
+    def test_a_workbook_that_cannot_be_opened_says_so_once(self):
+        """Not as a line-by-line reading of its compressed bytes. One
+        sentence naming the file, not thirty-six naming rows that do not
+        exist."""
+        buf = io.BytesIO(b'PK' + bytes([3, 4]) + b'this is not a workbook')
+        buf.name = 'report recipients.xlsx'
+        r = self.client.post('/api/sales/recipients/import/', {'file': buf})
+        self.assertEqual(r.status_code, 400)
+        d = r.json()
+        self.assertIn('Cannot read that file', d['error'])
+        self.assertNotIn('skipped', d)
 
     def test_a_csv_saved_by_excel_on_windows_is_read(self):
         """CRLF line endings. Without newline='' csv.reader refuses the whole
@@ -3926,7 +3964,7 @@ class WhoGetsWhichReport(TestCase):
             {'text': '\n'.join('head|GTR0%d|x' % i for i in range(1, 9))},
             content_type='application/json')
         self.assertEqual(r.status_code, 400)
-        self.assertIn('nothing was read', r.json()['error'])
+        self.assertIn('did not come through as a table', r.json()['error'])
 
     def test_a_manager_with_no_territory_is_reported_not_silently_added(self):
         """An empty coverage list means no territories, never all of them --
