@@ -13,6 +13,7 @@ deliberately rather than as a side effect of pasting a spreadsheet column.
 """
 import csv
 import io
+import re
 
 import openpyxl
 
@@ -42,6 +43,39 @@ def recipient_json(r):
         'note': r.note,
         'last_sent_at': r.last_sent_at.isoformat() if r.last_sent_at else None,
     }
+
+
+# What separates one region from the next in that cell. Semicolon,
+# comma and line break: Alt+Enter inside one Excel cell is the natural
+# way to write a list of twelve regions. Not whitespace -- a region
+# code here is "GTR04 A", and splitting on that space would invent a
+# region called A.
+SPLIT_ON = re.compile(r'[;,\r\n]+')
+
+
+def regions_from_cell(text, known):
+    """-> ([region, ...], [not on the sheet, ...]).
+
+    Split on semicolons, commas AND line breaks, because all three are what
+    people actually type. Alt+Enter inside one Excel cell is the natural way
+    to write a list of twelve regions, and it is the one the importer used to
+    refuse -- the whole block came back as a single region name, no such
+    region existed, and the manager was silently left off the list.
+
+    Not split on whitespace: a region code here is "GTR04 A", and splitting
+    on the space inside it would invent a region called A.
+    """
+    raw = [p.strip() for p in SPLIT_ON.split(text or '')]
+    out, unknown, seen = [], [], set()
+    for r in raw:
+        if not r or r.lower() in seen:
+            continue
+        seen.add(r.lower())
+        match = next((k for k in known if k.lower() == r.lower()), None)
+        # Matched case-insensitively but stored as the sheet spells it, so a
+        # territory typed "gtr04 a" still lines up with the rows.
+        (out.append(match) if match else unknown.append(r))
+    return out, unknown
 
 
 def candidates(key, rows):
@@ -386,17 +420,27 @@ class SalesRecipientsImportView(SalesIQAdminView):
                                    f'territory. Put their regions in '
                                    f'regions_covered, or the word ALL.')
                     continue
-                regions = [] if covered.upper() == 'ALL' else [
-                    p.strip() for p in covered.split(';') if p.strip()]
-                unknown = [r for r in regions if r not in known]
+                all_of_it = covered.strip().upper() == 'ALL'
+                regions, unknown = ([], []) if all_of_it else regions_from_cell(
+                    covered, known)
                 if unknown:
-                    skipped.append(f'line {n}: no region named '
-                                   + ', '.join(unknown[:3]) + ' on the latest sheet')
+                    skipped.append(
+                        f'line {n}: {name or email} — no region named '
+                        + ', '.join('"%s"' % u for u in unknown[:3])
+                        + (' and %d more' % (len(unknown) - 3)
+                           if len(unknown) > 3 else '')
+                        + ' on the latest sheet. It carries: '
+                        + ', '.join(known[:14])
+                        + ('…' if len(known) > 14 else '') + '.')
+                    continue
+                if not regions and not all_of_it:
+                    skipped.append(f'line {n}: {name or email} covers no '
+                                   f'territory.')
                     continue
                 _, made = ReportRecipient.objects.update_or_create(
                     email=email, role='manager', head_key='',
                     defaults={'name': name, 'regions': regions,
-                              'covers_all': covered.upper() == 'ALL',
+                              'covers_all': all_of_it,
                               'is_active': True})
             else:
                 hits = candidates(key, rows)

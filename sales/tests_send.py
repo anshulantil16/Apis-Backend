@@ -424,3 +424,100 @@ class WhenTheNameAndTheSheetDisagree(TestCase):
         snap = snapshot_json(ReviewSnapshot.objects.first())
         self.assertEqual(MAIL.month_label(snap), 'APR&#8217;26')
         self.assertEqual(MAIL.as_of(snap), '30.04.26')
+
+
+class AManagerCoveringTheWholeChannel(TestCase):
+    """Thirteen regions typed into one cell, which is what somebody filling
+    in a spreadsheet actually does."""
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04A, GTR04B]))
+
+    def send_list(self, covered):
+        rows = [['role', 'key', 'region', 'name', 'email', 'regions_covered'],
+                ['manager', 'HO0239', 'GT', 'Anshul Antil',
+                 'anshul@apisindia.com', covered]]
+        import openpyxl
+        wb = openpyxl.Workbook()
+        for r in rows:
+            wb.active.append(r)
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'recipients.xlsx'
+        return self.client.post('/api/sales/recipients/import/',
+                                {'file': buf}).json()
+
+    def test_alt_enter_inside_one_cell_is_a_list(self):
+        """It used to come back as a single region name, no such region
+        existed, and the manager was silently left off."""
+        d = self.send_list('GTR01\nGTR04 A\nGTR04 B')
+        self.assertEqual(d['skipped'], [])
+        self.assertEqual(d['added'], 1)
+        rec = ReportRecipient.objects.get(role='manager')
+        self.assertEqual(sorted(rec.regions), ['GTR01', 'GTR04 A', 'GTR04 B'])
+
+    def test_semicolons_and_commas_too(self):
+        for sep in (';', ',', '; ', '\r\n'):
+            ReportRecipient.objects.all().delete()
+            d = self.send_list(sep.join(['GTR01', 'GTR04 B']))
+            self.assertEqual(d['skipped'], [], sep)
+            self.assertEqual(ReportRecipient.objects.get(role='manager').regions,
+                             ['GTR01', 'GTR04 B'])
+
+    def test_a_region_listed_twice_is_carried_once(self):
+        """GTR04 A is on two rows of the sheet, so it is natural to write it
+        twice -- and a group total that counted it twice would be wrong."""
+        self.send_list('GTR01\nGTR04 A\nGTR04 A\nGTR04 B')
+        self.assertEqual(ReportRecipient.objects.get(role='manager').regions,
+                         ['GTR01', 'GTR04 A', 'GTR04 B'])
+
+    def test_the_sheet_s_own_spelling_is_what_gets_stored(self):
+        self.send_list('gtr01;gtr04 b')
+        self.assertEqual(ReportRecipient.objects.get(role='manager').regions,
+                         ['GTR01', 'GTR04 B'])
+
+    def test_a_region_that_is_not_on_the_sheet_says_what_is(self):
+        d = self.send_list('GTR01\nGTR77')
+        self.assertEqual(d['added'], 0)
+        self.assertIn('"GTR77"', d['skipped'][0])
+        self.assertIn('GTR01', d['skipped'][0])     # what the sheet carries
+
+    def test_the_word_ALL_still_means_every_territory(self):
+        self.send_list('ALL')
+        rec = ReportRecipient.objects.get(role='manager')
+        self.assertTrue(rec.covers_all)
+        self.assertEqual(rec.regions, [])
+
+
+@override_settings(**MAIL_ON)
+class TheManagersCumulatedMail(TestCase):
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04A, GTR04B]))
+        ReportRecipient.objects.create(
+            role='manager', name='Anshul Antil', email='anshul@apisindia.com',
+            regions=['GTR01', 'GTR04 A', 'GTR04 B'])
+        self.client.post('/api/sales/mail/send/', {},
+                         content_type='application/json')
+        self.html = DJMAIL.outbox[0].alternatives[0][0]
+
+    def test_the_body_carries_every_territory_he_covers(self):
+        for r in ('GTR01', 'GTR04 A', 'GTR04 B'):
+            self.assertIn(r, self.html)
+
+    def test_and_one_cumulated_line_under_them(self):
+        """Added from the rows he covers, never read off the sheet's own GT
+        Total: a manager covering part of a channel has no subtotal there,
+        and taking the one that is there would hand him the whole channel."""
+        self.assertIn('Group', self.html)
+        self.assertIn('3 territories', self.html)
+
+    def test_the_cumulated_figures_are_the_sum_of_his_rows(self):
+        from .report import lakh
+        total = sum(float(r.mtd_primary) for r in rows()
+                    if r.region in ('GTR01', 'GTR04 A', 'GTR04 B'))
+        self.assertIn(lakh(total), self.html)
+
+    def test_he_gets_the_group_report_and_every_head_s_own_file(self):
+        self.assertEqual(len(DJMAIL.outbox[0].attachments), 4)
