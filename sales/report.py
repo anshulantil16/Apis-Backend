@@ -21,6 +21,61 @@ from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 
 
+# One layout budget for every horizontal bar chart in this file.
+#
+# Figures used to be printed just after the end of each bar, so where they
+# landed depended on the bar's length: a long bar pushed its figure off the
+# right edge, and the 100% plan line was drawn straight through the figures
+# of the territories near plan. Fixed columns cannot collide -- the bar area
+# ends well before the numbers begin, so the reference line has nowhere to
+# cross them.
+#
+# The gutter is deliberately generous. Text is measured by the renderer, not
+# by us, and the PDF falls back to different fonts from the browser, so a
+# label that just fits on screen can run past the viewBox in print -- where
+# there is no scrollbar and it is simply cut off, which is what happened to
+# "Average of the first 5 months" and to the handover line's name.
+CW = 790.0          # viewBox width; it scales down to the page, never clips
+GUT = 272.0         # right edge of the label gutter
+BARX = 282.0        # where every bar starts
+BARW = 258.0        # the drawing area
+VALX = 596.0        # right-aligned headline figure (a percentage)
+SUBX = 606.0        # left-aligned supporting figure, smaller and grey
+
+
+# The month chart on the head's report: same idea, its own widths because
+# it carries a tick axis the territory boards do not.
+MGUT = 230.0
+MBARX = 240.0
+MBARW = 330.0
+MVALX = 582.0
+
+
+def fit(text, n):
+    """Shorten a label that would otherwise run out of its gutter."""
+    t = str(text or '')
+    return t if len(t) <= n else t[:n - 1].rstrip() + '…'
+
+
+# The same colours as literal hex, for use INSIDE an <svg>.
+#
+# WeasyPrint does not resolve CSS custom properties in SVG: a fill naming
+# one is not a colour it understands,
+# so it falls back to black. On screen the
+# charts were green and orange; printed to the PDF that actually goes out,
+# every bar came out black -- and the one chart that mixed literal hex with
+# var() printed half its bars green and half black, which is how this was
+# finally spotted. Nothing inside an <svg> may use var().
+C_PLAN = '#2a78d6'
+C_DONE = '#1baf7a'
+C_OWED = '#eb6834'
+C_SEC = '#eda100'
+C_PEER = '#e87ba4'
+C_GRID = '#D5DCE6'
+C_FAINT = '#EEF2F7'
+C_MUTED = '#8A94A6'
+
+
 def drawable(v):
     """-> a length that can be drawn: never negative, never negative zero.
 
@@ -130,9 +185,13 @@ def bar_row(y, label, width, colour, value, muted=False):
     """
     cls = ' class="muted"' if muted else ''
     return (
-        f'<text x="196" y="{y + 13}" text-anchor="end" class="lab"{cls}>{e(label)}</text>'
-        f'<rect x="204" y="{y}" width="{max(width, 0):.1f}" height="18" rx="3" fill="{colour}"/>'
-        f'<text x="{204 + max(width, 0) + 9:.1f}" y="{y + 13}" class="val">{e(value)}</text>'
+        f'<text x="{MGUT}" y="{y + 13}" text-anchor="end" class="lab"{cls}>'
+        f'{e(label)}</text>'
+        f'<rect x="{MBARX}" y="{y}" width="{drawable(width):.1f}" height="18" '
+        f'rx="3" fill="{colour}"/>'
+        # At a fixed column, not after the bar: printed after it, the longest
+        # bar pushed its own figure off the edge of the drawing.
+        f'<text x="{MVALX}" y="{y + 13}" class="val">{e(value)}</text>'
     )
 
 
@@ -260,7 +319,15 @@ dl.gloss dd{margin:0; color:var(--ink-2)}
 footer{border-top:1px solid var(--line); padding-top:17px; font-size:11.5px;
        color:var(--ink-3); line-height:1.65}
 @media print{
-  body{background:#fff; font-size:11pt}
+  body{background:#fff; font-size:10.5pt}
+  /* There is no scrollbar on paper. A table wider than the page is not
+     scrolled, it is cut off -- which is how the last columns of "Every
+     territory" went missing -- so the table is made to fit instead. */
+  .scroll{overflow:visible}
+  table{font-size:8.6pt; table-layout:fixed; width:100%}
+  th,td{padding:5px 5px}
+  td:first-child,th:first-child{white-space:nowrap}
+  td.nm,th.nm{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
   /* Without this the band prints as bare text on white, which is exactly
      the version this was meant to stop being. */
   *{-webkit-print-color-adjust:exact; print-color-adjust:exact}
@@ -368,52 +435,55 @@ def render(d):
     # label. Nothing here is drawn to its own scale.
     vals = [y.get('prior_monthly_avg') or 0, h['lmtd'], h['month_target'],
             h['mtd_primary'], y.get('required_monthly') or 0]
-    top = max(vals) * 1.15 or 1
-    W = 400.0
+    top = max(vals) * 1.1 or 1
+    W = MBARW
 
     def w(v):
-        return max(float(v or 0), 0) / top * W
+        return drawable(float(v or 0)) / top * W
 
     ticks = ''
     for i in range(5):
         tv = top * i / 4
-        x = 204 + W * i / 4
-        ticks += (f'<line x1="{x:.1f}" y1="14" x2="{x:.1f}" y2="186" stroke="#EEF2F7"/>'
+        x = MBARX + W * i / 4
+        ticks += (f'<line x1="{x:.1f}" y1="14" x2="{x:.1f}" y2="186" '
+                  f'stroke="{C_FAINT}"/>'
                   f'<text x="{x:.1f}" y="202" text-anchor="middle" class="axis">'
                   f'{lakh(tv, 0)}</text>')
 
     month_rows = ''
     if y.get('prior_monthly_avg'):
-        month_rows += bar_row(20, f"Average of the first {y['prior_months']} months",
+        month_rows += bar_row(20, f"First {y['prior_months']} months, average",
                               w(y['prior_monthly_avg']), '#A8DCC6',
                               lakh(y['prior_monthly_avg']), muted=True)
-    month_rows += bar_row(52, 'Last month, same point', w(h['lmtd']), '#6FC9A3',
+    month_rows += bar_row(52, 'Last month, same day', w(h['lmtd']), '#6FC9A3',
                           lakh(h['lmtd']), muted=True)
 
     # this month: billed, then a 2px gap, then what is still owed
     bw, ow = w(h['mtd_primary']), w(max(h['month_backlog'], 0))
     month_rows += (
         f'<g class="me">'
-        f'<text x="196" y="97" text-anchor="end" class="lab">{e(month)} so far</text>'
-        f'<rect x="204" y="84" width="{bw:.1f}" height="20" rx="3" fill="var(--done)"/>'
-        + (f'<rect x="{204 + bw + 2:.1f}" y="84" width="{max(ow - 2, 0):.1f}" height="20" '
-           f'rx="3" fill="var(--owed)"/>' if ow > 2 else '')
-        + f'<text x="{204 + bw + ow + 9:.1f}" y="98" class="val">{lakh(h["mtd_primary"])}'
+        f'<text x="{MGUT}" y="97" text-anchor="end" class="lab">{e(month)} so far</text>'
+        f'<rect x="{MBARX}" y="84" width="{bw:.1f}" height="20" rx="3" fill="{C_DONE}"/>'
+        + (f'<rect x="{MBARX + bw + 2:.1f}" y="84" width="{drawable(ow - 2):.1f}" '
+           f'height="20" rx="3" fill="{C_OWED}"/>' if ow > 2 else '')
+        + f'<text x="{MVALX}" y="98" class="val">{lakh(h["mtd_primary"])}'
           + (f' &#43; {lakh(h["month_backlog"])} owed' if h['month_backlog'] > 0 else '')
         + f'</text></g>'
-        f'<line x1="{204 + w(h["month_target"]):.1f}" y1="78" '
-        f'x2="{204 + w(h["month_target"]):.1f}" y2="118" stroke="var(--plan)" stroke-width="2"/>'
-        f'<text x="{204 + w(h["month_target"]):.1f}" y="132" text-anchor="middle" '
-        f'class="val" fill="var(--plan)">AOP {lakh(h["month_target"])}</text>'
+        f'<line x1="{MBARX + w(h["month_target"]):.1f}" y1="78" '
+        f'x2="{MBARX + w(h["month_target"]):.1f}" y2="118" stroke="{C_PLAN}" '
+        f'stroke-width="2"/>'
+        f'<text x="{MBARX + w(h["month_target"]):.1f}" y="132" text-anchor="middle" '
+        f'class="val" fill="{C_PLAN}">AOP {lakh(h["month_target"])}</text>'
     )
     if y.get('required_monthly'):
         rw = w(y['required_monthly'])
         month_rows += (
-            f'<text x="196" y="167" text-anchor="end" class="lab">Needed each month '
-            f'from here</text>'
-            f'<rect x="204" y="154" width="{rw:.1f}" height="18" rx="3" fill="#FDF0EA" '
-            f'stroke="var(--owed)" stroke-width="1.5" stroke-dasharray="5 4"/>'
-            f'<text x="{204 + rw + 9:.1f}" y="167" class="val" fill="var(--owed)">'
+            f'<text x="{MGUT}" y="167" text-anchor="end" class="lab">'
+            f'Needed each month from here</text>'
+            f'<rect x="{MBARX}" y="154" width="{rw:.1f}" height="18" rx="3" '
+            f'fill="#FDF0EA" stroke="{C_OWED}" stroke-width="1.5" '
+            f'stroke-dasharray="5 4"/>'
+            f'<text x="{MVALX}" y="167" class="val" fill="{C_OWED}">'
             f'{lakh(y["required_monthly"])}</text>')
 
     # -- where this head stands ------------------------------------------
@@ -424,7 +494,7 @@ def render(d):
     # stand -- so the spread stays, the position stays, the names go. The
     # named table belongs on the manager's report, where the team is the
     # subject.
-    SW, SX = 420.0, 150.0
+    SW, SX = 470.0, 190.0
     vals = sorted(drawable(p['month_pct']) for p in peers)
     smax = max(vals + [100]) * 1.12 or 100
     def sx(v):
@@ -435,7 +505,7 @@ def render(d):
         if p['id'] == h['id']:
             continue
         marks += (f'<circle cx="{sx(p["month_pct"]):.1f}" cy="40" r="5.5" '
-                  f'fill="var(--peer)" opacity=".5"/>')
+                  f'fill="{C_PEER}" opacity=".5"/>')
     mine_pct = h['month_pct'] or 0
     mine_x = sx(mine_pct)
     # The median rather than the mean: one territory at 139% drags an average
@@ -474,10 +544,10 @@ def render(d):
         dw = min(max(float(done) / t, 0), 1) * 420
         out = (f'<text x="0" y="{yy}" class="lab">{e(label)} &mdash; plan '
                f'{lakh(target)}</text>'
-               f'<rect x="0" y="{yy + 8}" width="{dw:.1f}" height="18" rx="3" fill="var(--done)"/>')
+               f'<rect x="0" y="{yy + 8}" width="{dw:.1f}" height="18" rx="3" fill="{C_DONE}"/>')
         if dw < 418:
             out += (f'<rect x="{dw + 2:.1f}" y="{yy + 8}" width="{418 - dw:.1f}" '
-                    f'height="18" rx="3" fill="var(--owed)"/>')
+                    f'height="18" rx="3" fill="{C_OWED}"/>')
         # Inside the bar while there is room for it, after it when there is
         # not. A figure printed over the join of two fills is unreadable.
         if dw >= 58:
@@ -597,12 +667,12 @@ def render(d):
         <span><i class="sw" style="background:var(--plan)"></i>AOP</span>
         <span><i class="sw ring"></i>Needed from here</span>
       </div>
-      <div class="scroll"><svg viewBox="0 0 700 212" role="img"
+      <svg viewBox="0 0 {CW} 212" role="img"
         aria-label="Monthly billing against plan and against what the rest of the year needs">
         {ticks}
-        <line x1="204" y1="14" x2="204" y2="186" stroke="#D5DCE6"/>
+        <line x1="{MBARX}" y1="14" x2="{MBARX}" y2="186" stroke="{C_GRID}"/>
         {month_rows}
-      </svg></div>
+      </svg>
       <figcaption>Every bar on one scale, in lakhs. The dashed bar is not a
         forecast &mdash; it is the arithmetic of the annual plan divided by the
         months left to sell it in.</figcaption>
@@ -638,25 +708,25 @@ def render(d):
     <div class="shead"><h2>Where you stand</h2>
       <span>{e(chan)} only &mdash; {of} heads</span></div>
     <figure>
-      <div class="scroll"><svg viewBox="0 0 700 {strip_h}" role="img"
+      <svg viewBox="0 0 {CW} {strip_h}" role="img"
         aria-label="This territory's achievement against the spread of the channel">
         <line x1="{SX}" y1="40" x2="{SX + SW}" y2="40" stroke="#E3E8EF"
               stroke-width="2"/>
         <line x1="{sx(100):.1f}" y1="18" x2="{sx(100):.1f}" y2="62"
-              stroke="var(--plan)" stroke-width="1.5"/>
+              stroke="{C_PLAN}" stroke-width="1.5"/>
         <text x="{sx(100):.1f}" y="78" text-anchor="middle" class="axis"
-              fill="var(--plan)">100% &mdash; plan</text>
+              fill="{C_PLAN}">100% &mdash; plan</text>
         <line x1="{sx(mid):.1f}" y1="24" x2="{sx(mid):.1f}" y2="56"
               stroke="#9AA6B8" stroke-dasharray="3 3"/>
         <text x="{sx(mid):.1f}" y="96" text-anchor="middle" class="axis">
           {pct(mid)} &mdash; middle of {e(chan)}</text>
         {marks}
-        <circle cx="{mine_x:.1f}" cy="40" r="9" fill="var(--done)"/>
+        <circle cx="{mine_x:.1f}" cy="40" r="9" fill="{C_DONE}"/>
         <text x="{SX - 12:.1f}" y="45" text-anchor="end" class="lab"><tspan
           font-weight="700">You</tspan> &#183; {e(h['region'])}</text>
         <text x="{mine_x:.1f}" y="22" text-anchor="middle" class="val"
-              fill="var(--done)" font-weight="700">{pct(h['month_pct'])}</text>
-      </svg></div>
+              fill="{C_DONE}" font-weight="700">{pct(h['month_pct'])}</text>
+      </svg>
       <figcaption>Each faint mark is another territory in {e(chan)}, unnamed:
         their figures are theirs. Yours is {ordinal(m_rank)} of {of} on the
         month{f", {ordinal((rank.get('ytd_pct') or {}).get('position'))} of {of} on the year to date" if rank.get('ytd_pct') else ''}{
@@ -813,31 +883,34 @@ def render_team(d):
                 "on the sheet most often mistaken for a result."))
 
     # -- board 1: achievement ---------------------------------------------
-    board, Y = '', 10
-    top = max([h['month_pct'] or 0 for h in heads] + [100]) * 1.12
-    BW = 300.0
+    board, Y = '', 12
+    top = max([h['month_pct'] or 0 for h in heads] + [100]) * 1.04
     for h in heads:
         p = h['month_pct']
-        label = (f'<text x="248" y="{Y + 13}" text-anchor="end" class="lab">'
-                 f'{e(h["region"])} &#183; {e(h["head_name"])}</text>')
+        label = (f'<text x="{GUT}" y="{Y + 13}" text-anchor="end" class="lab">'
+                 f'{e(fit(h["region"] + " · " + h["head_name"], 30))}</text>')
         if p is None:
-            board += label + (f'<text x="264" y="{Y + 13}" class="val" '
-                              f'fill="#8A94A6">no plan against this territory</text>')
+            # In the figure column, not across the drawing area: printed
+            # from the bar's own origin it ran straight through the 100%
+            # plan line.
+            board += label + (f'<text x="{VALX}" y="{Y + 13}" '
+                              f'text-anchor="end" class="val" '
+                              f'fill="{C_MUTED}">--</text>'
+                              f'<text x="{SUBX}" y="{Y + 13}" class="val" '
+                              f'fill="{C_MUTED}" style="font-size:10px">'
+                              f'no plan this month</text>')
         else:
-            # Clamped at nothing: a negative width is not drawn at all, and a
-            # vanished bar reads as "billed nothing", which is kinder than
-            # the truth and therefore worse. The figure beside it is printed
-            # whatever its sign.
-            w = drawable(p) / top * BW
+            w = drawable(p) / top * BARW
             board += label + (
-                f'<rect x="256" y="{Y}" width="{w:.1f}" height="18" rx="3" '
+                f'<rect x="{BARX}" y="{Y}" width="{w:.1f}" height="18" rx="3" '
                 f'fill="{TONE[rag(p)]}"/>'
-                f'<text x="{256 + w + 9:.1f}" y="{Y + 13}" class="val">{pct(p)}</text>'
-                f'<text x="{256 + w + 56:.1f}" y="{Y + 13}" class="val" '
-                f'fill="#8A94A6" style="font-size:10.5px">'
-                f'{lakh(h["mtd_primary"])} of {lakh(h["month_target"])}</text>')
+                f'<text x="{VALX}" y="{Y + 13}" text-anchor="end" class="val">'
+                f'{pct(p)}</text>'
+                f'<text x="{SUBX}" y="{Y + 13}" class="val" fill="{C_MUTED}" '
+                f'style="font-size:10px">{lakh(h["mtd_primary"])} of '
+                f'{lakh(h["month_target"])}</text>')
         Y += 26
-    plan_x = 256 + 100 / top * BW
+    plan_x = BARX + 100 / top * BARW
     board_h = Y + 30
 
     # -- board 2: where the shortfall sits --------------------------------
@@ -848,48 +921,52 @@ def render_team(d):
     # a manager to go and talk to the smallest territory they have.
     owed = sorted((h for h in heads if h['month_target']),
                   key=lambda h: -(h['month_backlog'] or 0))
-    gap, G = '', 10
-    span = max([abs(h['month_backlog'] or 0) for h in owed]
-               + [max((h['mtd_primary'] or 0) for h in owed) if owed else 0]
-               + [1])
-    GW = 290.0
+    gap, G = '', 12
+    span = max([drawable(h['mtd_primary']) + drawable(h['month_backlog'])
+                for h in owed] + [1])
+    GAPW = 232.0          # narrower: this one also prints a sentence on the right
     for h in owed:
         b = h['month_backlog'] or 0
         billed = h['mtd_primary'] or 0
-        # Clamped at nothing. A month with more returned than sold is a real
-        # thing and the sheet writes it as a minus; a negative width is not
-        # drawn by any browser, so the bar vanishes and the territory in the
-        # worst trouble is the one that disappears off the chart.
-        bw = drawable(min(billed, span)) / span * GW
-        gap += (f'<text x="248" y="{G + 13}" text-anchor="end" class="lab">'
-                f'{e(h["region"])}</text>'
-                f'<rect x="256" y="{G}" width="{bw:.1f}" height="18" rx="3" '
-                f'fill="var(--done)" opacity=".85"/>')
+        bw = drawable(min(billed, span)) / span * GAPW
+        gap += (f'<text x="{GUT}" y="{G + 13}" text-anchor="end" class="lab">'
+                f'{e(fit(h["region"] + " · " + h["head_name"], 30))}</text>'
+                f'<rect x="{BARX}" y="{G}" width="{bw:.1f}" height="18" rx="3" '
+                f'fill="{C_DONE}" opacity=".9"/>')
         if b > 0:
-            ow = min(b, span) / span * GW
-            gap += (f'<rect x="{256 + bw:.1f}" y="{G}" width="{ow:.1f}" '
-                    f'height="18" rx="3" fill="var(--owed)"/>'
-                    f'<text x="{256 + bw + ow + 9:.1f}" y="{G + 13}" class="val" '
-                    f'fill="#8f3c12">{lakh(b)} owed</text>')
+            ow = drawable(min(b, span)) / span * GAPW
+            gap += (f'<rect x="{BARX + bw:.1f}" y="{G}" width="{ow:.1f}" '
+                    f'height="18" rx="3" fill="{C_OWED}"/>'
+                    f'<text x="{VALX}" y="{G + 13}" text-anchor="end" '
+                    f'class="val" fill="#8f3c12">{lakh(b)}</text>'
+                    f'<text x="{SUBX}" y="{G + 13}" class="val" '
+                    f'fill="{C_MUTED}" style="font-size:10px">still owed</text>')
         else:
-            gap += (f'<text x="{256 + bw + 9:.1f}" y="{G + 13}" class="val" '
-                    f'fill="#0f7a44">past plan by {lakh(-b)}</text>')
+            gap += (f'<text x="{VALX}" y="{G + 13}" text-anchor="end" '
+                    f'class="val" fill="#0f7a44">{lakh(-b)}</text>'
+                    f'<text x="{SUBX}" y="{G + 13}" class="val" '
+                    f'fill="{C_MUTED}" style="font-size:10px">past plan</text>')
         G += 26
     gap_h = G + 14
-    total_owed = sum(max(h['month_backlog'] or 0, 0) for h in owed)
+    total_owed = sum(drawable(h['month_backlog']) for h in owed)
     worst = owed[0] if owed and (owed[0]['month_backlog'] or 0) > 0 else None
     worst_share = (round_half_up((worst['month_backlog'] or 0) / total_owed * 100)
                    if worst and total_owed else None)
 
     # -- board 3: achievement against growth ------------------------------
+    #
+    # Thirteen dots in a box is a crowd. The labels are placed one at a time
+    # against the ones already down, trying above the dot, then below, then
+    # to either side -- a label printed on top of another says nothing about
+    # either, and the first draft of this had four of them overlapping.
     plotted = [h for h in heads
                if h['month_pct'] is not None and h['growth_pct'] is not None]
-    SX0, SX1, SY0, SY1 = 70.0, 650.0, 30.0, 290.0
+    SX0, SX1, SY0, SY1 = 108.0, 700.0, 42.0, 376.0
     xs = [h['month_pct'] for h in plotted] + [100]
     ys = [h['growth_pct'] for h in plotted] + [0]
     xlo, xhi = min(xs + [0]), max(xs)
     ylo, yhi = min(ys), max(ys)
-    xpad, ypad = max((xhi - xlo) * .12, 8), max((yhi - ylo) * .14, 8)
+    xpad, ypad = max((xhi - xlo) * .1, 8), max((yhi - ylo) * .16, 10)
     xlo, xhi = xlo - xpad, xhi + xpad
     ylo, yhi = ylo - ypad, yhi + ypad
 
@@ -899,19 +976,44 @@ def render_team(d):
     def py(v):
         return SY1 - (v - ylo) / (yhi - ylo) * (SY1 - SY0)
 
-    dots = ''
-    for h in plotted:
-        x, yy = px(h['month_pct']), py(h['growth_pct'])
-        dots += (f'<circle cx="{x:.1f}" cy="{yy:.1f}" r="6.5" '
+    placed, dots, marks = [], '', []
+    for h in sorted(plotted, key=lambda r: -(r['month_pct'] or 0)):
+        marks.append((px(h['month_pct']), py(h['growth_pct']), h))
+    # Every dot is an obstacle before any label is placed. Checking labels
+    # only against each other left two of them sitting on top of somebody
+    # else's dot, which hides the very mark the label is there to name.
+    for x, yy, _ in marks:
+        placed.append((x - 8, yy - 8, x + 8, yy + 8))
+    for x, yy, h in marks:
+        dots += (f'<circle cx="{x:.1f}" cy="{yy:.1f}" r="6" '
                  f'fill="{TONE[rag(h["month_pct"])]}" stroke="#FFFFFF" '
-                 f'stroke-width="2"/>'
-                 f'<text x="{x:.1f}" y="{yy - 11:.1f}" text-anchor="middle" '
-                 f'class="lab" style="font-size:10px">{e(h["region"])}</text>')
+                 f'stroke-width="1.5"/>')
+    for x, yy, h in marks:
+        text = h['region']
+        w = len(text) * 5.6 + 4
+        for dx, dy, anchor in ((0, -12, 'middle'), (0, 19, 'middle'),
+                               (11, 4, 'start'), (-11, 4, 'end'),
+                               (0, -24, 'middle'), (0, 31, 'middle')):
+            cx = x + dx
+            x0 = cx - (w / 2 if anchor == 'middle'
+                       else 0 if anchor == 'start' else w)
+            box = (x0, yy + dy - 9, x0 + w, yy + dy + 3)
+            if box[0] < SX0 - 34 or box[2] > SX1 + 2:
+                continue
+            if any(not (box[2] < o[0] or box[0] > o[2]
+                        or box[3] < o[1] or box[1] > o[3]) for o in placed):
+                continue
+            placed.append(box)
+            dots += (f'<text x="{cx:.1f}" y="{yy + dy:.1f}" '
+                     f'text-anchor="{anchor}" class="lab" '
+                     f'style="font-size:10px">{e(text)}</text>')
+            break
     qx, qy = px(100), py(0)
     rising_behind = [h for h in plotted
                      if h['month_pct'] < 100 and h['growth_pct'] > 0]
     falling_behind = [h for h in plotted
                       if h['month_pct'] < 100 and h['growth_pct'] <= 0]
+
 
     def tile(k, v, s, tone=''):
         return (f'<div class="tile"><div class="k">{k}</div>'
@@ -962,6 +1064,13 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
 .minib{{display:block; height:3px; margin-top:4px; background:var(--line-2);
         border-radius:2px; overflow:hidden}}
 .minib i{{display:block; height:100%}}
+/* Nine columns on A4. Left to themselves they divide evenly, the head name
+   takes as much as the figures, and the last columns fall off the page. */
+.terr col.r{{width:8.5%}} .terr col.h{{width:17.5%}} .terr col.n{{width:10.2%}}
+/* Data never wraps; headings may. "FY BACKLOG" on one line was a shade
+   wider than its column and lost its last letters off the page. */
+.terr td{{white-space:nowrap}}
+.terr th{{white-space:normal; line-height:1.25}}
 </style>
 </head><body>
 
@@ -1001,15 +1110,15 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
     <div class="shead"><h2>Where each territory stands</h2>
       <span>This month against this month&#8217;s AOP</span></div>
     <figure>
-      <div class="scroll"><svg viewBox="0 0 700 {board_h}" role="img"
+      <svg viewBox="0 0 {CW} {board_h}" role="img"
         aria-label="Achievement against AOP this month, by territory">
-        <line x1="256" y1="4" x2="256" y2="{Y - 4}" stroke="#D5DCE6"/>
-        <line x1="{plan_x:.1f}" y1="4" x2="{plan_x:.1f}" y2="{Y - 4}"
-              stroke="var(--plan)" stroke-width="1.5"/>
-        <text x="{plan_x:.1f}" y="{Y + 16}" text-anchor="middle" class="axis"
-              fill="var(--plan)">100% &mdash; plan</text>
+        <line x1="{BARX}" y1="6" x2="{BARX}" y2="{Y - 4}" stroke="{C_GRID}"/>
+        <line x1="{plan_x:.1f}" y1="6" x2="{plan_x:.1f}" y2="{Y - 4}"
+              stroke="{C_PLAN}" stroke-width="1.5"/>
+        <text x="{plan_x:.1f}" y="{Y + 18}" text-anchor="middle" class="axis"
+              fill="{C_PLAN}">100% &mdash; plan</text>
         {board}
-      </svg></div>
+      </svg>
       <figcaption>Sorted by achievement rather than by region code, so the
         territories needing attention sit together at the bottom instead of
         being scattered through the list. Billed and planned are printed
@@ -1026,11 +1135,11 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
         <span><i class="sw" style="background:var(--done)"></i>Billed</span>
         <span><i class="sw" style="background:var(--owed)"></i>Still owed this month</span>
       </div>
-      <div class="scroll"><svg viewBox="0 0 700 {gap_h}" role="img"
+      <svg viewBox="0 0 {CW} {gap_h}" role="img"
         aria-label="Billed and still owed this month, by territory, in lakhs">
-        <line x1="256" y1="4" x2="256" y2="{G - 4}" stroke="#D5DCE6"/>
+        <line x1="{BARX}" y1="6" x2="{BARX}" y2="{G - 4}" stroke="{C_GRID}"/>
         {gap}
-      </svg></div>
+      </svg>
       <figcaption>The same month as the chart above, measured in money rather
         than in percent. A territory 20% behind on a large plan is a bigger
         hole than one 40% behind on a small one, and an achievement board
@@ -1045,24 +1154,26 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
     <div class="shead"><h2>Which way each is moving</h2>
       <span>Achievement this month against growth over last month</span></div>
     <figure>
-      <div class="scroll"><svg viewBox="0 0 700 320" role="img"
+      <svg viewBox="0 0 {CW} 410" role="img"
         aria-label="Achievement against growth, by territory">
         <rect x="{SX0}" y="{SY0}" width="{SX1 - SX0}" height="{SY1 - SY0}"
-              fill="#FBFCFD" stroke="#EEF2F7"/>
+              fill="#FBFCFD" stroke="{C_FAINT}"/>
         <line x1="{qx:.1f}" y1="{SY0}" x2="{qx:.1f}" y2="{SY1}"
-              stroke="var(--plan)" stroke-width="1.5"/>
+              stroke="{C_PLAN}" stroke-width="1.5"/>
         <line x1="{SX0}" y1="{qy:.1f}" x2="{SX1}" y2="{qy:.1f}"
               stroke="#9AA6B8" stroke-dasharray="4 4"/>
-        <text x="{SX1 - 6:.1f}" y="{SY0 + 15:.1f}" text-anchor="end"
+        <text x="{SX1 - 8:.1f}" y="{SY0 + 17:.1f}" text-anchor="end"
               class="axis" fill="#0f7a44">past plan and growing</text>
-        <text x="{SX0 + 6:.1f}" y="{SY1 - 8:.1f}" class="axis"
+        <text x="{SX0 + 8:.1f}" y="{SY1 - 9:.1f}" class="axis"
               fill="#b4252c">behind plan and falling</text>
-        <text x="{qx:.1f}" y="{SY1 + 20:.1f}" text-anchor="middle" class="axis"
-              fill="var(--plan)">100% of plan</text>
-        <text x="{SX0 - 8:.1f}" y="{qy + 4:.1f}" text-anchor="end" class="axis">
-          level with LM</text>
+        <text x="{qx:.1f}" y="{SY1 + 24:.1f}" text-anchor="middle" class="axis"
+              fill="{C_PLAN}">100% of plan</text>
+        <text x="{SX0 - 10:.1f}" y="{qy + 4:.1f}" text-anchor="end"
+              class="axis">level with</text>
+        <text x="{SX0 - 10:.1f}" y="{qy + 16:.1f}" text-anchor="end"
+              class="axis">last month</text>
         {dots}
-      </svg></div>
+      </svg>
       <figcaption>Left to right is achievement against this month&#8217;s plan;
         up and down is growth over the same point last month. A territory
         behind plan but climbing is not the same conversation as one behind
@@ -1091,7 +1202,10 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
   <section>
     <div class="shead"><h2>Every territory</h2>
       <span>Exactly as circulated, in &#8377; lakhs</span></div>
-    <div class="scroll"><div class="tbl"><table>
+    <div class="scroll"><div class="tbl"><table class="terr">
+      <colgroup><col class="r"><col class="h"><col class="n"><col class="n">
+        <col class="n"><col class="n"><col class="n"><col class="n">
+        <col class="n"></colgroup>
       <thead><tr><th>Region</th><th class="nm">Head</th><th>AOP</th><th>Billed</th>
         <th>ACH</th><th>vs LM</th><th>Backlog</th><th>YTD</th>
         <th>FY backlog</th></tr></thead>

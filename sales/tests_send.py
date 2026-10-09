@@ -265,7 +265,10 @@ class AnIndividualReportIsOnlyTheirOwn(TestCase):
         """One mark per territory, so the shape of the channel is visible
         without anybody being named."""
         _, rs, html = self.report_for('GTR01')
-        self.assertEqual(html.count('fill="var(--peer)"'), len(rs) - 1)
+        # By the literal colour, because nothing inside an <svg> may use a
+        # CSS variable -- WeasyPrint renders those black.
+        from .report import C_PEER
+        self.assertEqual(html.count('fill="%s"' % C_PEER), len(rs) - 1)
 
     def test_the_manager_report_does_name_them(self):
         """There the team IS the subject, and a roll-up that will not say
@@ -809,3 +812,87 @@ class AMonthWithMoreReturnedThanSold(TestCase):
         # width="-0.0" is not a valid SVG length either, and max(-0.0, 0) is
         # -0.0 in Python -- which is exactly what a near-zero figure gives.
         self.assertNotIn('"-0.0"', html)
+
+
+class WhatThePdfActuallyLooksLike(TestCase):
+    """Three faults that are invisible on screen and ruin the printed file,
+    which is the only version anybody receives."""
+
+    def setUp(self):
+        upload(review_workbook([GTR01, GTR04A, GTR04B, HANDOVER]),
+               name="Primary Master till 30th Sept'2026.xlsx")
+
+    def pages(self):
+        regions = ','.join(sorted({r.region for r in rows()}))
+        me = rows()[0]
+        return [
+            self.client.get('/api/sales/review/team/file/?regions=' + regions)
+                .content.decode('utf-8'),
+            self.client.get('/api/sales/review/report/file/?row=%d' % me.id)
+                .content.decode('utf-8'),
+        ]
+
+    def test_no_chart_colour_is_a_css_variable(self):
+        """WeasyPrint does not resolve custom properties inside SVG, so a
+        fill naming one falls back to black. On screen the charts were green
+        and orange; in the PDF that goes out, every bar was black."""
+        import re
+        for html in self.pages():
+            for sv in re.finditer(r'<svg.*?</svg>', html, re.S):
+                self.assertNotIn('var(--', sv.group(0))
+
+    def test_every_label_fits_inside_its_own_drawing(self):
+        """There is no scrollbar on paper: a label past the viewBox is cut
+        off, which is what happened to the handover line's name and to
+        "Average of the first 5 months"."""
+        import re
+        over = []
+        for html in self.pages():
+            for sv in re.finditer(
+                    r'<svg viewBox="0 0 ([\d.]+) ([\d.]+)"(.*?)</svg>', html, re.S):
+                W, body = float(sv.group(1)), sv.group(3)
+                for t in re.finditer(
+                        r'<text x="([-\d.]+)" y="[-\d.]+"([^>]*)>(.*?)</text>',
+                        body, re.S):
+                    x, attrs = float(t.group(1)), t.group(2)
+                    txt = re.sub(r'<[^>]+>', '', t.group(3))
+                    txt = txt.replace('&#183;', '.').replace('&mdash;', '-').strip()
+                    m = re.search(r'font-size:([\d.]+)px', attrs)
+                    # Generously wide on purpose: the PDF falls back to
+                    # different fonts from the browser, so a label that just
+                    # fits on screen can still run off the page.
+                    w = len(txt) * (float(m.group(1)) if m else 11.5) * 0.62
+                    if 'text-anchor="end"' in attrs:
+                        x0, x1 = x - w, x
+                    elif 'text-anchor="middle"' in attrs:
+                        x0, x1 = x - w / 2, x + w / 2
+                    else:
+                        x0, x1 = x, x + w
+                    if x0 < -0.5 or x1 > W + 0.5:
+                        over.append((round(x0), round(x1), W, txt[:40]))
+        self.assertEqual(over, [])
+
+    def test_no_label_is_printed_on_top_of_another_or_on_a_dot(self):
+        """A label sitting on the mark it names hides the very thing it is
+        there to point at."""
+        import re
+        html = self.pages()[0]
+        m = re.search(r'aria-label="Achievement against growth.*?</svg>', html, re.S)
+        if not m:
+            self.skipTest('too few territories for the quadrant')
+        q = m.group(0)
+        boxes = [(float(a) - 8, float(b) - 8, float(a) + 8, float(b) + 8)
+                 for a, b in re.findall(r'<circle cx="([-\d.]+)" cy="([-\d.]+)"', q)]
+        labels = re.findall(
+            r'<text x="([-\d.]+)" y="([-\d.]+)"[^>]*font-size:10px[^>]*>([^<]+)</text>',
+            q)
+        self.assertEqual(len(labels), len(boxes))   # every territory named
+        for x, y, t in labels:
+            x, y = float(x), float(y)
+            w = len(t) * 5.6 + 4
+            box = (x - w / 2, y - 9, x + w / 2, y + 3)
+            for o in boxes:
+                self.assertTrue(
+                    box[2] < o[0] or box[0] > o[2] or box[3] < o[1] or box[1] > o[3],
+                    '%s overlaps a mark' % t)
+            boxes.append(box)
