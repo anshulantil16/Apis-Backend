@@ -644,6 +644,26 @@ def sheet_key(title):
     return ' '.join(s.split())
 
 
+# A tab named for the month it covers: "Oct'26 Pri Sales Dump". The month
+# moves every file, so it cannot be an alias -- it is stripped before the
+# name is matched. Leading and trailing, because both have been seen.
+#
+# Found when October's workbook uploaded and the dashboard did not move: the
+# dump tab was ignored in silence, which looks exactly like a file that had
+# no dump in it.
+_DATED_TAB = re.compile(
+    r'^(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*'
+    r'\s*\d{2,4}\s+)?(.*?)'
+    r'(?:\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*'
+    r'\s*\d{2,4})?$')
+
+
+def undated(key):
+    """-> the tab key with any month-year stamp taken off either end."""
+    m = _DATED_TAB.match(key)
+    return (m.group(1).strip() if m and m.group(1).strip() else key)
+
+
 def pick_sheets(titles):
     """-> ({kind: tab title}, [titles ignored on purpose]).
 
@@ -657,7 +677,7 @@ def pick_sheets(titles):
     for t in titles:
         key = sheet_key(t)
         for kind, names in SHEET_ALIASES.items():
-            if key in names:
+            if key in names or undated(key) in names:
                 # First match wins. A workbook with two tabs claiming the
                 # same role is a mistake upstream, and reading the second
                 # over the first would hide it.

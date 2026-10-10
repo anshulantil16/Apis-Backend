@@ -63,8 +63,22 @@ CHECKS = {
     'fy_backlog':    re.compile(r'^backlog fy$'),
 }
 
-# "MTD Sep-26 PRI SALES", "MTD SEP 26 PRI SALES", "MTD PRI SALES"
-_MTD_PRI = re.compile(r'^mtd\s*(?:([a-z]{3})\s*(\d{2}|\d{4})\s*)?pri(?:mary)?\s*sales$')
+# The month-to-date primary column, however the business wrote it this month.
+#
+# "MTD Sep-26 PRI SALES" is what September's file said; October's said
+# "MTD Pri Oct-26" -- same column, month moved to the end and the word
+# "SALES" dropped. Both orders are accepted, and "sales" is optional,
+# because the alternative is that the import fails every time somebody
+# retypes a header and the reports silently keep serving last month.
+#
+# "MTD Sec sales" must NOT match this: `pri(?:mary)?` is required, so the
+# secondary column still falls through to its own alias.
+_MTD_PRI = re.compile(
+    r'^mtd\s*'
+    r'(?:([a-z]{3,4})\s*(\d{2}|\d{4})\s*)?'       # month BEFORE  "pri"
+    r'pri(?:mary)?'
+    r'(?:\s*sales)?'
+    r'(?:\s*([a-z]{3,4})\s*(\d{2}|\d{4}))?$')     # month AFTER   "pri"
 # "FY'26-27 AOP" / "FY 26 27 ACH". _norm turns the dash into a space but
 # leaves the apostrophe alone, so the key arrives as "fy'26 27 aop" -- the
 # apostrophe is optional here rather than assumed away.
@@ -100,8 +114,10 @@ def map_columns(header_row):
         m = _MTD_PRI.match(key)
         if m:
             cols.setdefault('mtd_primary', ci)
-            if m.group(1):
-                as_of = as_of or _month_from(m.group(1), m.group(2))
+            # The month may sit on either side of "PRI" -- see _MTD_PRI.
+            mon, yr = m.group(1) or m.group(3), m.group(2) or m.group(4)
+            if mon:
+                as_of = as_of or _month_from(mon, yr)
             continue
 
         m = _FY.match(key)

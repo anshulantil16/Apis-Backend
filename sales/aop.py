@@ -274,9 +274,15 @@ def detect_money_scale(values):
 MONTHS = {m: i for i, m in enumerate(
     ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
      'jul', 'aug', 'sep', 'oct', 'nov', 'dec'], start=1)}
+# The business writes September four letters long -- its own files are named
+# "Primary Master till 30th Sept'2026" -- so a column headed "Sept-26 AOP"
+# has to resolve too, rather than being the one month of the year that does
+# not parse.
+MONTHS['sept'] = 9
 
-# "Apr-26", "Apr-26 AOP", "Apr 26", "APR-26 AOP"
-_MONTH_RE = re.compile(r'^([a-z]{3})[\s\-]*(\d{2}|\d{4})(\s+aop)?$')
+# "Apr-26", "Apr-26 AOP", "Apr 26", "APR-26 AOP", "Sept-26 AOP". Four letters
+# are allowed through and rejected below if they are not a month name.
+_MONTH_RE = re.compile(r'^([a-z]{3,4})[\s\-]*(\d{2}|\d{4})(\s+aop)?$')
 
 
 def parse_month_header(header):
