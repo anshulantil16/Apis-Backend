@@ -114,6 +114,28 @@ def candidates(key, rows):
     return []
 
 
+def for_recipient(rec, rows):
+    """Every row this recipient could mean -- by their key, else by name.
+
+    The key is an APIS ID wherever the sheet carried one, which is right:
+    a name is spelled several ways across a year of exports. But an ID is
+    only an identity while the sheet still prints it. A workbook that omits
+    the ID column, or a month where HR reissues a code, leaves a list that
+    was correct when it was filled in matching nothing at all -- and the
+    report is then built for nobody while the person sits plainly on the
+    sheet under their own name.
+
+    So the name stored beside the address is the fallback, and only when the
+    key found nothing. It is never preferred over the key, and it has to
+    name exactly one row like any other key: an ambiguous name is reported
+    as ambiguous, not resolved to whichever row came first.
+    """
+    hits = candidates(rec.head_key, rows)
+    if not hits:
+        hits = candidates(getattr(rec, 'name', '') or '', rows)
+    return hits
+
+
 def match_head(key, rows):
     """The one row a key means, or None if it means none -- or several.
 
@@ -243,7 +265,7 @@ class SalesRecipientsView(SalesIQView):
         for rec in ReportRecipient.objects.all():
             j = recipient_json(rec)
             if rec.role == ReportRecipient.ROLE_HEAD:
-                hits = candidates(rec.head_key, rows)
+                hits = for_recipient(rec, rows)
                 row = hits[0] if len(hits) == 1 else None
                 j['matched'] = bool(row)
                 j['matched_to'] = f'{row.region} — {row.head_name}' if row else None

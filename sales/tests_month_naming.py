@@ -234,3 +234,119 @@ class TheOctoberWorkbookUploadsEndToEnd(TestCase):
         self.upload()
         self.assertEqual(ReviewSnapshot.objects.first().as_of_date,
                          date(2026, 10, 8))
+
+
+class TheAopTabIsReadBeforeTheReviewTab(TestCase):
+    """Whatever order the business puts the tabs in.
+
+    The review sheet takes each head's APIS ID from the plan rows the AOP
+    sheet writes. October's workbook puts Region Summary on tab one and the
+    AOP sheet on tab six, so reading in tab order left every head with no
+    code -- and a recipient list keyed on those codes matched nothing, for
+    people plainly on the sheet.
+    """
+
+    HEAD = 'MOHINDER SHARMA'
+    CODE = 'SL04492'
+
+    def setUp(self):
+        self.c = RawClient()
+        self.c.defaults['HTTP_X_SALESIQ_SESSION'] = issue_session(
+            SALESIQ_SUPER_ADMIN)
+
+    def workbook(self):
+        """Region Summary FIRST, the AOP sheet AFTER it -- October's order."""
+        import openpyxl
+        from .tests import aop_row
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+
+        ws = wb.create_sheet(title='Region Summary')
+        ws.append([None, None, None, None, "MTD FOR OCT'26"])
+        ws.append(list(OCTOBER_HEADER))
+        ws.append(['GT', 'GTR01', self.HEAD, 22, 57.61, 119.78, 38.31, 4.27,
+                   22.41, .32, -.32, 81.47, 739.46, 262.44, .35, 477.02,
+                   1423.73, 262.44, .18, 1161.29])
+
+        plan = aop_row(**{'GTR HEAD': self.HEAD, 'APIS ID': self.CODE})
+        aop = wb.create_sheet(title='YTD,AOP vs.ACH')
+        aop.append(list(plan.keys()))
+        aop.append([plan.get(h) for h in plan])
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = "Primary Master till 08th Oct'2026.xlsx"
+        return buf
+
+    def upload(self):
+        r = self.c.post('/api/sales/upload/', {'file': self.workbook()})
+        self.assertEqual(r.status_code, 200, r.content[:600])
+
+    def test_the_head_is_stored_with_the_code_from_the_later_tab(self):
+        self.upload()
+        row = ReviewSnapshot.objects.first().rows.get(region='GTR01')
+        self.assertEqual(row.head_code, self.CODE)
+
+    def test_a_recipient_keyed_on_that_code_resolves(self):
+        """This is the failure as the screen reported it: "No row matching
+        SL04492 on this sheet", about a man on the sheet."""
+        from .views.recipients import candidates
+        self.upload()
+        rows = [r for r in ReviewSnapshot.objects.first().rows.all()
+                if not r.is_total]
+        self.assertEqual(len(candidates(self.CODE, rows)), 1)
+
+
+class AListWhoseCodesWentStaleStillResolves(TestCase):
+    """By the name stored beside the address.
+
+    An APIS ID is only an identity while the sheet still prints it. A
+    workbook that drops the column, or a month where a code is reissued,
+    should not silently send nobody their report.
+    """
+
+    def setUp(self):
+        from .tests_audit import SHEET, _workbook
+        self.c = RawClient()
+        self.c.defaults['HTTP_X_SALESIQ_SESSION'] = issue_session(
+            SALESIQ_SUPER_ADMIN)
+        self.c.post('/api/sales/upload/', {'file': _workbook(SHEET)})
+        snap = ReviewSnapshot.objects.first()
+        self.rows = [r for r in snap.rows.all() if not r.is_total]
+
+    def rec(self, key, name):
+        from .models import ReportRecipient
+        return ReportRecipient(role='head', head_key=key, name=name,
+                               email='x@apisindia.com')
+
+    def test_a_dead_code_falls_back_to_the_name(self):
+        from .views.recipients import for_recipient
+        hits = for_recipient(self.rec('SL00979', 'Arnab Ghosh'), self.rows)
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].head_name.upper(), 'ARNAB GHOSH')
+
+    def test_a_live_code_is_still_preferred_over_the_name(self):
+        """The name is a fallback, never a preference -- it is the weaker
+        identifier and must not start deciding things while the key works."""
+        from .views.recipients import for_recipient
+        r = self.rows[0]
+        r.head_code = 'LIVE1'
+        r.save()
+        hits = for_recipient(self.rec('LIVE1', 'Somebody Else'), self.rows)
+        self.assertEqual(hits[0].id, r.id)
+
+    def test_a_name_naming_two_rows_is_still_called_ambiguous(self):
+        """Falling back must not resolve an ambiguity by taking the first."""
+        from .views.recipients import for_recipient
+        for r in self.rows[:2]:
+            r.head_name, r.head_code = 'Same Person', ''
+            r.save()
+        rows = [r for r in ReviewSnapshot.objects.first().rows.all()
+                if not r.is_total]
+        self.assertEqual(
+            len(for_recipient(self.rec('GONE', 'Same Person'), rows)), 2)
+
+    def test_a_recipient_with_neither_matches_nothing(self):
+        from .views.recipients import for_recipient
+        self.assertEqual(for_recipient(self.rec('GONE', ''), self.rows), [])

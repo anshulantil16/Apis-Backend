@@ -94,10 +94,10 @@ def compose(rec, req, snap, rows):
     and the report on screen are one answer rather than three implementations
     that agree until they do not.
     """
-    from .recipients import candidates, SalesTeamReportView
+    from .recipients import for_recipient, SalesTeamReportView
 
     if rec.role == ReportRecipient.ROLE_HEAD:
-        hits = candidates(rec.head_key, rows)
+        hits = for_recipient(rec, rows)
         if len(hits) > 1:
             return {'error': '"{}" is on {} rows of this sheet ({}), so it '
                              'does not say whose report to send. Download the '
@@ -105,8 +105,9 @@ def compose(rec, req, snap, rows):
                                  rec.head_key, len(hits),
                                  ', '.join(h.head_name for h in hits))}
         if not hits:
-            return {'error': 'No row matching "{}" on this sheet.'.format(
-                rec.head_key)}
+            return {'error': 'No row matching "{}"{} on this sheet.'.format(
+                rec.head_key,
+                ' or "{}"'.format(rec.name) if (rec.name or '').strip() else '')}
         resp = _one_head(req, snap, hits[0])
         if resp.status_code != 200:
             return {'error': resp.data.get('error', 'Report could not be built.')}

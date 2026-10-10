@@ -634,7 +634,7 @@ class SalesUploadView(SalesIQAdminView):
         chosen, ignored = pick_sheets([ws.title for ws in wb.worksheets])
         by_title = {t: kind for kind, t in chosen.items()}
 
-        outcomes, left_alone = [], []
+        outcomes, left_alone, to_read = [], [], []
         for ws in wb.worksheets:
             # A workbook whose tabs are all named is read strictly. One where
             # nothing matched falls back to reading headers, so a single-sheet
@@ -655,13 +655,34 @@ class SalesUploadView(SalesIQAdminView):
                 continue        # an empty tab is not an error
 
             kind = by_title.get(ws.title)
-            if kind == 'review' or (not kind and REVIEW.looks_like_review_sheet(header_row)):
-                resp = _ingest_review(request, upload, ws, header_row, header_at)
-            elif kind == 'aop' or (not kind and AOP.looks_like_aop_sheet(header_row)):
-                resp = _ingest_aop(request, upload, ws, header_row, header_at)
-            else:
-                resp = _ingest_dump(request, upload, ws, header_row, header_at)
-            outcomes.append((ws.title, resp))
+            if not kind:
+                kind = ('review' if REVIEW.looks_like_review_sheet(header_row)
+                        else 'aop' if AOP.looks_like_aop_sheet(header_row)
+                        else 'dump')
+            to_read.append((ws, header_row, header_at, kind))
+
+        # The AOP sheet is read FIRST, whatever order the tabs sit in.
+        #
+        # The review sheet takes each head's APIS ID from the plan rows the
+        # AOP sheet writes -- a name is not an identity, so the ID is what a
+        # recipient list is keyed on. Read the review sheet first and every
+        # head is stored with no code, and a list keyed on those codes then
+        # matches nothing: "No row matching SL04492 on this sheet", for a
+        # person plainly on it.
+        #
+        # October's workbook is exactly that shape -- Region Summary on tab
+        # one, the AOP sheet on tab six -- and fifteen of sixteen reports
+        # had nowhere to go. Tab order is the business's to choose, so it
+        # cannot be what decides this.
+        READ_ORDER = {'aop': 0, 'review': 1, 'dump': 2}
+        to_read.sort(key=lambda t: READ_ORDER.get(t[3], 3))
+
+        INGEST = {'review': _ingest_review, 'aop': _ingest_aop,
+                  'dump': _ingest_dump}
+        for ws, header_row, header_at, kind in to_read:
+            outcomes.append(
+                (ws.title, INGEST[kind](request, upload, ws, header_row,
+                                        header_at)))
 
         if not outcomes:
             upload.delete()
