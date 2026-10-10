@@ -257,8 +257,8 @@ class AnIndividualReportIsOnlyTheirOwn(TestCase):
         the reader's own position and the point of the section."""
         _, _, html = self.report_for('GTR01')
         flat = ' '.join(html.split())           # the markup wraps its lines
-        self.assertIn('Where you stand', flat)
-        self.assertIn('of 4 on the month', flat)
+        self.assertIn('How you compare', flat)
+        self.assertIn('of 4 this month', flat)
         self.assertIn('middle of GT', flat)
 
     def test_the_spread_is_still_drawn(self):
@@ -696,8 +696,8 @@ class TheManagersReportIsWorthOpening(TestCase):
 
     def test_it_answers_three_different_questions_not_one(self):
         html = self.report()
-        for h in ('Where each territory stands',     # who is behind
-                  'Where the shortfall sits',        # where the money is
+        for h in ('How each territory is doing',    # who is behind
+                  'Where the gap is',                # where the money is
                   'Which way each is moving'):       # which way they are going
             self.assertIn(h, html)
 
@@ -705,8 +705,8 @@ class TheManagersReportIsWorthOpening(TestCase):
         """An achievement board read on its own sends a manager to the
         smallest territory they have."""
         html = self.report()
-        self.assertIn('lakhs, largest gap first', html)
-        self.assertIn('owed', html)
+        self.assertIn('lakhs, biggest first', html)
+        self.assertIn('to bill', html)
 
     def test_the_group_gets_the_same_three_gauges_a_head_does(self):
         """One visual language across both documents: a manager who reads
@@ -720,7 +720,7 @@ class TheManagersReportIsWorthOpening(TestCase):
         self.assertIn('Group', html)
 
     def test_the_terms_are_explained_as_they_are_on_a_head_report(self):
-        self.assertIn('What the terms mean', self.report())
+        self.assertIn('What these words mean', self.report())
 
 
 class BothReportsPrintInColour(TestCase):

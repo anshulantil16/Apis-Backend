@@ -365,32 +365,33 @@ def render(d):
     of = (rank.get('month_pct') or {}).get('of')
 
     if h['month_pct'] is not None and h['month_pct'] >= 100:
-        lead = (f"<b>{month} is past plan</b> &mdash; {pct(h['month_pct'])} of the "
-                f"AOP, with {lakh(-h['month_backlog'])} lakh more billed than asked for.")
+        lead = (f"<b>{month} is ahead of target</b> &mdash; {pct(h['month_pct'])} "
+                f"done, which is {lakh(-h['month_backlog'])} lakh more than asked for.")
     elif g_rank == 1:
-        lead = (f"<b>The fastest-growing territory in {chan} this month</b> &mdash; "
-                f"up {signed(h['growth_pct'])} on last month, where no other head "
-                f"is close.")
+        lead = (f"<b>Your territory is growing fastest in {chan} this month</b> "
+                f"&mdash; up {signed(h['growth_pct'])} on last month.")
     elif h['growth_pct'] is not None and h['growth_pct'] > 0:
         lead = (f"<b>{month} is ahead of last month</b> &mdash; "
-                f"{signed(h['growth_pct'])}, at {pct(h['month_pct'])} of the AOP.")
+                f"{signed(h['growth_pct'])}, and {pct(h['month_pct'])} of target "
+                f"is done.")
     else:
-        lead = (f"<b>{month} is behind both plan and last month</b> &mdash; "
-                f"{pct(h['month_pct'])} of the AOP and {signed(h['growth_pct'])} "
-                f"against August.")
+        lead = (f"<b>{month} is behind target and behind last month</b> &mdash; "
+                f"{pct(h['month_pct'])} of target is done, and sales are "
+                f"{signed(h['growth_pct'])} on last month.")
 
+    # Short sentences, one point each. The first draft joined all three with
+    # semicolons, which nobody reads to the end of at half past eight.
     second = []
     if y.get('prior_pct') is not None and y['prior_months']:
-        second.append(f"The months before this one ran at {pct(y['prior_pct'])} of "
-                      f"plan, so the year to date is still carrying that start")
+        second.append(f"Earlier months ran at {pct(y['prior_pct'])} of target, so "
+                      f"the year is still catching up.")
     if h['month_backlog'] > 0:
-        second.append(f"{lakh(h['month_backlog'])} lakh is still owed with the "
-                      f"month open")
+        second.append(f"{lakh(h['month_backlog'])} lakh is still to bill this month.")
     if y.get('required_monthly') and y.get('months_remaining'):
-        second.append(f"and the full year needs {lakh(y['required_monthly'])} lakh "
-                      f"a month across the {y['months_remaining']} months left, "
-                      f"against a best month so far of {lakh(h['mtd_primary'])}")
-    second_html = ('; '.join(second) + '.') if second else ''
+        second.append(f"To finish the year you need {lakh(y['required_monthly'])} "
+                      f"lakh a month for the next {y['months_remaining']} months. "
+                      f"Your best month so far is {lakh(h['mtd_primary'])}.")
+    second_html = ' '.join(second)
 
     # -- gauges ----------------------------------------------------------
     ARC = 245.0        # the semicircle's drawn length
@@ -415,19 +416,18 @@ def render(d):
     gauges = (
         gauge('This month', h['month_pct'], h['mtd_primary'], h['month_target'],
               TONE[rag(h['month_pct'])],
-              f"<b>This month, against this month's AOP.</b> Performance. "
-              f"{lakh(h['month_backlog'])} lakh still owed, and the month is not finished.")
+              f"<b>This month, against this month's target.</b> "
+              f"{lakh(h['month_backlog'])} lakh still to bill, and the month is not over.")
         + gauge('Year to date', h['ytd_pct'], h['ytd_actual'], h['ytd_target'],
                 TONE[rag(h['ytd_pct'])],
-                f"<b>April to now, against the plan for those months.</b> Also "
-                f"performance, over {y['months_elapsed']} months instead of one."
-                + (f" {e(chan)} as a whole is at {pct(ct.get('ytd_pct'))}."
+                f"<b>April until now, against the target for those months.</b> "
+                f"The same measure over {y['months_elapsed']} months instead of one."
+                + (f" All of {e(chan)} is at {pct(ct.get('ytd_pct'))}."
                    if ct.get('ytd_pct') is not None else ''))
         + gauge('Full year', h['fy_pct'], h['fy_actual'], h['fy_target'], '#2a78d6',
-                "<b>Progress, not a score.</b> FY ACH is the same figure as YTD ACH "
-                "&mdash; nothing is sold past today &mdash; so this reads low by "
-                "construction until March. It is the number on the sheet most often "
-                "mistaken for a result.")
+                "<b>Progress, not a score.</b> Nothing is sold beyond today, so "
+                "this stays low until March. It is the number people most often "
+                "mistake for a result.")
     )
 
     # -- the month chart --------------------------------------------------
@@ -452,7 +452,7 @@ def render(d):
 
     month_rows = ''
     if y.get('prior_monthly_avg'):
-        month_rows += bar_row(20, f"First {y['prior_months']} months, average",
+        month_rows += bar_row(20, f"Average of first {y['prior_months']} months",
                               w(y['prior_monthly_avg']), '#A8DCC6',
                               lakh(y['prior_monthly_avg']), muted=True)
     month_rows += bar_row(52, 'Last month, same day', w(h['lmtd']), '#6FC9A3',
@@ -515,25 +515,25 @@ def render(d):
     # -- the year ahead ---------------------------------------------------
     year_pts = []
     if y.get('plan_due_by_now_pct') is not None:
-        year_pts.append(f"<b>{pct(y['plan_due_by_now_pct'])} of the annual plan was due "
-                        f"by now</b> &mdash; {lakh(h['ytd_target'])} of "
+        year_pts.append(f"<b>{pct(y['plan_due_by_now_pct'])} of the yearly target "
+                        f"was due by now</b> &mdash; {lakh(h['ytd_target'])} of "
                         f"{lakh(h['fy_target'])} lakh.")
     if h['fy_pct'] is not None:
-        year_pts.append(f"<b>{pct(h['fy_pct'])} has been banked</b> &mdash; "
+        year_pts.append(f"<b>{pct(h['fy_pct'])} is done so far</b> &mdash; "
                         f"{lakh(h['fy_actual'])} lakh.")
     if y.get('plan_ahead') is not None and y.get('months_remaining'):
         year_pts.append(
-            f"<b>The {lakh(h['fy_backlog'])} lakh of annual backlog is two different "
-            f"things.</b> {lakh(y['plan_ahead'])} is the plan the next "
-            f"{y['months_remaining']} months were always going to carry; "
-            f"{lakh(y['catch_up'])} is catching up on months already closed.")
+            f"<b>The {lakh(h['fy_backlog'])} lakh yearly backlog is made of two "
+            f"parts.</b> {lakh(y['plan_ahead'])} is the normal target for the next "
+            f"{y['months_remaining']} months. {lakh(y['catch_up'])} is catching up "
+            f"on months already gone.")
         year_pts.append(
-            f"<b>{lakh(y['required_base'])} lakh a month just to stay on plan</b>, "
-            f"and <b>{lakh(y['required_monthly'])} to also recover the shortfall</b>.")
+            f"<b>{lakh(y['required_base'])} lakh a month just to stay on target</b>, "
+            f"or <b>{lakh(y['required_monthly'])} to also clear the shortfall</b>.")
     if y.get('required_vs_current'):
-        year_pts.append(f"That is {y['required_vs_current']}&#215; the best month billed "
-                        f"so far, and {y['required_vs_month_target']}&#215; this "
-                        f"month's own AOP.")
+        year_pts.append(f"That is {y['required_vs_current']} times your best month "
+                        f"so far, and {y['required_vs_month_target']} times this "
+                        f"month's target.")
 
     # Plan-against-achieved, three horizons, each filled left to right.
     def split(done, target, label, yy):
@@ -580,14 +580,14 @@ def render(d):
     if prod.get('sfo_count'):
         sfo_block = f'''
   <section>
-    <div class="shead"><h2>The {prod['sfo_count']} officers</h2>
-      <span>What the territory is doing per head</span></div>
+    <div class="shead"><h2>Your {prod['sfo_count']} officers</h2>
+      <span>Sales per officer</span></div>
     <div class="grid g3">
       <div class="tile"><div class="k">Per officer, this month</div>
         <div class="v {pm_tone}">{lakh(prod['per_sfo_mtd'])}</div>
         <div class="s">Against <b>{lakh(prod['channel_per_sfo_mtd'])}</b> across
           {e(chan)}. <b class="{pm_tone}">{pm}</b> the channel average.</div></div>
-      <div class="tile"><div class="k">Per officer, April to date</div>
+      <div class="tile"><div class="k">Per officer, this year</div>
         <div class="v {py_tone}">{lakh(prod['per_sfo_ytd'])}</div>
         <div class="s">Against <b>{lakh(prod['channel_per_sfo_ytd'])}</b> across
           {e(chan)}. <b class="{py_tone}">{py}</b>.</div></div>
@@ -596,10 +596,8 @@ def render(d):
         <div class="s">This month, against <b>{pct(sh.get('of_channel_ytd'), 1)}</b>
           of its year to date.</div></div>
     </div>
-    <p class="note"><b>Read the first two together.</b> Per-officer output this month
-      and per-officer output for the year are the same story told twice &mdash; where
-      they disagree, the month has changed and the year to date has not caught up
-      with it yet.</p>
+    <p class="note"><b>Read the first two together.</b> If this month looks
+      different from the year, something has changed recently.</p>
   </section>'''
 
     days = flow.get('days_to_clear')
@@ -634,14 +632,14 @@ def render(d):
   </div>
 
   <section>
-    <div class="shead"><h2>Three horizons</h2>
-      <span>The sheet prints all three. They answer different questions.</span></div>
+    <div class="shead"><h2>Your three targets</h2>
+      <span>This month, this year, and the full year</span></div>
     <div class="grid g3">{gauges}</div>
   </section>
 
   <section>
     <div class="shead"><h2>{e(month)}</h2>
-      <span>Against last month, and against plan</span></div>
+      <span>How this month is going</span></div>
     <div class="grid g3" style="margin-bottom:13px">
       <div class="tile"><div class="k">Growth over last month</div>
         <div class="v {'good' if (h['growth_pct'] or 0) > 0 else 'bad'}">
@@ -663,7 +661,7 @@ def render(d):
     <figure>
       <div class="legend">
         <span><i class="sw" style="background:var(--done)"></i>Billed</span>
-        <span><i class="sw" style="background:var(--owed)"></i>Still owed</span>
+        <span><i class="sw" style="background:var(--owed)"></i>Still to bill</span>
         <span><i class="sw" style="background:var(--plan)"></i>AOP</span>
         <span><i class="sw ring"></i>Needed from here</span>
       </div>
@@ -673,9 +671,8 @@ def render(d):
         <line x1="{MBARX}" y1="14" x2="{MBARX}" y2="186" stroke="{C_GRID}"/>
         {month_rows}
       </svg>
-      <figcaption>Every bar on one scale, in lakhs. The dashed bar is not a
-        forecast &mdash; it is the arithmetic of the annual plan divided by the
-        months left to sell it in.</figcaption>
+      <figcaption>All bars use the same scale, in lakhs. The dashed bar is
+        what you need each month to finish the year.</figcaption>
     </figure>
   </section>
 
@@ -685,9 +682,9 @@ def render(d):
     <div class="grid g2">
       <div>
         <ul class="pts">{''.join(f'<li>{p}</li>' for p in year_pts)}</ul>
-        <p class="note"><b>Why this is separated out.</b> The sheet prints one annual
-          backlog figure. Splitting it says which half is the problem: the months
-          ahead carrying their own plan, or the months behind that did not.</p>
+        <p class="note"><b>Why we split this.</b> The sheet shows one yearly
+          backlog. Split in two, you can see how much is left over from past
+          months and how much is still to come.</p>
       </div>
       <figure>
         <div class="legend">
@@ -695,18 +692,18 @@ def render(d):
           <span><i class="sw" style="background:var(--owed)"></i>Backlog</span>
         </div>
         <svg viewBox="0 0 420 200" role="img"
-             aria-label="Plan against achievement across the three horizons">
+             aria-label="Target against achievement over the three periods">
           {horizons}
         </svg>
-        <figcaption>Each bar is its own plan, filled left to right, so the three
-          horizons can be compared as proportions rather than as amounts.</figcaption>
+        <figcaption>Each bar is one target, filled to show how much is
+          done.</figcaption>
       </figure>
     </div>
   </section>
 {sfo_block}
   <section>
-    <div class="shead"><h2>Where you stand</h2>
-      <span>{e(chan)} only &mdash; {of} heads</span></div>
+    <div class="shead"><h2>How you compare</h2>
+      <span>Against the other {of} heads in {e(chan)}</span></div>
     <figure>
       <svg viewBox="0 0 {CW} {strip_h}" role="img"
         aria-label="This territory's achievement against the spread of the channel">
@@ -727,38 +724,37 @@ def render(d):
         <text x="{mine_x:.1f}" y="22" text-anchor="middle" class="val"
               fill="{C_DONE}" font-weight="700">{pct(h['month_pct'])}</text>
       </svg>
-      <figcaption>Each faint mark is another territory in {e(chan)}, unnamed:
-        their figures are theirs. Yours is {ordinal(m_rank)} of {of} on the
-        month{f", {ordinal((rank.get('ytd_pct') or {}).get('position'))} of {of} on the year to date" if rank.get('ytd_pct') else ''}{
+      <figcaption>Each faint dot is another territory in {e(chan)}. Names
+        are hidden. You are {ordinal(m_rank)} of {of} this month{
+        f", {ordinal((rank.get('ytd_pct') or {}).get('position'))} of {of} for the year" if rank.get('ytd_pct') else ''}{
         f", and <b>{ordinal(g_rank)} of {of} on growth</b>" if g_rank else ''}.
-        Ranked within {e(chan)} only: measured against a channel with a
-        different field force and a differently phased plan, the comparison
-        would mean nothing.</figcaption>
+        We compare inside {e(chan)} only, because other channels have a
+        different team size and a different plan.</figcaption>
     </figure>
   </section>
 
   <section>
-    <div class="shead"><h2>The line as it reads</h2>
-      <span>Exactly as circulated, in &#8377; lakhs</span></div>
+    <div class="shead"><h2>Your numbers</h2>
+      <span>As shown on the sheet, in &#8377; lakhs</span></div>
     <div class="tbl"><table>
-      <thead><tr><th>Horizon</th><th>AOP</th><th>Achieved</th><th>ACH %</th>
+      <thead><tr><th>Period</th><th>AOP</th><th>Achieved</th><th>ACH %</th>
         <th>Backlog</th></tr></thead>
       <tbody>
         <tr class="hl"><td>{e(month)}, month to date</td><td class="n">{lakh(h['month_target'])}</td>
           <td class="n">{lakh(h['mtd_primary'])}</td>
           <td class="n {rag(h['month_pct'])}">{pct(h['month_pct'])}</td>
           <td class="n">{lakh(h['month_backlog'])}</td></tr>
-        <tr><td>April to date</td><td class="n">{lakh(h['ytd_target'])}</td>
+        <tr><td>This year, from April</td><td class="n">{lakh(h['ytd_target'])}</td>
           <td class="n">{lakh(h['ytd_actual'])}</td>
           <td class="n {rag(h['ytd_pct'])}">{pct(h['ytd_pct'])}</td>
           <td class="n">{lakh(h['ytd_backlog'])}</td></tr>
-        <tr><td>Full financial year</td><td class="n">{lakh(h['fy_target'])}</td>
+        <tr><td>Full year</td><td class="n">{lakh(h['fy_target'])}</td>
           <td class="n">{lakh(h['fy_actual'])}</td>
           <td class="n none">{pct(h['fy_pct'])}</td>
           <td class="n">{lakh(h['fy_backlog'])}</td></tr>
       </tbody>
     </table></div>
-    <p class="note"><b>Supporting figures.</b>
+    <p class="note"><b>Other figures.</b>
       {f"Officers {prod['sfo_count']} &#183; " if prod.get('sfo_count') else ''}
       LMTD {lakh(h['lmtd'])} &#183; yesterday&#8217;s billing
       {lakh(flow['yesterday_billing'])} &#183; MTD secondary sales
@@ -766,35 +762,31 @@ def render(d):
   </section>
 
   <section>
-    <div class="shead"><h2>What the terms mean</h2>
-      <span>So nothing here has to be taken on trust</span></div>
+    <div class="shead"><h2>What these words mean</h2>
+      <span>A quick guide</span></div>
     <dl class="gloss">
-      <dt>AOP</dt><dd>The target for the period, as planned at the start of the year.</dd>
-      <dt>Primary sales</dt><dd>Billed from the company to the distributor. Achievement
-        is measured on this.</dd>
-      <dt>Secondary sales</dt><dd>Sold on from the distributor to the retailer. Shown
-        beside primary, not scored &mdash; below primary means stock is building at the
-        distributor, above it means the trade is pulling down stock loaded earlier.
-        Neither is good or bad on its own.</dd>
-      <dt>LMTD</dt><dd>Last month to the same day, so the growth figure compares like
-        with like rather than a part month against a whole one.</dd>
-      <dt>MTD / YTD</dt><dd>Month to date, and April to date. The year opens in April.</dd>
-      <dt>Backlog</dt><dd>AOP minus what has been billed. Negative means ahead of plan.</dd>
-      <dt>FY ACH %</dt><dd>How much of the <i>annual</i> plan is banked so far. It is
-        not a score &mdash; it rises through the year by construction, and reads low in
-        September for everyone.</dd>
+      <dt>AOP</dt><dd>The target for the period, set at the start of the year.</dd>
+      <dt>Primary sales</dt><dd>Sold by the company to the distributor. Your
+        achievement is measured on this.</dd>
+      <dt>Secondary sales</dt><dd>Sold by the distributor to the shop. Shown next
+        to primary, but not scored. Lower than primary means stock is building up
+        with the distributor. Higher means they are clearing old stock.</dd>
+      <dt>LMTD</dt><dd>Last month up to the same day, so the comparison is fair.</dd>
+      <dt>MTD / YTD</dt><dd>This month so far, and this year so far. Our year starts
+        in April.</dd>
+      <dt>Backlog</dt><dd>Target minus what you have billed. A minus figure means you
+        are ahead of plan.</dd>
+      <dt>FY ACH %</dt><dd>How much of the full-year plan is done. This grows all
+        year, so a small number early on is normal.</dd>
     </dl>
   </section>
 
   <footer>
-    Built from the review sheet for {e(month)}, as circulated{
-      f" and uploaded on {e(snap['created_at'][:10])}" if snap.get('created_at') else ''}.
-    Every percentage and backlog here is recomputed from the AOP and sales columns
-    rather than copied across, so these figures agree with the sheet by arithmetic
-    rather than by transcription. A backlog here can differ from the sheet&#8217;s own
-    by up to a paisa: the sheet derives those columns from full precision and prints
-    them rounded, and only the rounded figures reach this report. Achievement is
-    measured on primary sales. All figures in &#8377; lakhs.
+    Made from the {e(month)} review sheet{
+      f", uploaded on {e(snap['created_at'][:10])}" if snap.get('created_at') else ''}.
+    Percentages and backlogs are worked out again from the AOP and sales columns,
+    so they may differ from the sheet by up to a paisa. Achievement is measured on
+    primary sales. All figures in &#8377; lakhs.
   </footer>
 </div>
 </body></html>'''
@@ -868,19 +860,19 @@ def render_team(d):
     gauges = (
         gauge('This month', t['month_pct'], t['mtd_primary'], t['month_target'],
               TONE[rag(t['month_pct'])],
-              f"<b>This month, against this month&#8217;s AOP.</b> "
-              f"{lakh(t['month_backlog'])} lakh still owed across the group, "
-              f"and the month is not finished.")
+              f"<b>This month, against this month&#8217;s target.</b> "
+              f"{lakh(t['month_backlog'])} lakh still to bill across the group, "
+              f"and the month is not over.")
         + gauge('April to date', t['ytd_pct'], t['ytd_actual'], t['ytd_target'],
                 TONE[rag(t['ytd_pct'])],
-                f"<b>April to now, against the plan for those months.</b> "
+                f"<b>April until now, against the target for those months.</b> "
                 f"The same measure over {y['months_elapsed']} months instead "
                 f"of one.")
         + gauge('Full year', t['fy_pct'], t['fy_actual'], t['fy_target'],
                 '#2a78d6',
-                "<b>Progress, not a score.</b> Nothing is sold past today, so "
-                "this reads low by construction until March. It is the figure "
-                "on the sheet most often mistaken for a result."))
+                "<b>Progress, not a score.</b> Nothing is sold beyond today, so "
+                "this stays low until March. It is the figure people most often "
+                "mistake for a result."))
 
     # -- board 1: achievement ---------------------------------------------
     board, Y = '', 12
@@ -1047,9 +1039,10 @@ def render_team(d):
 
     regions = ', '.join(d['regions'][:6]) + ('...' if len(d['regions']) > 6 else '')
     asat = (f" &#183; as at {e(snap['as_of_date'])}" if snap.get('as_of_date') else '')
-    ahead_line = (f"{len(ahead)} of {n} territories are at or past plan. "
-                  if ahead else '')
-    behind_line = ('<b>' + str(len(behind)) + ' need a conversation</b>: '
+    ahead_line = (f"{len(ahead)} of {n} "
+                  f"{'territory is' if len(ahead) == 1 else 'territories are'} "
+                  f"at or above plan. " if ahead else '')
+    behind_line = ('<b>' + str(len(behind)) + ' need attention</b>: '
                    + e(', '.join(h['region'] for h in behind)) + '. ') if behind else ''
 
     return f"""<!doctype html>
@@ -1090,25 +1083,24 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
   <div class="verdict">
     <p><b>The group is at {pct(t['month_pct'])} of plan this month</b>,
       {signed(t['growth_pct'])} on last month, with
-      {lakh(t['month_backlog'])} lakh still owed.</p>
-    <p>{ahead_line}{behind_line}April to date stands at {pct(t['ytd_pct'])}, and the
-      annual plan leaves {lakh(t['fy_backlog'])} lakh over
+      {lakh(t['month_backlog'])} lakh still to bill.</p>
+    <p>{ahead_line}{behind_line}The year so far is at {pct(t['ytd_pct'])}, and
+      {lakh(t['fy_backlog'])} lakh is left to do over
       {y['months_remaining']} months &mdash; {lakh(y['required_monthly'])} a month.</p>
   </div>
 
   <section>
-    <div class="shead"><h2>The group</h2>
-      <span>Three horizons, added from the territory rows</span></div>
+    <div class="shead"><h2>Your group</h2>
+      <span>This month, this year, and the full year</span></div>
     <div class="grid g3">{gauges}</div>
-    <p class="note"><b>These are added from the territory rows, not read off the
-      sheet&#8217;s own total line.</b> A group covering part of a channel has no
-      subtotal on the sheet at all, and taking the one that is there would quietly
-      report the whole channel as this group&#8217;s.</p>
+    <p class="note"><b>These totals are added up from your territories only.</b>
+      They are not taken from the grand total on the sheet, which covers people
+      outside your group.</p>
   </section>
 
   <section>
-    <div class="shead"><h2>Where each territory stands</h2>
-      <span>This month against this month&#8217;s AOP</span></div>
+    <div class="shead"><h2>How each territory is doing</h2>
+      <span>This month against plan</span></div>
     <figure>
       <svg viewBox="0 0 {CW} {board_h}" role="img"
         aria-label="Achievement against AOP this month, by territory">
@@ -1119,40 +1111,36 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
               fill="{C_PLAN}">100% &mdash; plan</text>
         {board}
       </svg>
-      <figcaption>Sorted by achievement rather than by region code, so the
-        territories needing attention sit together at the bottom instead of
-        being scattered through the list. Billed and planned are printed
-        beside each bar, because two territories at 74% are not the same
-        conversation if one of them is ten times the size.</figcaption>
+      <figcaption>Sorted by achievement, so the ones needing attention sit
+        together at the bottom. Billed and planned are shown beside each bar,
+        because two territories at 74% can be very different in size.</figcaption>
     </figure>
   </section>
 
   <section>
-    <div class="shead"><h2>Where the shortfall sits</h2>
-      <span>In &#8377; lakhs, largest gap first</span></div>
+    <div class="shead"><h2>Where the gap is</h2>
+      <span>In &#8377; lakhs, biggest first</span></div>
     <figure>
       <div class="legend">
         <span><i class="sw" style="background:var(--done)"></i>Billed</span>
-        <span><i class="sw" style="background:var(--owed)"></i>Still owed this month</span>
+        <span><i class="sw" style="background:var(--owed)"></i>Still to bill this month</span>
       </div>
       <svg viewBox="0 0 {CW} {gap_h}" role="img"
         aria-label="Billed and still owed this month, by territory, in lakhs">
         <line x1="{BARX}" y1="6" x2="{BARX}" y2="{G - 4}" stroke="{C_GRID}"/>
         {gap}
       </svg>
-      <figcaption>The same month as the chart above, measured in money rather
-        than in percent. A territory 20% behind on a large plan is a bigger
-        hole than one 40% behind on a small one, and an achievement board
-        cannot say so &mdash; read on its own it sends a manager to the
-        smallest territory they have.{
-        f" Of the {lakh(total_owed)} lakh owed across the group, {worst_share:.0f}% of it is in {e(worst['region'])} alone."
+      <figcaption>The same month as above, but in money instead of percent.
+        A small gap on a big territory can matter more than a large gap on a
+        small one.{
+        f" Of the {lakh(total_owed)} lakh still to bill across the group, {worst_share:.0f}% is in {e(worst['region'])} alone."
         if worst_share is not None else ''}</figcaption>
     </figure>
   </section>
 {f'''
   <section>
     <div class="shead"><h2>Which way each is moving</h2>
-      <span>Achievement this month against growth over last month</span></div>
+      <span>Plan against growth</span></div>
     <figure>
       <svg viewBox="0 0 {CW} 410" role="img"
         aria-label="Achievement against growth, by territory">
@@ -1174,10 +1162,9 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
               class="axis">last month</text>
         {dots}
       </svg>
-      <figcaption>Left to right is achievement against this month&#8217;s plan;
-        up and down is growth over the same point last month. A territory
-        behind plan but climbing is not the same conversation as one behind
-        plan and falling, and a single ranked list cannot tell them apart.
+      <figcaption>Left to right: how much of this month&#8217;s plan is done.
+        Up and down: growth over last month. A territory behind plan but
+        growing is a different problem from one behind and falling.
         {len(rising_behind)} of {n} are behind plan but ahead of last month;
         {len(falling_behind)} are behind on both.</figcaption>
     </figure>
@@ -1192,7 +1179,7 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
             f"{lakh(t['ytd_backlog'])} behind.", rag(t['ytd_pct']))}
       {tile('Annual backlog', lakh(t['fy_backlog']),
             f"Of a {lakh(t['fy_target'])} lakh plan, {lakh(t['fy_actual'])} "
-            f"is banked.")}
+            f"is done.")}
       {tile('Needed each month', lakh(y['required_monthly']),
             f"To close it across the {y['months_remaining']} months left. "
             f"This month&#8217;s plan is {lakh(t['month_target'])}.")}
@@ -1220,32 +1207,30 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
         <td class="n">{pct(t['ytd_pct'])}</td>
         <td class="n">{lakh(t['fy_backlog'])}</td></tr></tfoot>
     </table></div></div>
-    <p class="note"><b>FY ACH % is not shown per territory.</b> It measures how much
-      of the <i>annual</i> plan is banked, so it reads low for everybody in the first
-      half of the year and ranks nobody against anybody. The FY backlog column says
-      the same thing in a way that can be acted on.</p>
+    <p class="note"><b>FY ACH % is not shown for each territory.</b> It is low
+      for everyone early in the year, so it compares nobody with anybody. The FY
+      backlog column tells you the same thing, and you can act on it.</p>
   </section>
 
   <section>
-    <div class="shead"><h2>What the terms mean</h2>
-      <span>So nothing here has to be taken on trust</span></div>
+    <div class="shead"><h2>What these words mean</h2>
+      <span>A quick guide</span></div>
     <dl class="gloss">
-      <dt>AOP</dt><dd>The target for the period, as planned at the start of the year.</dd>
-      <dt>Primary sales</dt><dd>Billed from the company to the distributor.
+      <dt>AOP</dt><dd>The target for the period, set at the start of the year.</dd>
+      <dt>Primary sales</dt><dd>Sold by the company to the distributor.
         Achievement is measured on this.</dd>
-      <dt>LMTD</dt><dd>Last month to the same day, so growth compares like with
-        like rather than a part month against a whole one.</dd>
-      <dt>Backlog</dt><dd>AOP minus what has been billed. Negative means ahead
-        of plan.</dd>
-      <dt>Group</dt><dd>Added from the territory rows on this report, never read
-        off the sheet&#8217;s own channel total.</dd>
+      <dt>LMTD</dt><dd>Last month up to the same day, so the comparison is fair.</dd>
+      <dt>Backlog</dt><dd>Target minus what has been billed. A minus figure means
+        ahead of plan.</dd>
+      <dt>Group</dt><dd>Your territories added together, not the channel total
+        from the sheet.</dd>
     </dl>
   </section>
 
   <footer>
-    Built from the review sheet for {e(month)}, as circulated. Every percentage and
-    backlog is recomputed from the AOP and sales columns rather than copied across.
-    Achievement is measured on primary sales. All figures in &#8377; lakhs.
+    Made from the {e(month)} review sheet. Percentages and backlogs are worked
+    out again from the AOP and sales columns. Achievement is measured on primary
+    sales. All figures in &#8377; lakhs.
   </footer>
 </div>
 </body></html>"""

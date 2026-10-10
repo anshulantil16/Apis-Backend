@@ -3562,7 +3562,8 @@ class TheReportFile(TestCase):
         """The opening line is assembled from what is true of this head, not
         from one template with the numbers swapped in."""
         body = self.client.get('/api/sales/review/report/file/?head=GTR04 B').content.decode()
-        self.assertIn('past plan', body)
+        self.assertIn('ahead of target', body)
+        self.assertNotIn('behind target', body)
 
     def test_no_plan_is_not_rendered_as_zero_per_cent(self):
         handover = ['GT', 'GTR05', 'ARUN MISHRA ( ARNAB GHOSH)', 0, 0.0, 0.0,
