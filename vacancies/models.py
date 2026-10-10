@@ -35,6 +35,11 @@ class Vacancy(ModeratedContent):
     experience = models.CharField(max_length=50, blank=True)
     education = models.CharField(max_length=200, blank=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='Active')
+    # A position being filled quietly. Never on the dashboard, never in the
+    # referral form's list — only superadmins and people granted
+    # PortalUser.can_view_confidential_vacancies see it, through its own
+    # ?scope=confidential read (see views.py).
+    confidential = models.BooleanField(default=False, db_index=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -61,9 +66,11 @@ class Vacancy(ModeratedContent):
         """Rows the dashboard may show: approved, in newest-first order.
 
         Every public read goes through this. Filtering by hand in a view is
-        how a pending row eventually gets shown to the company.
+        how a pending row eventually gets shown to the company. Confidential
+        rows are never published, approved or not.
         """
-        return cls.objects.filter(moderation_status=ModerationStatus.APPROVED)
+        return cls.objects.filter(moderation_status=ModerationStatus.APPROVED,
+                                  confidential=False)
 
     def __str__(self):
         return f'{self.title} — {self.location}, {self.state} ({self.status})'

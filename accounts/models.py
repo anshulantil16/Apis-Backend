@@ -144,6 +144,14 @@ class PortalUser(models.Model):
     # be unable to correct their title -- so require_tree_editor accepts
     # either (see accounts/auth.py).
     can_manage_tree = models.BooleanField(default=False)
+    # Sees, and may add to, the confidential vacancies — positions being
+    # filled quietly (a replacement nobody has been told about yet, a senior
+    # hire). Granted per person by a superadmin; a superadmin always has it.
+    can_view_confidential_vacancies = models.BooleanField(default=False)
+
+    @property
+    def sees_confidential_vacancies(self):
+        return self.is_superadmin or self.can_view_confidential_vacancies
 
     # The last record Pocket HRMS returned for this person, verbatim. Kept so
     # the console can show exactly what upstream is sending - including fields

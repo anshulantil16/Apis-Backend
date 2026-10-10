@@ -27,6 +27,19 @@ WRITABLE = {
 }
 
 
+def _confidential_access(request):
+    """(user, None) for someone who may see confidential vacancies, or
+    (None, 401/403)."""
+    user, err = require_user(request)
+    if err:
+        return None, err
+    if not user.sees_confidential_vacancies:
+        return None, Response({'error': 'Confidential vacancies are only for people an '
+                                        'administrator has given access to.'},
+                              status=http.HTTP_403_FORBIDDEN)
+    return user, None
+
+
 def _approved_or_own(viewer):
     """Approved rows, plus this viewer's own pending/rejected ones."""
     from django.db.models import Q
@@ -51,13 +64,27 @@ def _serialize(v, viewer=None):
         'submittedByEmail': v.submitted_by_email or '',
         'reviewNote': v.review_note or '',
         'isMine': mine,
+        'confidential': v.confidential,
     }
 
 
 class VacancyListView(PortalScopedAPIView):
-    """GET — what the caller is allowed to see. POST — propose a new one."""
+    """GET — what the caller is allowed to see. POST — propose a new one.
+
+    Confidential vacancies are a separate list: `?scope=confidential`, for
+    superadmins and people granted access only. The default list never
+    contains them — for anyone, superadmin included — because it is what the
+    dashboard card and the referral form's position dropdown read.
+    """
 
     def get(self, request):
+        if request.query_params.get('scope') == 'confidential':
+            viewer, err = _confidential_access(request)
+            if err:
+                return err
+            rows = Vacancy.objects.filter(confidential=True).select_related('submitted_by')
+            return Response([_serialize(v, viewer) for v in rows])
+
         viewer = optional_user(request)
 
         # A superadmin sees everything, because the console and the popup are
@@ -71,11 +98,12 @@ class VacancyListView(PortalScopedAPIView):
         else:
             rows = Vacancy.published()
 
-        rows = rows.select_related('submitted_by')
+        rows = rows.filter(confidential=False).select_related('submitted_by')
         return Response([_serialize(v, viewer) for v in rows])
 
     def post(self, request):
-        user, err = require_user(request)
+        confidential = str(request.data.get('confidential', '')).lower() in ('true', '1')
+        user, err = _confidential_access(request) if confidential else require_user(request)
         if err:
             return err
 
@@ -89,20 +117,27 @@ class VacancyListView(PortalScopedAPIView):
                   for key, col in WRITABLE.items()}
         fields['type'] = data.get('type') if data.get('type') in ('New', 'Replacement') else 'New'
 
-        v = Vacancy(**fields)
+        v = Vacancy(**fields, confidential=confidential)
         v.attribute_to(user)
         # The approving authority does not queue work for itself — but the
-        # activity log still records who created it.
-        if user.is_superadmin:
-            v.set_review(user, ModerationStatus.APPROVED, 'Added by an administrator.')
+        # activity log still records who created it. A confidential vacancy
+        # is approved on creation too: it never reaches the dashboard, and the
+        # grant to add one is itself the administrator's say-so.
+        if user.is_superadmin or confidential:
+            v.set_review(user, ModerationStatus.APPROVED,
+                         'Confidential vacancy.' if confidential else 'Added by an administrator.')
         v.save()
 
-        log_activity(user, 'created', v, summary=f'Vacancy: {v.moderation_label()}',
-                     detail={'auto_approved': user.is_superadmin}, request=request)
+        log_activity(user, 'created', v,
+                     summary=f'{"Confidential vacancy" if confidential else "Vacancy"}: {v.moderation_label()}',
+                     detail={'auto_approved': v.is_published, 'confidential': confidential},
+                     request=request)
 
         return Response({
             **_serialize(v, user),
-            'message': ('Vacancy added and published.' if v.is_published else
+            'message': ('Confidential vacancy added. Only people with access can see it.'
+                        if confidential else
+                        'Vacancy added and published.' if v.is_published else
                         'Sent to the administrator for approval. It will appear on the '
                         'dashboard once approved.'),
         }, status=http.HTTP_201_CREATED)
@@ -175,15 +210,17 @@ class VacancyStatusView(PortalScopedAPIView):
 
     Superadmin only. Closing a vacancy takes it off the dashboard for everyone,
     which is not something an unauthenticated caller should be able to do — and
-    it used to be exactly that.
+    it used to be exactly that. A confidential vacancy is the exception: it is
+    on nobody's dashboard, so anyone with confidential access may close and
+    reopen it, which is what lets the person filling it mark it filled.
     """
 
     def patch(self, request, pk):
-        user, err = require_superadmin(request)
+        v = Vacancy.objects.filter(pk=pk).first()
+        user, err = (_confidential_access(request) if v and v.confidential
+                     else require_superadmin(request))
         if err:
             return err
-
-        v = Vacancy.objects.filter(pk=pk).first()
         if not v:
             return Response({'error': 'Vacancy not found.'}, status=http.HTTP_404_NOT_FOUND)
 

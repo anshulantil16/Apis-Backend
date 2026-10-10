@@ -203,6 +203,18 @@ period is indistinguishable from an empty system and the dashboard looks
 broken. It covers bookings, item requests **and** tickets — the helpdesk was
 missing from it at first, which is most of what people actually use.
 
+## Confidential vacancies
+
+`Vacancy.confidential` marks a position being filled quietly. Such rows are
+**never** in the ordinary `GET /api/vacancies/` — for anyone, superadmin
+included — because that list feeds the dashboard card and the referral form's
+position dropdown. `Vacancy.published()` excludes them too. They are read
+through `?scope=confidential`, which answers only superadmins and people with
+`PortalUser.can_view_confidential_vacancies` (granted in the Admin Console;
+`sees_confidential_vacancies` is the one check). Adding one is approved on
+creation, and anyone with the grant may close or reopen one; everything else
+about vacancies stays superadmin-only.
+
 ## Dashboard content goes through one gate
 
 Anything a person can put on the intranet home page — a vacancy, a wall photo,

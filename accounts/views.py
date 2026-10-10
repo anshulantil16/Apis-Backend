@@ -64,6 +64,7 @@ def serialize_user(u):
         'is_bootstrap': u.is_bootstrap_superadmin,
         'can_edit_tree': u.can_edit_tree,
         'can_manage_tree': u.can_manage_tree,
+        'can_view_confidential_vacancies': u.can_view_confidential_vacancies,
         'allowed_apps': u.allowed_apps,
         'from_hrms': u.from_hrms,
         'last_login_at': local_str(u.last_login_at, '%d-%m-%Y %H:%M'),
@@ -473,6 +474,8 @@ class AdminUserDetailView(_AdminView):
             # so revoking the edit grant does not take it away -- the console
             # shows them as two separate switches for that reason.
             u.can_manage_tree = bool(d['can_manage_tree'])
+        if 'can_view_confidential_vacancies' in d:
+            u.can_view_confidential_vacancies = bool(d['can_view_confidential_vacancies'])
         if 'app_access' in d:
             wanted = d['app_access'] or []
             unknown = [a for a in wanted if a not in AppKey.values]
