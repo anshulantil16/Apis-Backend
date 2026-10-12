@@ -1,6 +1,7 @@
 import io
 import shutil
 import tempfile
+from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -97,11 +98,45 @@ class PolicyDocuments(TestCase):
         html = SimpleUploadedFile('policy.html', b'%PDF-', content_type='text/html')
         self.assertEqual(self._upload(self.admin, file=html).status_code, 400)
 
-    def test_accepts_word_and_excel(self):
-        docx = SimpleUploadedFile('format.xlsx', b'PK\x03\x04rest-of-zip')
-        r = self._upload(self.admin, category='Formats', file=docx)
-        self.assertEqual(r.status_code, 201, r.content)
-        self.assertIsNone(r.json()['pages'])
+    def test_word_and_excel_are_stored_and_served_as_pdf(self):
+        """Whatever is uploaded, the register holds a PDF, so opening any
+        document shows it in the browser rather than downloading it."""
+        converted = _pdf(pages=3).read()
+        with mock.patch('policies.views.convert_to_pdf', return_value=converted) as conv:
+            for name in ('format.xlsx', 'leave.docx'):
+                office = SimpleUploadedFile(name, b'PK\x03\x04rest-of-zip')
+                r = self._upload(self.admin, category='Formats', file=office)
+                self.assertEqual(r.status_code, 201, r.content)
+                self.assertTrue(r.json()['file'].endswith('.pdf'), r.json()['file'])
+                self.assertEqual(r.json()['pages'], 3)
+                self.assertEqual(r.json()['fileName'], name)   # what was sent
+                self.assertEqual(r.json()['sizeBytes'], len(converted))
+        self.assertEqual(conv.call_count, 2)
+        for d in PolicyDocument.objects.all():
+            with d.file.open('rb') as fh:
+                self.assertEqual(fh.read(5), b'%PDF-')
+
+    def test_a_pdf_is_not_sent_through_the_converter(self):
+        with mock.patch('policies.views.convert_to_pdf') as conv:
+            self.assertEqual(self._upload(self.admin).status_code, 201)
+        conv.assert_not_called()
+
+    def test_a_file_that_wont_convert_is_refused_not_stored_as_is(self):
+        from .pdf_convert import ConversionError
+        office = SimpleUploadedFile('broken.docx', b'PK\x03\x04rest-of-zip')
+        with mock.patch('policies.views.convert_to_pdf',
+                        side_effect=ConversionError('Please save it as a PDF.')):
+            r = self._upload(self.admin, file=office)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()['error'], 'Please save it as a PDF.')
+        self.assertFalse(PolicyDocument.objects.exists())
+
+    def test_without_libreoffice_the_message_says_to_upload_a_pdf(self):
+        office = SimpleUploadedFile('format.xlsx', b'PK\x03\x04rest-of-zip')
+        with mock.patch('policies.pdf_convert.soffice_path', return_value=None):
+            r = self._upload(self.admin, file=office)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('PDF', r.json()['error'])
 
     def test_the_uploader_cannot_delete_their_own(self):
         """It used to be allowed, for the "added it by accident" case.

@@ -57,8 +57,9 @@ class PolicyDocument(ModeratedContent):
     file          = models.FileField(upload_to=document_path)
     original_name = models.CharField(max_length=255, blank=True)
     size_bytes    = models.PositiveIntegerField(default=0)
-    # Read off the PDF at upload. Null for Word/Excel files, which have no
-    # fixed page count until something renders them.
+    # Read off the PDF at upload. Always a PDF now — Word/Excel/PowerPoint
+    # are converted on the way in, and original_name keeps what was sent.
+    # Null only if the PDF couldn't be read (damaged, encrypted).
     pages         = models.PositiveIntegerField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)

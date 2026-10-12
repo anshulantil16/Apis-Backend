@@ -338,3 +338,14 @@ QA only. **Never touch PROD** — it is live with real users.
 Deploy steps are in the shared deployment notes; pull and build as **separate
 commands**, never chained with `&&` — a failed fetch silently skips the rest
 while everything downstream still looks fine.
+
+## Policies & Guidelines — everything is a PDF
+
+Uploads to `policies/` are stored as PDF only. Word / Excel / PowerPoint are
+converted on upload by LibreOffice headless (`policies/pdf_convert.py`), so
+**LibreOffice must be installed on QA and Live**
+(`sudo apt install libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress`).
+Without it, non-PDF uploads are refused with "save it as a PDF" — never
+stored as-is. `original_name` keeps the name of the file that was sent.
+Documents filed before this change: `manage.py convert_policies_to_pdf`
+(`--dry-run` first).

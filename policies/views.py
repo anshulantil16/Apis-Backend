@@ -4,9 +4,15 @@ Files are served back from MEDIA_URL on our own origin, so what may be stored
 is allowlisted by extension AND checked against the file's opening bytes: a
 browser's content_type is whatever the browser claimed, and an .html or .svg
 renamed to .pdf is a script on our origin.
+
+Whatever is uploaded is stored as a PDF: Word, Excel and PowerPoint files are
+converted on the way in (see pdf_convert), so every document opens in the
+browser the same way.
 """
 import os
 from datetime import date
+
+from django.core.files.base import ContentFile
 
 from django.db.models import Q
 from rest_framework import status as http
@@ -17,6 +23,7 @@ from accounts.auth import PortalScopedAPIView, optional_user, require_superadmin
 from accounts.moderation import ModerationStatus, log_activity
 
 from .models import BuiltInRemoval, PolicyDocument
+from .pdf_convert import ConversionError, convert_to_pdf
 
 MAX_BYTES = 25 * 1024 * 1024        # 25 MB — a scanned policy, not an archive
 
@@ -89,6 +96,16 @@ def _count_pdf_pages(f):
         f.seek(0)
 
 
+def _as_pdf(f):
+    """The upload as a PDF file ready to store. A PDF is passed through;
+    anything else is converted. Raises ConversionError."""
+    ext = _extension(f.name)
+    if ext == '.pdf':
+        return f
+    stem = os.path.splitext(os.path.basename(f.name or 'document'))[0] or 'document'
+    return ContentFile(convert_to_pdf(f, ext), name=f'{stem}.pdf')
+
+
 def _parse_date(raw):
     try:
         return date.fromisoformat(str(raw)) if raw else None
@@ -144,6 +161,11 @@ class PolicyDocumentListView(PortalScopedAPIView):
             return Response({'error': problem}, status=http.HTTP_400_BAD_REQUEST)
 
         try:
+            pdf = _as_pdf(f)
+        except ConversionError as e:
+            return Response({'error': str(e)}, status=http.HTTP_400_BAD_REQUEST)
+
+        try:
             version = max(1, min(int(request.data.get('version') or 1), 999))
         except (TypeError, ValueError):
             version = 1
@@ -154,8 +176,8 @@ class PolicyDocumentListView(PortalScopedAPIView):
             doc_approved_by=(request.data.get('approvedBy') or '').strip()[:200],
             doc_reviewed_by=(request.data.get('reviewedBy') or '').strip()[:200],
             approval_date=_parse_date(request.data.get('approvalDate')),
-            pages=_count_pdf_pages(f),
-            file=f, original_name=(f.name or '')[:255], size_bytes=f.size,
+            pages=_count_pdf_pages(pdf),
+            file=pdf, original_name=(f.name or '')[:255], size_bytes=pdf.size,
         )
         d.attribute_to(user)
         if user.is_superadmin:
@@ -163,7 +185,8 @@ class PolicyDocumentListView(PortalScopedAPIView):
         d.save()
 
         log_activity(user, 'created', d, summary=f'{category}: {title}',
-                     detail={'size_kb': round(f.size / 1024),
+                     detail={'size_kb': round(pdf.size / 1024),
+                             'converted_from': _extension(f.name) if pdf is not f else None,
                              'auto_approved': user.is_superadmin},
                      request=request)
 
