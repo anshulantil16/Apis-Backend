@@ -21,12 +21,21 @@ from .. import report as REPORT
 FY_START_MONTH = 4
 
 
-def _date_labels(as_of):
+def _date_labels(as_of, as_of_month=None):
     """-> the dates behind the words the report used to say.
 
     "Yesterday's billing" reads clearly for about a day. In a thread of
     fifteen morning mails, or opened the following week, it says nothing.
     """
+    # The day and the sheet's own month can disagree: a workbook named for
+    # one month whose columns say another has its filename date refused, and
+    # the upload day stands in. Printing "1-12 Oct 2026" across a September
+    # report is worse than printing no span at all, so when they disagree
+    # the day is not used for the spans.
+    if as_of and as_of_month and (as_of.year, as_of.month) != (
+            as_of_month.year, as_of_month.month):
+        return {'as_of': PACE.day_label(as_of), 'as_of_short': PACE.short_day(as_of),
+                'month_span': '', 'last_month_span': '', 'year_span': ''}
     return {
         'as_of': PACE.day_label(as_of),
         'as_of_short': PACE.short_day(as_of),
@@ -328,7 +337,7 @@ class SalesReviewReportView(SalesIQView):
                                  me.yesterday_billing, me.sfo_count),
             # Real dates, so a report kept for a fortnight still says which
             # days it is talking about.
-            'dates': _date_labels(snap.as_of_date),
+            'dates': _date_labels(snap.as_of_date, snap.as_of_month),
         })
 
 

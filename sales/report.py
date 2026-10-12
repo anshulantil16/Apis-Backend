@@ -164,7 +164,58 @@ def ordinal(n):
     return f'{n}{ {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th") }'
 
 
-def pace_section(pc, month, whose='you'):
+def pace_bar(pc, billed, target, month):
+    """The month drawn as a timeline: how far through it we are, against how
+    far through the target we are.
+
+    A gauge answers "how much of the target is done". It cannot answer "is
+    that enough by now", because it has no idea what day it is. Here the
+    marker is where the straight line says the billing should have reached
+    today, so the gap between the fill and the marker IS the problem,
+    measured in the width of the page.
+    """
+    if not pc or not target or float(target) <= 0:
+        return ''
+    W, X0 = 520.0, 150.0
+    t = float(target)
+    done_w = max(min(float(billed or 0) / t, 1.0), 0.0) * W
+    due = pc.get('target_to_date')
+    due_x = X0 + max(min(float(due or 0) / t, 1.0), 0.0) * W
+    behind = (pc.get('gap_to_date') or 0) < 0
+    mark = C_OWED if behind else C_DONE
+
+    return f'''
+    <figure>
+      <svg viewBox="0 0 {CW} 132" role="img"
+        aria-label="Billing so far against the target due by today">
+        <text x="{X0 - 12}" y="39" text-anchor="end" class="lab">Billed so far</text>
+        <rect x="{X0}" y="24" width="{W}" height="22" rx="4" fill="#EEF2F7"/>
+        <rect x="{X0}" y="24" width="{done_w:.1f}" height="22" rx="4" fill="{C_DONE}"/>
+        <text x="{X0 + W + 14}" y="40" class="val">{lakh(billed)}</text>
+
+        <line x1="{due_x:.1f}" y1="14" x2="{due_x:.1f}" y2="56"
+              stroke="{C_PLAN}" stroke-width="2"/>
+        <text x="{due_x:.1f}" y="10" text-anchor="middle" class="axis"
+              fill="{C_PLAN}">due by today</text>
+
+        <text x="{X0 - 12}" y="83" text-anchor="end" class="lab">Month gone</text>
+        <rect x="{X0}" y="68" width="{W}" height="12" rx="3" fill="#EEF2F7"/>
+        <rect x="{X0}" y="68" width="{W * pc["days_done"] / pc["days_in_month"]:.1f}"
+              height="12" rx="3" fill="#C9D6E8"/>
+        <text x="{X0 + W + 14}" y="79" class="val">day {pc['days_done']} of {pc['days_in_month']}</text>
+
+        <text x="{X0}" y="112" class="axis">0</text>
+        <text x="{X0 + W}" y="112" text-anchor="end" class="axis">AOP {lakh(target)}</text>
+        <circle cx="{X0 + done_w:.1f}" cy="35" r="5" fill="{mark}"
+                stroke="#FFFFFF" stroke-width="1.5"/>
+      </svg>
+      <figcaption>The blue line is where billing should have reached by day
+        {pc['days_done']}. {f"The bar is <b>{lakh(abs(pc['gap_to_date']))} short</b> of it." if behind else f"The bar is <b>{lakh(abs(pc['gap_to_date'] or 0))} past</b> it."}
+        The lower strip is how much of {e(month)} has gone.</figcaption>
+    </figure>'''
+
+
+def pace_section(pc, month, whose='you', billed_total=0, target_total=0):
     """The month as a daily number, for a head or for a group.
 
     One section, rendered the same way in both reports, because a manager
@@ -241,7 +292,8 @@ def pace_section(pc, month, whose='you'):
         bits.append(
             f"That means running at <b>{lift}&#215;</b> the daily rate so far."
             if lift > 1.02 else
-            f"Holding the current daily rate is enough to get there.")
+            "Holding the current daily rate is enough to get there.")
+    bar = pace_bar(pc, billed_total, target_total, month)
     note = f'''<p class="note"><b>{left_line}.</b> {' '.join(bits)}</p>''' if bits else            f'''<p class="note"><b>{left_line}.</b></p>'''
 
     return f'''
@@ -250,6 +302,7 @@ def pace_section(pc, month, whose='you'):
       <span>What {'you need' if mine else 'the group needs'} each day to hit
         the {e(month)} target</span></div>
     <div class="grid g3">{need_tile}{rate_tile}{sfo_tile}</div>
+    <div style="margin-top:13px">{bar}</div>
     {note}
   </section>'''
 
@@ -344,9 +397,11 @@ section{margin-bottom:40px}
 .shead span{font-size:12.5px; color:var(--ink-3); margin-left:auto}
 
 .grid{display:grid; gap:13px}
+.g4{grid-template-columns:repeat(4,1fr)}
 .g3{grid-template-columns:repeat(3,1fr)}
 .g2{grid-template-columns:repeat(2,1fr)}
-@media(max-width:740px){.g3,.g2{grid-template-columns:1fr}}
+@media(max-width:980px){.g4{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:740px){.g3,.g2,.g4{grid-template-columns:1fr}}
 
 .tile{background:var(--card); border:1px solid var(--line); border-radius:5px; padding:17px}
 .tile .k{font-size:10px; font-weight:800; letter-spacing:.14em;
@@ -410,6 +465,11 @@ footer{border-top:1px solid var(--line); padding-top:17px; font-size:11.5px;
        color:var(--ink-3); line-height:1.65}
 @media print{
   body{background:#fff; font-size:10.5pt}
+  /* Four gauges across, not two by two. The wrapped version is taller than
+     whatever is left of page one under the verdict, so the section moved to
+     page two and left most of page one blank. */
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .g4 figcaption{font-size:7.6pt}
   /* There is no scrollbar on paper. A table wider than the page is not
      scrolled, it is cut off -- which is how the last columns of "Every
      territory" went missing -- so the table is made to fit instead. */
@@ -492,7 +552,8 @@ def render(d):
     if y.get('required_monthly') and y.get('months_remaining'):
         second.append(f"To finish the year you need {lakh(y['required_monthly'])} "
                       f"lakh a month for the next {y['months_remaining']} months. "
-                      f"Your best month so far is {lakh(h['mtd_primary'])}.")
+                      f"You have billed {lakh(h['mtd_primary'])} this month "
+                      f"so far.")
     second_html = ' '.join(second)
 
     # -- gauges ----------------------------------------------------------
@@ -515,8 +576,25 @@ def render(d):
     </figure>'''
 
     TONE = {'good': '#1baf7a', 'warn': '#eda100', 'bad': '#eb6834', 'none': '#8A94A6'}
+    # Due by today, before the whole-month figure. A part month measured
+    # against a whole month's target is behind by construction for everybody
+    # until the last day; this is the one that says whether they are actually
+    # behind.
+    pace_gauge = ''
+    if pc.get('pct_to_date') is not None:
+        on_line = (pc.get('gap_to_date') or 0) >= 0
+        pace_gauge = gauge(
+            f"Due by {as_of or 'today'}", pc['pct_to_date'],
+            h['mtd_primary'], pc['target_to_date'],
+            TONE[rag(pc['pct_to_date'])],
+            f"<b>Against the {lakh(pc['target_to_date'])} due by day "
+            f"{pc['days_done']} of {pc['days_in_month']}.</b> "
+            f"{lakh(abs(pc['gap_to_date']))} lakh "
+            f"{'ahead of' if on_line else 'behind'} the straight line.")
+
     gauges = (
-        gauge('This month', h['month_pct'], h['mtd_primary'], h['month_target'],
+        pace_gauge
+        + gauge('Whole of this month', h['month_pct'], h['mtd_primary'], h['month_target'],
               TONE[rag(h['month_pct'])],
               f"<b>This month, against this month's target.</b> "
               f"{lakh(h['month_backlog'])} lakh still to bill, and the month is not over.")
@@ -633,9 +711,9 @@ def render(d):
             f"<b>{lakh(y['required_base'])} lakh a month just to stay on target</b>, "
             f"or <b>{lakh(y['required_monthly'])} to also clear the shortfall</b>.")
     if y.get('required_vs_current'):
-        year_pts.append(f"That is {y['required_vs_current']} times your best month "
-                        f"so far, and {y['required_vs_month_target']} times this "
-                        f"month's target.")
+        year_pts.append(f"That is {y['required_vs_current']} times what you have "
+                        f"billed this month so far, and "
+                        f"{y['required_vs_month_target']} times this month's target.")
 
     # Plan-against-achieved, three horizons, each filled left to right.
     def split(done, target, label, yy):
@@ -680,7 +758,8 @@ def render(d):
 
     days = flow.get('days_to_clear')
     sec = flow.get('secondary_to_primary')
-    pace_block = pace_section(pc, month, 'you')
+    pace_block = pace_section(pc, month, 'you',
+                              h['mtd_primary'], h['month_target'])
 
     pm, pm_tone = vs(prod.get('per_sfo_mtd'), prod.get('channel_per_sfo_mtd'))
     py, py_tone = vs(prod.get('per_sfo_ytd'), prod.get('channel_per_sfo_ytd'))
@@ -740,9 +819,9 @@ def render(d):
   </div>
 
   <section>
-    <div class="shead"><h2>Your three targets</h2>
-      <span>This month, this year, and the full year</span></div>
-    <div class="grid g3">{gauges}</div>
+    <div class="shead"><h2>Your targets</h2>
+      <span>Due by today, this month, this year, and the full year</span></div>
+    <div class="grid g4">{gauges}</div>
   </section>
 
   <section>
@@ -929,7 +1008,7 @@ def render_team(d):
     t, y = d['totals'], d['year']
     pc = d.get('pace') or {}
     gdt = d.get('dates') or {}
-    span = gdt.get('month_span') or ''
+    day_span = gdt.get('month_span') or ''
     lm_span = gdt.get('last_month_span') or 'last month'
     as_of = gdt.get('as_of_short') or ''
     snap = d['snapshot']
@@ -945,7 +1024,8 @@ def render_team(d):
 
     behind = [h for h in heads if h['month_pct'] is not None and h['month_pct'] < 70]
     ahead = [h for h in heads if h['month_pct'] is not None and h['month_pct'] >= 100]
-    pace_block = pace_section(pc, month, 'the group')
+    pace_block = pace_section(pc, month, 'the group',
+                              t['mtd_primary'], t['month_target'])
 
     TONE = {'good': '#1baf7a', 'warn': '#eda100', 'bad': '#eb6834',
             'none': '#8A94A6'}
@@ -969,8 +1049,21 @@ def render_team(d):
       <figcaption>{caption}</figcaption>
     </figure>'''
 
+    pace_gauge = ''
+    if pc.get('pct_to_date') is not None:
+        on_line = (pc.get('gap_to_date') or 0) >= 0
+        pace_gauge = gauge(
+            f"Due by {as_of or 'today'}", pc['pct_to_date'],
+            t['mtd_primary'], pc['target_to_date'],
+            TONE[rag(pc['pct_to_date'])],
+            f"<b>Against the {lakh(pc['target_to_date'])} due by day "
+            f"{pc['days_done']} of {pc['days_in_month']}.</b> The group is "
+            f"{lakh(abs(pc['gap_to_date']))} lakh "
+            f"{'ahead of' if on_line else 'behind'} the straight line.")
+
     gauges = (
-        gauge('This month', t['month_pct'], t['mtd_primary'], t['month_target'],
+        pace_gauge
+        + gauge('Whole of this month', t['month_pct'], t['mtd_primary'], t['month_target'],
               TONE[rag(t['month_pct'])],
               f"<b>This month, against this month&#8217;s target.</b> "
               f"{lakh(t['month_backlog'])} lakh still to bill across the group, "
@@ -1150,11 +1243,12 @@ def render_team(d):
             '</tr>')
 
     regions = ', '.join(d['regions'][:6]) + ('...' if len(d['regions']) > 6 else '')
-    asat = (f" &#183; as at {e(snap['as_of_date'])}" if snap.get('as_of_date') else '')
     ahead_line = (f"{len(ahead)} of {n} "
                   f"{'territory is' if len(ahead) == 1 else 'territories are'} "
                   f"at or above plan. " if ahead else '')
-    behind_line = ('<b>' + str(len(behind)) + ' need attention</b>: '
+    behind_line = ('<b>' + str(len(behind))
+                   + (' needs' if len(behind) == 1 else ' need')
+                   + ' attention</b>: '
                    + e(', '.join(h['region'] for h in behind)) + '. ') if behind else ''
 
     return f"""<!doctype html>
@@ -1186,7 +1280,7 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
     <p>{t['sfo_count']} sales field officers across the group</p>
   </div>
   <div class="stamp"><b>{e(month)}</b>
-    {e(span) if span else 'Month to date'}<br>
+    {e(day_span) if day_span else 'Month to date'}<br>
     Figures in &#8377; lakhs &#183; primary sales basis
   </div>
 </div></div></div>
@@ -1204,8 +1298,8 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
 
   <section>
     <div class="shead"><h2>Your group</h2>
-      <span>This month, this year, and the full year</span></div>
-    <div class="grid g3">{gauges}</div>
+      <span>Due by today, this month, this year, and the full year</span></div>
+    <div class="grid g4">{gauges}</div>
     <p class="note"><b>These totals are added up from your territories only.</b>
       They are not taken from the grand total on the sheet, which covers people
       outside your group.</p>

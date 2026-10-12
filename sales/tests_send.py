@@ -708,10 +708,13 @@ class TheManagersReportIsWorthOpening(TestCase):
         self.assertIn('lakhs, biggest first', html)
         self.assertIn('to bill', html)
 
-    def test_the_group_gets_the_same_three_gauges_a_head_does(self):
+    def test_the_group_gets_the_same_gauges_a_head_does(self):
         """One visual language across both documents: a manager who reads
-        fourteen of these should not have to learn two."""
-        self.assertEqual(self.report().count('A 78 78 0 0 1 178 112'), 6)
+        fourteen of these should not have to learn two.
+
+        Four gauges now -- the fourth is the target pro-rated to today --
+        and each is drawn as two arcs, a track and a fill."""
+        self.assertEqual(self.report().count('A 78 78 0 0 1 178 112'), 8)
 
     def test_every_territory_is_still_listed_with_a_group_line(self):
         html = self.report()

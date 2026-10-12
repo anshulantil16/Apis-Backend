@@ -63,6 +63,19 @@ def compute(as_of_date, target, billed, backlog, yesterday=None, sfo_count=0):
 
     plan_per_day = _per(target, days_in_month)
     actual_per_day = _per(billed, done)
+
+    # The target pro-rated to today: the month's AOP divided by its days and
+    # multiplied back by the days gone. Measuring a part-month against a whole
+    # month's target reads 7% on the 12th and says nothing -- it is behind by
+    # construction for everybody, every month, until the last day. Against the
+    # share of the target actually due by now, the same head reads 17%, which
+    # is a number somebody can act on.
+    target_to_date = round(plan_per_day * done, 2) if plan_per_day else None
+    pct_to_date = (round(billed / target_to_date * 100, 1)
+                   if target_to_date and target_to_date > 0 else None)
+    # Positive means ahead of where the straight line says they should be.
+    gap_to_date = (round(billed - target_to_date, 2)
+                   if target_to_date is not None else None)
     # Nothing is owed when the month is already past plan, and a negative
     # requirement is not a smaller number -- it is a different statement.
     required_per_day = _per(backlog, left) if backlog > 0 and left > 0 else None
@@ -93,6 +106,11 @@ def compute(as_of_date, target, billed, backlog, yesterday=None, sfo_count=0):
         'plan_per_day': plan_per_day,
         'actual_per_day': actual_per_day,
         'required_per_day': required_per_day,
+
+        # Against the share of the month's target actually due by today.
+        'target_to_date': target_to_date,
+        'pct_to_date': pct_to_date,
+        'gap_to_date': gap_to_date,
 
         # The same three divided by the field force. "With 25 officers, each
         # of them has to bill this much a day" is the form a head can hand
