@@ -8,11 +8,27 @@ renamed to .pdf is a script on our origin.
 Whatever is uploaded is stored as a PDF: Word, Excel and PowerPoint files are
 converted on the way in (see pdf_convert), so every document opens in the
 browser the same way.
+
+Documents are for reading, not for keeping a copy of. Nothing hands out the
+stored file's media URL any more — the register links to PolicyDocumentFileView
+below, which streams the PDF marked `inline`, so the browser shows it in place
+instead of saving it to Downloads, and config/urls.py refuses /media/policies/
+outright so the stored file has no second, unmarked way in. The page then shows
+it in a frame with the PDF viewer's own toolbar switched off, which is where the
+Download and Print buttons live.
+
+This stops a copy being taken by accident or in passing, which is what was
+asked for. It cannot stop one being taken on purpose: the bytes have to reach
+the browser to be read at all, and anything readable on screen can be saved by
+someone who sets out to. Watermarking or a page-image viewer would be the next
+step if that ever matters.
 """
 import os
+import re
 from datetime import date
 
 from django.core.files.base import ContentFile
+from django.http import FileResponse, Http404
 
 from django.db.models import Q
 from rest_framework import status as http
@@ -38,11 +54,20 @@ MAGIC_FOR_EXT = {
 CATEGORIES = {c[0] for c in PolicyDocument.CATEGORY_CHOICES}
 
 
+def view_url(d):
+    """Where to read this document — the streaming view, never the stored
+    file's own media URL.
+
+    Root-relative on purpose, as the media URL was — see
+    roompulse/attachments.py url_for. Behind the QA proxy build_absolute_uri
+    answered with 127.0.0.1:8001, which the browser read as the viewer's own
+    machine.
+    """
+    return f'/api/policies/documents/{d.id}/view/' if d.id and d.file else ''
+
+
 def _serialize(d, request=None, viewer=None):
-    # Root-relative on purpose — see roompulse/attachments.py url_for. Behind
-    # the QA proxy build_absolute_uri answered with 127.0.0.1:8001, which the
-    # browser read as the viewer's own machine.
-    url = d.file.url if d.file else ''
+    url = view_url(d)
     return {
         'id': d.id, 'title': d.title, 'category': d.category,
         'department': d.department, 'version': d.version, 'pages': d.pages,
@@ -196,6 +221,53 @@ class PolicyDocumentListView(PortalScopedAPIView):
                         'Uploaded and sent for approval. It will be listed for '
                         'everyone once an administrator approves it.'),
         }, status=http.HTTP_201_CREATED)
+
+
+def _readable_name(d):
+    """A filename for the frame's tab, built from the title rather than the
+    uuid the file is stored under. Letters, digits, spaces and dashes only:
+    a quote or a newline in a title would otherwise break out of the
+    Content-Disposition header it is pasted into."""
+    stem = re.sub(r'[^A-Za-z0-9 ._-]', '', d.title or 'document').strip() or 'document'
+    return f'{stem[:80]}.pdf'
+
+
+class PolicyDocumentFileView(PortalScopedAPIView):
+    """GET — the document itself, to read in the browser.
+
+    The one way to the stored PDF. It answers with Content-Disposition
+    `inline`, so the browser renders it instead of saving it, and it applies
+    the same visibility rule the register's GET does: an approved document is
+    open to everyone, a pending one only to whoever uploaded it and to
+    administrators. Serving it from /media/ gave a pending document to anyone
+    holding the link.
+    """
+
+    def get(self, request, pk):
+        d = PolicyDocument.objects.filter(pk=pk).first()
+        if not d or not d.file:
+            raise Http404
+        viewer = optional_user(request)
+        visible = (d.moderation_status == ModerationStatus.APPROVED
+                   or (viewer and (viewer.is_superadmin or d.submitted_by_id == viewer.id)))
+        if not visible:
+            raise Http404
+
+        try:
+            handle = d.file.open('rb')
+        except (FileNotFoundError, OSError):
+            raise Http404
+        r = FileResponse(handle, content_type='application/pdf')
+        # as_attachment stays off: that is the Save dialog this is avoiding.
+        r['Content-Disposition'] = f'inline; filename="{_readable_name(d)}"'
+        # Whatever is stored, the browser treats it as a PDF and nothing else
+        # — a stored file that somehow is not one must not run as HTML here.
+        r['X-Content-Type-Options'] = 'nosniff'
+        r['X-Robots-Tag'] = 'noindex, nofollow, noarchive'
+        # Not a document to keep in a disk cache for the next person on a
+        # shared machine, and a replaced version should not be read stale.
+        r['Cache-Control'] = 'private, no-store'
+        return r
 
 
 class PolicyDocumentDetailView(PortalScopedAPIView):

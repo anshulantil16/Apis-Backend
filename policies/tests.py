@@ -107,7 +107,7 @@ class PolicyDocuments(TestCase):
                 office = SimpleUploadedFile(name, b'PK\x03\x04rest-of-zip')
                 r = self._upload(self.admin, category='Formats', file=office)
                 self.assertEqual(r.status_code, 201, r.content)
-                self.assertTrue(r.json()['file'].endswith('.pdf'), r.json()['file'])
+                self.assertTrue(r.json()['file'].endswith('/view/'), r.json()['file'])
                 self.assertEqual(r.json()['pages'], 3)
                 self.assertEqual(r.json()['fileName'], name)   # what was sent
                 self.assertEqual(r.json()['sizeBytes'], len(converted))
@@ -188,14 +188,67 @@ class PolicyDocuments(TestCase):
         # carrying that host sends the browser to the viewer's own machine.
         r = self.client.post(URL, {'title': 'x', 'category': 'SOP', 'file': _pdf(), **self.COMPLETE},
                              HTTP_HOST='127.0.0.1:8001', **self._auth(self.admin))
-        self.assertTrue(r.json()['file'].startswith('/media/policies/'), r.json()['file'])
+        did = r.json()['id']
+        self.assertEqual(r.json()['file'], f'/api/policies/documents/{did}/view/')
         listed = self.client.get(URL, HTTP_HOST='127.0.0.1:8001').json()
-        self.assertTrue(listed[0]['file'].startswith('/media/policies/'))
+        self.assertEqual(listed[0]['file'], f'/api/policies/documents/{did}/view/')
+
+    # ── reading a document, not keeping a copy of it ────────────────────────
+
+    def test_the_register_never_hands_out_the_stored_files_media_url(self):
+        """Nothing in the payload points at /media/. That URL is a plain
+        download, and it skips the approval check as well."""
+        self._upload(self.admin)
+        d = PolicyDocument.objects.get()
+        self.assertNotIn('/media/', str(self.client.get(URL).content))
+        self.assertNotIn('/media/', d.moderation_payload()['link'])
+        self.assertEqual(self.client.get(d.file.url).status_code, 404)
+
+    def test_a_document_is_served_to_be_read_in_place_not_saved(self):
+        self._upload(self.admin, title='Leave Policy')
+        d = PolicyDocument.objects.get()
+        r = self.client.get(f'/api/policies/documents/{d.id}/view/')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r['Content-Type'], 'application/pdf')
+        # inline, never attachment — attachment is the Save dialog.
+        self.assertEqual(r['Content-Disposition'], 'inline; filename="Leave Policy.pdf"')
+        self.assertEqual(r['X-Content-Type-Options'], 'nosniff')
+        self.assertIn('no-store', r['Cache-Control'])
+        self.assertEqual(b''.join(r.streaming_content)[:5], b'%PDF-')
+
+    def test_a_title_cannot_smuggle_anything_into_the_header(self):
+        """The filename is built from the title, and a title is free text. A
+        quote would close the header's value early; a newline would start a
+        header of the attacker's choosing."""
+        nasty = 'Leave"; attachment; x="y' + chr(13) + chr(10) + 'Set-Cookie: a=b'
+        self._upload(self.admin, title=nasty)
+        d = PolicyDocument.objects.get()
+        r = self.client.get(f'/api/policies/documents/{d.id}/view/')
+        self.assertEqual(r['Content-Disposition'],
+                         'inline; filename="Leave attachment xySet-Cookie ab.pdf"')
+
+    def test_an_unapproved_document_is_not_readable_by_a_link_alone(self):
+        """It was, from /media/: the file was there the moment it was
+        uploaded, whatever the register showed."""
+        self._upload(self.alice)
+        d = PolicyDocument.objects.get()
+        url = f'/api/policies/documents/{d.id}/view/'
+        self.assertEqual(self.client.get(url).status_code, 404)
+        self.assertEqual(self.client.get(url, **self._auth(self.bob)).status_code, 404)
+        self.assertEqual(self.client.get(url, **self._auth(self.alice)).status_code, 200)
+        self.assertEqual(self.client.get(url, **self._auth(self.admin)).status_code, 200)
+
+    def test_a_missing_document_or_missing_file_answers_404(self):
+        self._upload(self.admin)
+        d = PolicyDocument.objects.get()
+        d.file.storage.delete(d.file.name)
+        self.assertEqual(self.client.get(f'/api/policies/documents/{d.id}/view/').status_code, 404)
+        self.assertEqual(self.client.get('/api/policies/documents/99999/view/').status_code, 404)
 
     def test_pending_upload_reaches_the_approval_queue_with_a_link(self):
         self._upload(self.alice)
         payload = PolicyDocument.objects.get().moderation_payload()
-        self.assertTrue(payload['link'].endswith('.pdf'))
+        self.assertTrue(payload['link'].endswith('/view/'), payload['link'])
         self.assertEqual(payload['type'], 'policydocument')
 
     # ── built-in PDFs (public/Policies/) ────────────────────────────────────

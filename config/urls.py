@@ -18,7 +18,21 @@ from django.contrib import admin
 from django.urls import path, include, re_path
 from django.conf import settings
 from django.conf.urls.static import static
+from django.http import Http404
 from django.views.static import serve
+
+
+def no_media(request, path):
+    """A media path that is deliberately not served here.
+
+    Policy documents are read through policies.views.PolicyDocumentFileView,
+    which streams them marked `inline` and applies the register's own
+    visibility rule. Serving the same file from /media/ as well would hand
+    out an unmarked copy the browser saves to Downloads, and would show a
+    document still awaiting approval to anyone holding its link.
+    """
+    raise Http404
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -37,6 +51,8 @@ urlpatterns = [
     path('api/wall/',        include('wall.urls')),
     path('api/noticeboard/', include('noticeboard.urls')),
     path('api/policies/',    include('policies.urls')),
+    # Before the catch-all below: see no_media.
+    re_path(r'^media/(?P<path>policies/.*)$', no_media),
     # Always serve media files (works in both DEBUG and production mode)
     re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
 ]

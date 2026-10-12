@@ -86,10 +86,13 @@ class PolicyDocument(ModeratedContent):
         }
 
     def moderation_link(self, request=None):
-        """The document itself. Its title says nothing about what it says,
-        so the reviewer has to be able to open it. Root-relative, never
-        build_absolute_uri — see roompulse/attachments.py url_for."""
-        return self.file.url if self.file else ''
+        """The document itself. Its title says nothing about what it says, so
+        the reviewer has to be able to open it — through the same read-only
+        view everyone else gets, not the stored file's media URL, which is
+        refused. Root-relative, never build_absolute_uri — see
+        roompulse/attachments.py url_for."""
+        from .views import view_url
+        return view_url(self)
 
     def can_delete(self, user):
         """Only a super admin removes a document. Nobody else, including
