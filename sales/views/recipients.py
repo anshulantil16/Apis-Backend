@@ -22,6 +22,7 @@ from rest_framework.response import Response
 
 from .auth import SalesIQView, SalesIQAdminView, SalesIQOwnerView
 from ..models import ReportRecipient, UploaderGrant, ReviewSnapshot
+from .. import pace as PACE
 from .. import report as REPORT
 from .. import recipients_sheet as SHEET
 from .. import mail as MAIL
@@ -645,6 +646,19 @@ class SalesTeamReportView(SalesIQView):
                 'month_backlog': round(total('month_target') - total('mtd_primary'), 2),
                 'ytd_backlog': round(total('ytd_target') - total('ytd_actual'), 2),
                 'fy_backlog': round(fy_backlog, 2),
+            },
+            # The group's month as a daily number, added from the rows it
+            # covers -- the same arithmetic each head sees for themselves.
+            'pace': PACE.compute(
+                snap.as_of_date, total('month_target'), total('mtd_primary'),
+                round(total('month_target') - total('mtd_primary'), 2),
+                total('yesterday_billing'), sum(r.sfo_count for r in mine)),
+            'dates': {
+                'as_of': PACE.day_label(snap.as_of_date),
+                'as_of_short': PACE.short_day(snap.as_of_date),
+                'month_span': PACE.span_label(snap.as_of_date),
+                'last_month_span': PACE.last_month_span(snap.as_of_date),
+                'year_span': PACE.year_span(snap.as_of_date),
             },
             'year': {'months_elapsed': idx or 0, 'months_remaining': remaining,
                      'required_monthly': (round(fy_backlog / remaining, 2)

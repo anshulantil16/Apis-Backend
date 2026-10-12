@@ -13,11 +13,27 @@ from rest_framework.response import Response
 
 from .auth import SalesIQView, SalesIQAdminView
 from ..models import ReviewSnapshot
+from .. import pace as PACE
 from .. import report as REPORT
 
 
 # The financial year opens in April, so April is month 1 and March is month 12.
 FY_START_MONTH = 4
+
+
+def _date_labels(as_of):
+    """-> the dates behind the words the report used to say.
+
+    "Yesterday's billing" reads clearly for about a day. In a thread of
+    fifteen morning mails, or opened the following week, it says nothing.
+    """
+    return {
+        'as_of': PACE.day_label(as_of),
+        'as_of_short': PACE.short_day(as_of),
+        'month_span': PACE.span_label(as_of),
+        'last_month_span': PACE.last_month_span(as_of),
+        'year_span': PACE.year_span(as_of),
+    }
 
 
 def fy_index(d):
@@ -279,12 +295,17 @@ class SalesReviewReportView(SalesIQView):
                 # distributor; above means the trade is pulling down stock
                 # loaded earlier. Neither is good or bad on its own, which is
                 # why it is reported as a ratio and not scored.
+                # Only where the base is genuinely positive. A month that
+                # closes negative on primary -- returns and credit notes
+                # outweighing billing, which October's sheet does -- turns
+                # every one of these ratios into a number like -3905%, which
+                # is arithmetic working perfectly and saying nothing.
                 'secondary_to_primary': (
                     round(float(me.mtd_secondary) / float(me.mtd_primary) * 100, 1)
-                    if float(me.mtd_primary) else None),
+                    if float(me.mtd_primary) > 0 else None),
                 'channel_secondary_to_primary': (
                     round(sum(float(r.mtd_secondary) for r in peers) / peer_mtd * 100, 1)
-                    if peer_mtd else None),
+                    if peer_mtd > 0 else None),
                 # At yesterday's billing, how many more days clear the month's
                 # backlog. Derived only from figures the sheet prints.
                 'days_to_clear': (
@@ -294,10 +315,20 @@ class SalesReviewReportView(SalesIQView):
             },
             'share': {
                 'of_channel_mtd': (round(float(me.mtd_primary) / peer_mtd * 100, 1)
-                                   if peer_mtd else None),
+                                   if peer_mtd > 0 else None),
                 'of_channel_ytd': (round(float(me.ytd_actual) / peer_ytd * 100, 1)
-                                   if peer_ytd else None),
+                                   if peer_ytd > 0 else None),
             },
+            # The month as a daily number: what was needed per day, what has
+            # been managed per day, and what is needed per day from here --
+            # the last of which is the only one that can be acted on and the
+            # one the sheet never prints.
+            'pace': PACE.compute(snap.as_of_date, me.month_target,
+                                 me.mtd_primary, me.month_backlog,
+                                 me.yesterday_billing, me.sfo_count),
+            # Real dates, so a report kept for a fortnight still says which
+            # days it is talking about.
+            'dates': _date_labels(snap.as_of_date),
         })
 
 

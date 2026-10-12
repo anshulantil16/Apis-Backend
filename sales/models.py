@@ -456,7 +456,10 @@ class ReviewRow(models.Model):
 
     @property
     def growth_pct(self):
-        if not float(self.lmtd or 0):
+        # Growth needs a positive base to be a percentage of. LMTD of -0.01
+        # -- a month that closed on returns -- produced "-42800%", which is
+        # the division working and the answer meaning nothing.
+        if float(self.lmtd or 0) <= 0:
             return None
         from .report import round_half_up
         return round_half_up(

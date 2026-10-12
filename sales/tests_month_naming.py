@@ -350,3 +350,162 @@ class AListWhoseCodesWentStaleStillResolves(TestCase):
     def test_a_recipient_with_neither_matches_nothing(self):
         from .views.recipients import for_recipient
         self.assertEqual(for_recipient(self.rec('GONE', ''), self.rows), [])
+
+
+class AMonthThatClosedOnReturns(TestCase):
+    """October's sheet carries a negative MTD Pri and an LMTD of -0.01.
+
+    Every ratio built on those is arithmetically perfect and says nothing:
+    the report printed "388%" for secondary against primary, "-3905%" for
+    the channel, "-1157% below the channel average" per officer, and
+    "-42800%" for growth. A figure like that is worse than a blank, because
+    somebody has to work out that it is meaningless before they can ignore
+    it, and on a page of real numbers most people will not.
+    """
+
+    ROW = ['GT', 'GTR01', 'MOHINDER SHARMA', 22, -0.01, 119.78, 4.27, -38.31,
+           22.41, -.32, 0, 158.09, 739.46, 262.44, .35, 477.02,
+           1423.73, 262.44, .18, 1161.29]
+    PEER = ['GT', 'GTR02', 'RAMESH SINGH', 43, 4.70, 194.47, 4.73, 6.98,
+            29.63, .04, .49, 187.49, 1200.58, 377.19, .31, 823.39,
+            2311.54, 377.19, .16, 1934.35]
+
+    def setUp(self):
+        from .tests_send import review_workbook, upload, rows
+        self.c = RawClient()
+        self.c.defaults['HTTP_X_SALESIQ_SESSION'] = issue_session(
+            SALESIQ_SUPER_ADMIN)
+        upload(review_workbook([self.ROW, self.PEER]),
+               name="Primary Master till 08th Oct'2026.xlsx")
+        self.row = rows()[0]
+
+    def html(self):
+        r = self.c.get('/api/sales/review/report/file/?row=%d' % self.row.id)
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def test_no_percentage_runs_into_the_thousands(self):
+        """The blunt check, and the one that would have caught all four."""
+        import re
+        absurd = re.findall(r'-?\d{4,}(?:\.\d+)?%', self.html())
+        self.assertEqual(absurd, [])
+
+    def test_growth_is_not_measured_against_a_negative_base(self):
+        from .models import ReviewSnapshot
+        row = ReviewSnapshot.objects.first().rows.get(region='GTR01')
+        self.assertIsNone(row.growth_pct)
+
+    def test_the_report_says_growth_cannot_be_measured(self):
+        """Rather than printing a number nobody can use."""
+        self.assertIn('no base to measure growth against', self.html())
+
+    def test_the_secondary_ratio_is_withheld_not_inverted(self):
+        d = self.c.get('/api/sales/review/report/?row=%d' % self.row.id).json()
+        self.assertIsNone(d['flow']['secondary_to_primary'])
+
+    def test_the_per_officer_comparison_is_withheld(self):
+        """A negative channel average is not a baseline."""
+        self.assertNotIn('below the channel average', self.html())
+
+    def test_the_backlog_tile_does_not_claim_to_be_past_target(self):
+        """It said "Already past the target" above a backlog of 158.09."""
+        html = self.html()
+        self.assertIn('158.09', html)
+        self.assertNotIn('Already past', html)
+
+
+class TheRunRateIsSpeltOut(TestCase):
+    """AOP divided by the days of the month, and what is left divided by the
+    days remaining -- the second being the one that can be acted on."""
+
+    def setUp(self):
+        from .tests_send import review_workbook, upload, rows
+        self.c = RawClient()
+        self.c.defaults['HTTP_X_SALESIQ_SESSION'] = issue_session(
+            SALESIQ_SUPER_ADMIN)
+        upload(review_workbook([
+            ['GT', 'GTR01', 'MOHINDER SHARMA', 25, 57.61, 300.00, 4.27, 100.00,
+             77.50, .33, .46, 200.00, 619.69, 300.75, .49, 318.94,
+             1423.73, 300.75, .21, 1122.98]]),
+            name="Primary Master till 10th Sept'2026.xlsx")
+        self.row = rows()[0]
+
+    def pace(self):
+        return self.c.get('/api/sales/review/report/?row=%d'
+                          % self.row.id).json()['pace']
+
+    def test_the_days_are_counted_from_the_sheets_own_date(self):
+        p = self.pace()
+        self.assertEqual(p['days_in_month'], 30)      # September
+        self.assertEqual(p['days_done'], 10)          # "till 10th Sept"
+        self.assertEqual(p['days_left'], 20)
+
+    # The payload is in rupees; lakh() converts on the way to the page.
+    LAKH = 100_000
+
+    def test_the_plan_is_divided_by_the_days_of_the_month(self):
+        self.assertAlmostEqual(self.pace()['plan_per_day'],
+                               10.00 * self.LAKH, places=2)
+
+    def test_what_is_needed_from_here_uses_the_days_that_are_left(self):
+        """200 still to bill over 20 days left, not over 30."""
+        self.assertAlmostEqual(self.pace()['required_per_day'],
+                               10.00 * self.LAKH, places=2)
+
+    def test_each_officer_gets_their_own_daily_number(self):
+        """The question a head actually asks: with 25 officers, how much
+        does each have to bill a day."""
+        p = self.pace()
+        self.assertEqual(p['sfo_count'], 25)
+        self.assertAlmostEqual(p['required_per_day_per_sfo'],
+                               0.40 * self.LAKH, places=2)
+
+    def test_the_report_shows_the_daily_requirement(self):
+        html = self.c.get('/api/sales/review/report/file/?row=%d'
+                          % self.row.id).content.decode()
+        self.assertIn('Daily run rate', html)
+        self.assertIn('Each SFO, per day from here', html)
+
+    def test_a_closed_month_is_not_reported_as_nothing_left_to_bill(self):
+        """Days left of nought and a backlog of nought print the same
+        figure and mean opposite things."""
+        from .pace import compute
+        from datetime import date
+        shut = compute(date(2026, 9, 30), 300.0, 100.0, 200.0, 5.0, 25)
+        self.assertTrue(shut['month_is_closed'])
+        self.assertIsNone(shut['required_per_day'])
+        self.assertEqual(shut['still_to_bill'], 200.0)
+
+
+class TheReportSaysWhichDaysItMeans(TestCase):
+    """Sent every morning and then kept. "Yesterday" is clear for a day."""
+
+    def setUp(self):
+        from .tests_send import review_workbook, upload, rows
+        self.c = RawClient()
+        self.c.defaults['HTTP_X_SALESIQ_SESSION'] = issue_session(
+            SALESIQ_SUPER_ADMIN)
+        upload(review_workbook([
+            ['GT', 'GTR01', 'MOHINDER SHARMA', 25, 57.61, 300.00, 4.27, 100.00,
+             77.50, .33, .46, 200.00, 619.69, 300.75, .49, 318.94,
+             1423.73, 300.75, .21, 1122.98]]),
+            name="Primary Master till 10th Sept'2026.xlsx")
+        self.row = rows()[0]
+
+    def test_the_dates_are_named_not_described(self):
+        d = self.c.get('/api/sales/review/report/?row=%d'
+                       % self.row.id).json()['dates']
+        self.assertEqual(d['as_of'], '10 Sep 2026')
+        self.assertEqual(d['month_span'], '1–10 Sep 2026')
+        self.assertEqual(d['last_month_span'], '1–10 Aug 2026')
+
+    def test_the_page_carries_them(self):
+        html = self.c.get('/api/sales/review/report/file/?row=%d'
+                          % self.row.id).content.decode()
+        self.assertIn('1–10 Sep 2026', html)
+        self.assertIn('10 Sep', html)
+
+    def test_the_word_yesterday_is_gone_from_the_page(self):
+        html = self.c.get('/api/sales/review/report/file/?row=%d'
+                          % self.row.id).content.decode()
+        self.assertNotIn('yesterday&#8217;s billing', html.lower())

@@ -164,6 +164,96 @@ def ordinal(n):
     return f'{n}{ {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th") }'
 
 
+def pace_section(pc, month, whose='you'):
+    """The month as a daily number, for a head or for a group.
+
+    One section, rendered the same way in both reports, because a manager
+    reading fourteen of these and then their own should not meet the
+    arithmetic twice in two different shapes.
+
+    `whose` is 'you' for a head's own report and 'the group' for a manager's.
+    """
+    if not pc:
+        return ''
+
+    mine = whose == 'you'
+    req = pc.get('required_per_day')
+    act = pc.get('actual_per_day')
+    plan = pc.get('plan_per_day')
+    sfo = pc.get('sfo_count') or 0
+
+    if pc.get('month_is_closed'):
+        left_line = f'All {pc["days_in_month"]} days of {e(month)} are gone'
+    else:
+        left_line = (f"{pc['days_done']} of {pc['days_in_month']} days gone, "
+                     f"<b>{pc['days_left']} left</b>")
+
+    # The headline tile is what is needed from here, not what was needed on
+    # the first of the month. It is the only one of the three that can be
+    # acted on, and it is the one the sheet never prints.
+    owed = pc.get('still_to_bill') or 0
+    if owed <= 0:
+        need_tile = f'''<div class="tile"><div class="k">Needed per day from now</div>
+        <div class="v good">Nothing</div>
+        <div class="s">{"You are" if mine else "The group is"} past the target for
+          {e(month)} by {lakh(-owed)}.</div></div>'''
+    elif req is None:
+        # Owed, but no days left to bill it in. The old code printed "nothing
+        # left to bill" here, which is the opposite of what it means.
+        need_tile = f'''<div class="tile"><div class="k">Short at month end</div>
+        <div class="v bad" style="color:var(--bad)">{lakh(owed)}</div>
+        <div class="s">{e(month)} closed {lakh(owed)} under target. No days left
+          to recover it in.</div></div>'''
+    else:
+        tone = 'bad' if (act and req > act * 1.5) else 'owed'
+        need_tile = f'''<div class="tile"><div class="k">Needed per day from now</div>
+        <div class="v {tone}" style="color:{'var(--owed)' if tone == 'owed' else 'var(--bad)'}">{lakh(req)}</div>
+        <div class="s">To clear what is left over the <b>{pc['days_left']} days</b>
+          remaining in {e(month)}.</div></div>'''
+
+    rate_tile = f'''<div class="tile"><div class="k">Rate so far</div>
+      <div class="v">{lakh(act) if act is not None else '&mdash;'}</div>
+      <div class="s">Billed per day over {pc['days_done']} days.
+        {f"The target works out at <b>{lakh(plan)}</b> a day." if plan else ''}</div></div>'''
+
+    if sfo and (req is not None or act is not None):
+        per_sfo = pc.get('required_per_day_per_sfo')
+        sofar = pc.get('actual_per_day_per_sfo')
+        sfo_tile = f'''<div class="tile"><div class="k">Per officer, per day</div>
+          <div class="v">{lakh(per_sfo) if per_sfo is not None else lakh(sofar)}</div>
+          <div class="s">{f"What each of the <b>{sfo} officers</b> needs to bill daily from here. " if per_sfo is not None else f"Across <b>{sfo} officers</b>. "}{f"They are averaging {lakh(sofar)}." if sofar is not None else ''}</div></div>'''
+    else:
+        sfo_tile = f'''<div class="tile"><div class="k">Officers</div>
+          <div class="v">{sfo or '&mdash;'}</div>
+          <div class="s">No per-officer rate without a field-force count on
+            the sheet.</div></div>'''
+
+    # One plain sentence saying where the month lands if nothing changes.
+    bits = []
+    if pc.get('projected_pct') is not None and not pc.get('month_is_closed'):
+        gap = pc.get('projected_gap') or 0
+        bits.append(
+            f"At this rate {'you' if mine else 'the group'} would finish {e(month)} at "
+            f"<b>{lakh(pc['projected_close'])}</b> &mdash; {pct(pc['projected_pct'])} of "
+            f"the target, {lakh(abs(gap))} {'short' if gap > 0 else 'over'}.")
+    if pc.get('lift_needed'):
+        lift = pc['lift_needed']
+        bits.append(
+            f"That means running at <b>{lift}&#215;</b> the daily rate so far."
+            if lift > 1.02 else
+            f"Holding the current daily rate is enough to get there.")
+    note = f'''<p class="note"><b>{left_line}.</b> {' '.join(bits)}</p>''' if bits else            f'''<p class="note"><b>{left_line}.</b></p>'''
+
+    return f'''
+  <section>
+    <div class="shead"><h2>Daily run rate</h2>
+      <span>What {'you need' if mine else 'the group needs'} each day to hit
+        the {e(month)} target</span></div>
+    <div class="grid g3">{need_tile}{rate_tile}{sfo_tile}</div>
+    {note}
+  </section>'''
+
+
 def rag(p):
     """The same bands the rest of SalesIQ uses. None where there is no plan:
     a territory with no AOP has not passed and has not failed."""
@@ -346,6 +436,14 @@ def render(d):
     """
     h, y = d['head'], d['year']
     prod, flow, sh = d['productivity'], d['flow'], d['share']
+    pc = d.get('pace') or {}
+    dt = d.get('dates') or {}
+    # Real dates wherever the report used to say "yesterday" or "last month".
+    # These are sent every morning and then kept; a relative word is clear for
+    # about a day and useless in a thread of fifteen.
+    as_of = dt.get('as_of_short') or ''
+    span = dt.get('month_span') or ''
+    lm_span = dt.get('last_month_span') or 'the same point last month'
     snap, rank = d['snapshot'], d['rank']
     ct = d.get('channel_total') or {}
     peers = [p for p in d.get('peers', []) if p['month_pct'] is not None]
@@ -364,20 +462,24 @@ def render(d):
     m_rank = (rank.get('month_pct') or {}).get('position')
     of = (rank.get('month_pct') or {}).get('of')
 
-    if h['month_pct'] is not None and h['month_pct'] >= 100:
+    if h['growth_pct'] is None and h['month_pct'] is not None:
+        lead = (f"<b>{month} is at {pct(h['month_pct'])} of target</b> &mdash; "
+                f"{lakh(h['mtd_primary'])} of {lakh(h['month_target'])}. Growth "
+                f"cannot be measured: LMTD was {lakh(h['lmtd'])}.")
+    elif h['month_pct'] is not None and h['month_pct'] >= 100:
         lead = (f"<b>{month} is ahead of target</b> &mdash; {pct(h['month_pct'])} "
                 f"done, which is {lakh(-h['month_backlog'])} lakh more than asked for.")
     elif g_rank == 1:
         lead = (f"<b>Your territory is growing fastest in {chan} this month</b> "
-                f"&mdash; up {signed(h['growth_pct'])} on last month.")
+                f"&mdash; up {signed(h['growth_pct'])} on {lm_span}.")
     elif h['growth_pct'] is not None and h['growth_pct'] > 0:
-        lead = (f"<b>{month} is ahead of last month</b> &mdash; "
+        lead = (f"<b>{month} is ahead of {lm_span}</b> &mdash; "
                 f"{signed(h['growth_pct'])}, and {pct(h['month_pct'])} of target "
                 f"is done.")
     else:
-        lead = (f"<b>{month} is behind target and behind last month</b> &mdash; "
+        lead = (f"<b>{month} is behind target and behind {lm_span}</b> &mdash; "
                 f"{pct(h['month_pct'])} of target is done, and sales are "
-                f"{signed(h['growth_pct'])} on last month.")
+                f"{signed(h['growth_pct'])}.")
 
     # Short sentences, one point each. The first draft joined all three with
     # semicolons, which nobody reads to the end of at half past eight.
@@ -455,14 +557,14 @@ def render(d):
         month_rows += bar_row(20, f"Average of first {y['prior_months']} months",
                               w(y['prior_monthly_avg']), '#A8DCC6',
                               lakh(y['prior_monthly_avg']), muted=True)
-    month_rows += bar_row(52, 'Last month, same day', w(h['lmtd']), '#6FC9A3',
+    month_rows += bar_row(52, lm_span, w(h['lmtd']), '#6FC9A3',
                           lakh(h['lmtd']), muted=True)
 
     # this month: billed, then a 2px gap, then what is still owed
     bw, ow = w(h['mtd_primary']), w(max(h['month_backlog'], 0))
     month_rows += (
         f'<g class="me">'
-        f'<text x="{MGUT}" y="97" text-anchor="end" class="lab">{e(month)} so far</text>'
+        f'<text x="{MGUT}" y="97" text-anchor="end" class="lab">{e(span)}</text>'
         f'<rect x="{MBARX}" y="84" width="{bw:.1f}" height="20" rx="3" fill="{C_DONE}"/>'
         + (f'<rect x="{MBARX + bw + 2:.1f}" y="84" width="{drawable(ow - 2):.1f}" '
            f'height="20" rx="3" fill="{C_OWED}"/>' if ow > 2 else '')
@@ -567,11 +669,18 @@ def render(d):
 
     # -- productivity -----------------------------------------------------
     def vs(mine, avg):
-        if not mine or not avg:
+        # A negative or nought average is not a baseline to measure against.
+        # October's GT average went negative on returns, and this printed
+        # "-1157% below the channel average" against it.
+        if not mine or not avg or avg <= 0:
             return '', 'none'
         diff = (mine / avg - 1) * 100
         tone = 'good' if diff >= 0 else 'warn'
         return f"{signed(diff)} {'above' if diff >= 0 else 'below'}", tone
+
+    days = flow.get('days_to_clear')
+    sec = flow.get('secondary_to_primary')
+    pace_block = pace_section(pc, month, 'you')
 
     pm, pm_tone = vs(prod.get('per_sfo_mtd'), prod.get('channel_per_sfo_mtd'))
     py, py_tone = vs(prod.get('per_sfo_ytd'), prod.get('channel_per_sfo_ytd'))
@@ -583,25 +692,24 @@ def render(d):
     <div class="shead"><h2>Your {prod['sfo_count']} officers</h2>
       <span>Sales per officer</span></div>
     <div class="grid g3">
-      <div class="tile"><div class="k">Per officer, this month</div>
+      <div class="tile"><div class="k">Per SFO, MTD Pri</div>
         <div class="v {pm_tone}">{lakh(prod['per_sfo_mtd'])}</div>
         <div class="s">Against <b>{lakh(prod['channel_per_sfo_mtd'])}</b> across
           {e(chan)}. <b class="{pm_tone}">{pm}</b> the channel average.</div></div>
-      <div class="tile"><div class="k">Per officer, this year</div>
+      <div class="tile"><div class="k">Per SFO, YTD ACH</div>
         <div class="v {py_tone}">{lakh(prod['per_sfo_ytd'])}</div>
         <div class="s">Against <b>{lakh(prod['channel_per_sfo_ytd'])}</b> across
           {e(chan)}. <b class="{py_tone}">{py}</b>.</div></div>
-      <div class="tile"><div class="k">Share of {e(chan)}</div>
-        <div class="v">{pct(sh.get('of_channel_mtd'), 1)}</div>
-        <div class="s">This month, against <b>{pct(sh.get('of_channel_ytd'), 1)}</b>
-          of its year to date.</div></div>
+      <div class="tile"><div class="k">Each SFO, per day from here</div>
+        <div class="v">{lakh(pc['required_per_day_per_sfo']) if pc.get('required_per_day_per_sfo') else '&mdash;'}</div>
+        <div class="s">{f"What each of the {prod['sfo_count']} officers has to bill daily to clear the backlog. They are averaging <b>{lakh(pc['actual_per_day_per_sfo'])}</b>." if pc.get('required_per_day_per_sfo') else f"Averaging <b>{lakh(pc.get('actual_per_day_per_sfo'))}</b> a day each." if pc.get('actual_per_day_per_sfo') else 'No daily rate without days on the sheet.'}</div></div>
     </div>
     <p class="note"><b>Read the first two together.</b> If this month looks
-      different from the year, something has changed recently.</p>
+      different from the year, something has changed recently.
+      {f" MTD Sec sales is {pct(sec)} of MTD Pri" + (f", against {pct(flow['channel_secondary_to_primary'])} for {e(chan)}" if flow.get('channel_secondary_to_primary') else '') + "." if sec else " MTD Pri is nought or negative this month, so the secondary ratio is not shown."}
+      {f" This territory is {pct(sh.get('of_channel_mtd'), 1)} of {e(chan)} this month." if sh.get('of_channel_mtd') else ''}</p>
   </section>'''
 
-    days = flow.get('days_to_clear')
-    sec = flow.get('secondary_to_primary')
 
     return f'''<!doctype html>
 <html lang="en"><head>
@@ -619,7 +727,7 @@ def render(d):
       {f"&#183; {prod['sfo_count']} sales field officers" if prod.get('sfo_count') else ''}</p>
   </div>
   <div class="stamp"><b>{e(month)}</b>
-    Month to date{f" &#183; as at {e(snap['as_of_date'])}" if snap.get('as_of_date') else ''}<br>
+    {e(span) if span else 'Month to date'}<br>
     Figures in &#8377; lakhs &#183; primary sales basis
   </div>
 </div></div></div>
@@ -641,21 +749,18 @@ def render(d):
     <div class="shead"><h2>{e(month)}</h2>
       <span>How this month is going</span></div>
     <div class="grid g3" style="margin-bottom:13px">
-      <div class="tile"><div class="k">Growth over last month</div>
-        <div class="v {'good' if (h['growth_pct'] or 0) > 0 else 'bad'}">
-          {signed(h['growth_pct'])}</div>
-        <div class="s">{lakh(h['mtd_primary'])} against <b>{lakh(h['lmtd'])}</b> at the
-          same point last month{f". Ranked {ordinal(g_rank)} of {of} in {e(chan)}" if g_rank else ''}.</div></div>
-      <div class="tile"><div class="k">Still owed this month</div>
+      <div class="tile"><div class="k">Growth Over LM</div>
+        <div class="v {'good' if (h['growth_pct'] or 0) > 0 else 'bad' if h['growth_pct'] is not None else 'none'}">
+          {signed(h['growth_pct']) if h['growth_pct'] is not None else 'Not measurable'}</div>
+        <div class="s">{f"MTD Pri {lakh(h['mtd_primary'])} against LMTD <b>{lakh(h['lmtd'])}</b> in {e(lm_span)}" if h['growth_pct'] is not None else f"LMTD was {lakh(h['lmtd'])} in {e(lm_span)}, so there is no base to measure growth against"}{f". Ranked {ordinal(g_rank)} of {of} in {e(chan)}" if g_rank else ''}.</div></div>
+      <div class="tile"><div class="k">Backlog TGT FTM</div>
         <div class="v {'owed' if h['month_backlog'] > 0 else 'good'}"
              style="color:{'var(--owed)' if h['month_backlog'] > 0 else 'var(--good)'}">
           {lakh(h['month_backlog'])}</div>
-        <div class="s">{f"At yesterday&#8217;s billing of {lakh(flow['yesterday_billing'])}, that is <b>{days} more days</b> at the same rate." if days else "Ahead of this month&#8217;s plan already."}</div></div>
-      <div class="tile"><div class="k">Secondary against primary</div>
-        <div class="v">{pct(sec)}</div>
-        <div class="s">{lakh(h['mtd_secondary'])} moved out of distributors against
-          {lakh(h['mtd_primary'])} moved in.
-          {f"{e(chan)} runs at <b>{pct(flow['channel_secondary_to_primary'])}</b>." if flow.get('channel_secondary_to_primary') else ''}</div></div>
+        <div class="s">{f"At the {lakh(flow['yesterday_billing'])} billed on {e(as_of)}, that is <b>{days} more days</b> at the same rate." if days else f"Already past the {e(month)} target." if h['month_backlog'] <= 0 else f"Still to bill, with {pc['days_left']} days left in {e(month)}." if pc.get('days_left') else f"{e(month)} closed short by this much."}</div></div>
+      <div class="tile"><div class="k">Needed per day from here</div>
+        <div class="v" style="color:{'var(--owed)' if (pc.get('required_per_day') or 0) > 0 else 'var(--good)'}">{lakh(pc['required_per_day']) if pc.get('required_per_day') else '&mdash;'}</div>
+        <div class="s">{f"Backlog of {lakh(h['month_backlog'])} spread over the <b>{pc['days_left']} days</b> left in {e(month)}." if pc.get('required_per_day') else f"No backlog left on {e(month)}." if h['month_backlog'] <= 0 else f"{e(month)} is closed."}</div></div>
     </div>
 
     <figure>
@@ -676,6 +781,7 @@ def render(d):
     </figure>
   </section>
 
+{pace_block}
   <section>
     <div class="shead"><h2>The year ahead</h2>
       <span>{y['months_elapsed']} months gone, {y['months_remaining']} to go</span></div>
@@ -737,14 +843,14 @@ def render(d):
     <div class="shead"><h2>Your numbers</h2>
       <span>As shown on the sheet, in &#8377; lakhs</span></div>
     <div class="tbl"><table>
-      <thead><tr><th>Period</th><th>AOP</th><th>Achieved</th><th>ACH %</th>
+      <thead><tr><th>Period</th><th>AOP</th><th>ACH</th><th>ACH %</th>
         <th>Backlog</th></tr></thead>
       <tbody>
-        <tr class="hl"><td>{e(month)}, month to date</td><td class="n">{lakh(h['month_target'])}</td>
+        <tr class="hl"><td>{e(span) or e(month)}</td><td class="n">{lakh(h['month_target'])}</td>
           <td class="n">{lakh(h['mtd_primary'])}</td>
           <td class="n {rag(h['month_pct'])}">{pct(h['month_pct'])}</td>
           <td class="n">{lakh(h['month_backlog'])}</td></tr>
-        <tr><td>This year, from April</td><td class="n">{lakh(h['ytd_target'])}</td>
+        <tr><td>{e(dt.get('year_span')) or 'This year, from April'}</td><td class="n">{lakh(h['ytd_target'])}</td>
           <td class="n">{lakh(h['ytd_actual'])}</td>
           <td class="n {rag(h['ytd_pct'])}">{pct(h['ytd_pct'])}</td>
           <td class="n">{lakh(h['ytd_backlog'])}</td></tr>
@@ -756,9 +862,9 @@ def render(d):
     </table></div>
     <p class="note"><b>Other figures.</b>
       {f"Officers {prod['sfo_count']} &#183; " if prod.get('sfo_count') else ''}
-      LMTD {lakh(h['lmtd'])} &#183; yesterday&#8217;s billing
-      {lakh(flow['yesterday_billing'])} &#183; MTD secondary sales
-      {lakh(h['mtd_secondary'])} &#183; growth over last month {signed(h['growth_pct'])}.</p>
+      {e(lm_span)} {lakh(h['lmtd'])} &#183; billed on {e(as_of)}
+      {lakh(flow['yesterday_billing'])} &#183; MTD Sec sales
+      {lakh(h['mtd_secondary'])} &#183; Growth Over LM {signed(h['growth_pct']) if h['growth_pct'] is not None else 'not measurable'}.</p>
   </section>
 
   <section>
@@ -821,6 +927,11 @@ def render_team(d):
         that is behind and falling.
     """
     t, y = d['totals'], d['year']
+    pc = d.get('pace') or {}
+    gdt = d.get('dates') or {}
+    span = gdt.get('month_span') or ''
+    lm_span = gdt.get('last_month_span') or 'last month'
+    as_of = gdt.get('as_of_short') or ''
     snap = d['snapshot']
     # Sorted by achievement rather than by region code, so the ones that need
     # attention sit together instead of being scattered through the list.
@@ -834,6 +945,7 @@ def render_team(d):
 
     behind = [h for h in heads if h['month_pct'] is not None and h['month_pct'] < 70]
     ahead = [h for h in heads if h['month_pct'] is not None and h['month_pct'] >= 100]
+    pace_block = pace_section(pc, month, 'the group')
 
     TONE = {'good': '#1baf7a', 'warn': '#eda100', 'bad': '#eb6834',
             'none': '#8A94A6'}
@@ -1074,7 +1186,7 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
     <p>{t['sfo_count']} sales field officers across the group</p>
   </div>
   <div class="stamp"><b>{e(month)}</b>
-    Month to date{asat}<br>
+    {e(span) if span else 'Month to date'}<br>
     Figures in &#8377; lakhs &#183; primary sales basis
   </div>
 </div></div></div>
@@ -1083,7 +1195,8 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
   <div class="verdict">
     <p><b>The group is at {pct(t['month_pct'])} of plan this month</b>,
       {signed(t['growth_pct'])} on last month, with
-      {lakh(t['month_backlog'])} lakh still to bill.</p>
+      {lakh(t['month_backlog'])} lakh still to bill.
+      {f"Growth is measured against {e(lm_span)}." if lm_span else ''}</p>
     <p>{ahead_line}{behind_line}The year so far is at {pct(t['ytd_pct'])}, and
       {lakh(t['fy_backlog'])} lakh is left to do over
       {y['months_remaining']} months &mdash; {lakh(y['required_monthly'])} a month.</p>
@@ -1098,6 +1211,7 @@ tfoot td{{border-top:2px solid var(--ink); border-bottom:none}}
       outside your group.</p>
   </section>
 
+{pace_block}
   <section>
     <div class="shead"><h2>How each territory is doing</h2>
       <span>This month against plan</span></div>
