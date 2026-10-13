@@ -634,6 +634,7 @@ class AdminSyncView(_AdminView):
                 'deactivated': l.deactivated, 'skipped_no_email': l.skipped_no_email,
                 'skipped_leavers': l.skipped_leavers,
                 'skipped_duplicate_email': l.skipped_duplicate_email,
+                'skipped_bad_row': l.skipped_bad_row,
                 'message': l.message,
             } for l in HrmsSyncLog.objects.all()[:25]],
         })
@@ -662,6 +663,7 @@ class AdminSyncView(_AdminView):
             'skipped_no_email': log.skipped_no_email,
             'skipped_leavers': log.skipped_leavers,
             'skipped_duplicate_email': log.skipped_duplicate_email,
+            'skipped_bad_row': log.skipped_bad_row,
         }})
 
 

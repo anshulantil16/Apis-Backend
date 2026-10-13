@@ -45,7 +45,7 @@ from datetime import date, datetime
 
 import requests
 from django.conf import settings
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from ..models import (DEFAULT_APPS, SUPERADMIN_BOOTSTRAP_EMAIL,
@@ -285,6 +285,36 @@ def _is_active(row):
     return _pick(row, 'EmpStatus', 'Status').strip().lower() == ACTIVE_EMP_STATUS
 
 
+# The widest value each text column will hold, read off the model so the two
+# can never drift apart.
+def _limit(field):
+    return PortalUser._meta.get_field(field).max_length
+
+
+# Columns that describe a person rather than identify them. Upstream is free
+# text typed by HR -- a grade label longer than the column, a second phone
+# number squeezed into the mobile field -- and MySQL refuses an over-long
+# write outright. That refusal used to end the entire sync: on 12-10-2026 one
+# grade of more than 20 characters rolled back all 2,410 rows and the
+# directory stopped updating for everybody until somebody noticed.
+#
+# These are cut to fit and the cut is named in the log. A shortened grade is
+# a cosmetic problem; a directory frozen on last week is not, and skipping
+# the whole person over one long label would stop their name, department and
+# designation updating too.
+_TRIMMABLE = ('name', 'designation', 'department', 'location',
+              'reporting_manager_code', 'grade', 'category', 'office_mobile')
+
+
+def _fit(value, field, code, trimmed):
+    limit = _limit(field)
+    if value and limit and len(value) > limit:
+        trimmed.append(f'{code}: {field} was {len(value)} characters, kept the '
+                       f'first {limit} — "{value}"')
+        return value[:limit]
+    return value
+
+
 def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
                    deactivate_missing=True, fields=EMPLOYEE_FIELDS):
     """Pull the employee master into PortalUser rows.
@@ -328,6 +358,8 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status,
     seen_codes = []
     claimed_by = {}          # email -> the employee code that got there first
     clashes = []
+    trimmed = []             # values cut to fit their column -- see _fit
+    refused = []             # rows the database would not take at all
 
     for row in rows:
         code = _pick(row, 'Code', 'EmpCode', 'EmployeeCode')
@@ -397,22 +429,37 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status,
             'hrms_raw': _scrub(row, requested or EMPLOYEE_FIELDS),
         }
 
-        if existing:
-            # A row typed into the console before HRMS knew about this person
-            # is adopted rather than duplicated.
-            existing.employee_code = code
-            for k, v in fields.items():
-                setattr(existing, k, v)
-            # The founding account can never be deactivated by an upstream
-            # status change - that is how a company locks itself out.
-            if existing.is_bootstrap_superadmin:
-                existing.is_active = True
-                existing.is_superadmin = True
-            existing.save()
-            log.updated += 1
-        else:
-            PortalUser.objects.create(employee_code=code, app_access=list(DEFAULT_APPS), **fields)
-            log.created += 1
+        for key in _TRIMMABLE:
+            fields[key] = _fit(fields[key], key, code, trimmed)
+
+        # Each row writes inside its own savepoint. Whatever upstream sends,
+        # one unusable record must cost that one record and not the run: the
+        # outer transaction is already broken the moment a write fails, so
+        # without a savepoint here every row after it fails too and the
+        # rollback takes the whole directory back with it.
+        try:
+            with transaction.atomic():
+                if existing:
+                    # A row typed into the console before HRMS knew about this
+                    # person is adopted rather than duplicated.
+                    existing.employee_code = code
+                    for k, v in fields.items():
+                        setattr(existing, k, v)
+                    # The founding account can never be deactivated by an
+                    # upstream status change - that is how a company locks
+                    # itself out.
+                    if existing.is_bootstrap_superadmin:
+                        existing.is_active = True
+                        existing.is_superadmin = True
+                    existing.save()
+                    log.updated += 1
+                else:
+                    PortalUser.objects.create(employee_code=code,
+                                              app_access=list(DEFAULT_APPS), **fields)
+                    log.created += 1
+        except DatabaseError as e:
+            log.skipped_bad_row += 1
+            refused.append(f'{code} ({email}): {e}')
 
     # Someone who has left stops appearing in the feed. Their access is closed
     # rather than their record deleted, so their history stays attributable.
@@ -431,6 +478,17 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status,
     log.message = (f'{log.created} created, {log.updated} updated, '
                    f'{log.deactivated} deactivated, {log.skipped_no_email} skipped (no email), '
                    f'{log.skipped_leavers} skipped (already left).')
+    if refused:
+        log.message += ('\n\nThe database would not accept these rows, so '
+                        'they were left as they were — needs fixing in Pocket '
+                        'HRMS:\n  ' + '\n  '.join(refused[:20]))
+        if len(refused) > 20:
+            log.message += f'\n  ...and {len(refused) - 20} more.'
+    if trimmed:
+        log.message += ('\n\nLonger than the column allows, stored '
+                        'shortened:\n  ' + '\n  '.join(trimmed[:20]))
+        if len(trimmed) > 20:
+            log.message += f'\n  ...and {len(trimmed) - 20} more.'
     if clashes:
         # Named, not just counted - "1 duplicate address" is not something
         # anyone can act on; two employee codes and the address is.

@@ -102,7 +102,13 @@ class PortalUser(models.Model):
     # band, and which is currently typed into a spreadsheet by hand. Having
     # it here does not change PMS; it means the number can be checked
     # against the company's own record instead of against a re-upload.
-    grade         = models.CharField(max_length=20, blank=True)
+    #
+    # 20 characters was sized for the codes above and was wrong: it is free
+    # text in Pocket HRMS, and on 12-10-2026 somebody entered a grade that
+    # did not fit. MySQL refused the write, which ended the whole sync and
+    # froze the directory for 2,410 people. Widened to match `category`,
+    # and hrms.py now also trims anything longer rather than failing.
+    grade         = models.CharField(max_length=100, blank=True)
     # "Sales", "Factory", "Corporate" -- the broad grouping above
     # department, which HRMS calls Category.
     category      = models.CharField(max_length=100, blank=True)
@@ -321,6 +327,11 @@ class HrmsSyncLog(models.Model):
     # run. Skipped rather than allowed to overwrite; the codes are named in
     # `message` so the clash can be fixed upstream.
     skipped_duplicate_email = models.PositiveIntegerField(default=0)
+    # Rows the database itself refused -- a value that will not fit, a
+    # constraint upstream data does not respect. One of these used to end
+    # the run and roll back every other row; they are now skipped, counted
+    # and named. See hrms._write_employees.
+    skipped_bad_row = models.PositiveIntegerField(default=0)
     message     = models.TextField(blank=True)
 
     class Meta:

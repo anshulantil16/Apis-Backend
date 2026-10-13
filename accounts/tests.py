@@ -557,6 +557,66 @@ class HrmsLiveTenantQuirks(TestCase):
         self.assertIn('SL02', log.message)
         self.assertIn('shared@gmail.com', log.message)
 
+    def test_a_grade_longer_than_the_column_is_shortened_not_fatal(self):
+        """What actually happened on 12-10-2026: somebody entered a grade
+        longer than the column and MySQL refused the write, which rolled back
+        all 2,410 rows. Twice a day, until it was noticed."""
+        long_grade = 'Senior Management Grade Two (Corporate Office)'
+        self.assertGreater(len(long_grade), 20)   # the old limit
+        log = self._sync([
+            {'Code': 'E1', 'FName': 'Big Title', 'Email': 'big@apisindia.com',
+             'EmpStatus': 'Live', 'GradeString': long_grade},
+        ])
+        self.assertTrue(log.ok)
+        self.assertEqual(log.created, 1)
+        u = PortalUser.objects.get(employee_code='E1')
+        limit = PortalUser._meta.get_field('grade').max_length
+        self.assertEqual(u.grade, long_grade[:limit])
+        # Everything else about the person still updated.
+        self.assertEqual(u.name, 'Big Title')
+
+    def test_an_over_long_value_is_named_in_the_log_not_silently_cut(self):
+        log = self._sync([
+            {'Code': 'E1', 'FName': 'X', 'Email': 'x@apisindia.com', 'EmpStatus': 'Live',
+             'DesignationString': 'D' * 400},
+        ])
+        self.assertIn('E1', log.message)
+        self.assertIn('designation', log.message)
+
+    def test_one_row_the_database_refuses_does_not_cost_the_other_2409(self):
+        """The real damage was never the bad row. It was the rollback: one
+        refusal ended the transaction, so every other employee stopped being
+        updated and the directory froze on whatever it last held."""
+        from django.db import DatabaseError
+
+        real_save = PortalUser.save
+
+        def save(self, *a, **kw):
+            if self.employee_code == 'BAD':
+                raise DatabaseError("Data too long for column 'grade' at row 1")
+            return real_save(self, *a, **kw)
+
+        with mock.patch.object(PortalUser, 'save', save):
+            log = self._sync([
+                {'Code': 'E1', 'FName': 'First', 'Email': 'first@apisindia.com',
+                 'EmpStatus': 'Live'},
+                {'Code': 'BAD', 'FName': 'Trouble', 'Email': 'bad@apisindia.com',
+                 'EmpStatus': 'Live'},
+                {'Code': 'E2', 'FName': 'Third', 'Email': 'third@apisindia.com',
+                 'EmpStatus': 'Live'},
+            ])
+
+        self.assertTrue(log.ok)
+        self.assertEqual(log.skipped_bad_row, 1)
+        self.assertEqual(log.created, 2)
+        # The rows either side of the bad one are in the database.
+        self.assertTrue(PortalUser.objects.filter(employee_code='E1').exists())
+        self.assertTrue(PortalUser.objects.filter(employee_code='E2').exists())
+        self.assertFalse(PortalUser.objects.filter(employee_code='BAD').exists())
+        # And the bad row is named, so it can be fixed upstream.
+        self.assertIn('BAD', log.message)
+        self.assertIn('bad@apisindia.com', log.message)
+
     def test_a_leaver_who_already_had_an_account_is_deactivated_not_skipped(self):
         """The other half of the rule: history stays attributable for anyone
         who ever actually used the portal."""
