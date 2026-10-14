@@ -707,6 +707,16 @@ class Celebrations(TestCase):
         names = [j['name'] for j in self.get()['new_joiners']]
         self.assertEqual(names, ['Joined Recently'])
 
+    def test_the_card_reaches_back_a_month_not_a_week(self):
+        """A week is empty most weeks on a company this size, and a card that
+        is usually blank reads as broken. Checked 14-10-2026: 19 people had
+        joined in the previous month and the card showed none of them."""
+        self.person('Joined Three Weeks Ago', joined=self.today - timedelta(days=21))
+        self.person('Joined Five Weeks Ago', joined=self.today - timedelta(days=35))
+        names = [j['name'] for j in self.get()['new_joiners']]
+        self.assertIn('Joined Three Weeks Ago', names)
+        self.assertNotIn('Joined Five Weeks Ago', names)
+
     def every(self):
         return self.client.get('/api/accounts/portal/celebrations/?scope=all',
                                **self.auth).data
@@ -720,15 +730,25 @@ class Celebrations(TestCase):
         for b in self.every()['birthdays']:
             self.assertLessEqual(b['days_away'], (month_end - self.today).days)
 
-    def test_new_joiners_are_this_month_only(self):
+    def test_new_joiners_are_recent_only(self):
         """Everyone who ever joined is not a list of new joiners - it is the
         staff list in date order, which is not what the heading promises."""
-        self.person('Joined This Month', joined=date(self.today.year, self.today.month, 1))
-        self.person('Joined Last Month', joined=date(self.today.year, self.today.month, 1)
-                    - timedelta(days=1))
+        self.person('Joined Recently', joined=self.today - timedelta(days=10))
+        self.person('Joined Long Ago', joined=self.today - timedelta(days=90))
         names = [j['name'] for j in self.every()['new_joiners']]
-        self.assertIn('Joined This Month', names)
-        self.assertNotIn('Joined Last Month', names)
+        self.assertIn('Joined Recently', names)
+        self.assertNotIn('Joined Long Ago', names)
+
+    def test_view_all_never_hides_a_joiner_the_card_is_showing(self):
+        """View all ran on the calendar month while the card ran on a rolling
+        window, so for most of any month the full list held FEWER people than
+        the card beside it."""
+        self.person('Joined Before The First', joined=self.today - timedelta(days=20))
+        on_card = [j['name'] for j in self.get()['new_joiners']]
+        in_list = [j['name'] for j in self.every()['new_joiners']]
+        self.assertIn('Joined Before The First', on_card)
+        for name in on_card:
+            self.assertIn(name, in_list)
 
     def test_view_all_still_hides_leavers(self):
         """Widening the window must not widen who is in it."""

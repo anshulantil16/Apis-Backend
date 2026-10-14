@@ -729,7 +729,13 @@ class CelebrationsView(PortalAPIView):
     # about", which is a this-week question. At ~660 employees a month's worth
     # is fifty-odd names, which is a list nobody reads, not a card.
     WINDOW_DAYS = 7           # how far ahead birthdays and anniversaries look
-    JOINED_DAYS = 7           # how far back "new joiner" reaches
+    # How far back "new joiner" reaches. It was a week, to match the
+    # birthday window beside it, and on a company of ~700 a week is empty
+    # most weeks -- the card read as broken rather than quiet. Confirmed
+    # 14-10-2026: 19 people joined in the previous month and the card had
+    # been blank since the 6th, correctly and uselessly. A month is the
+    # span over which "who is new" is still worth knowing.
+    JOINED_DAYS = 30
     LIMIT = 12
 
     # ?scope=all, behind "View all", is THIS CALENDAR MONTH: today to the end
@@ -806,11 +812,17 @@ class CelebrationsView(PortalAPIView):
             people.exclude(date_of_joining=None), 'date_of_joining')
             if nxt.year - orig.year >= 1]
 
-        # This month's arrivals, newest first. Everyone who ever joined is not a
-        # list of new joiners - it is the staff list in date order, and under
-        # that heading it reads as a bug.
-        since = (date(today.year, today.month, 1) if everyone
-                 else today - timedelta(days=self.JOINED_DAYS))
+        # Recent arrivals, newest first. Everyone who ever joined is not a list
+        # of new joiners - it is the staff list in date order, and under that
+        # heading it reads as a bug.
+        #
+        # Both views use the same JOINED_DAYS window, unlike birthdays and
+        # anniversaries, which run to the month end. "View all" on a calendar
+        # month would have shown FEWER people than the card beside it for most
+        # of any month -- on the 5th the card looks back into last month and
+        # the list would have started on the 1st -- and a "View all" that
+        # hides names the card is already showing is simply wrong.
+        since = today - timedelta(days=self.JOINED_DAYS)
         joiners = [{
             **shown(u),
             'date': u.date_of_joining.strftime('%d %b').lstrip('0'),
