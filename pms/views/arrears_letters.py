@@ -27,6 +27,7 @@ from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
+from accounts.auth import SessionRequiredAPIView
 from rest_framework.views import APIView
 
 from ..arrears_letter import (ARREARS_COMPONENTS, COMPONENT_HEADERS, generate_arrears_pdf,
@@ -154,7 +155,7 @@ def _filename(letter):
     return _SAFE.sub('_', stem)[:120] + '.pdf'
 
 
-class ArrearsTemplateView(APIView):
+class ArrearsTemplateView(SessionRequiredAPIView):
     """The Excel to fill in. Built from the component list rather than typed
     out, so a new component cannot appear on the PDF and be missing here."""
 
@@ -505,7 +506,7 @@ def _process_batch(rows, batch_id, send_emails, blob=b''):
         connections.close_all()
 
 
-class ArrearsUploadView(APIView):
+class ArrearsUploadView(SessionRequiredAPIView):
     """Read the sheet now, generate in the background, hand back a batch id."""
     parser_classes = (MultiPartParser, FormParser)
 
@@ -603,7 +604,7 @@ class ArrearsUploadView(APIView):
                          'problems': problems[:50]})
 
 
-class ArrearsBatchStatusView(APIView):
+class ArrearsBatchStatusView(SessionRequiredAPIView):
     """Polled by the progress bar while the thread works."""
 
     # The worker saves the batch after every single row, so updated_at is a
@@ -638,7 +639,7 @@ class ArrearsBatchStatusView(APIView):
         })
 
 
-class ArrearsPDFView(APIView):
+class ArrearsPDFView(SessionRequiredAPIView):
     """One statement, by id."""
 
     def get(self, request, letter_id):
@@ -658,7 +659,7 @@ class ArrearsPDFView(APIView):
         return resp
 
 
-class ArrearsDownloadAllView(APIView):
+class ArrearsDownloadAllView(SessionRequiredAPIView):
     """Every statement in a batch, as one zip."""
 
     def get(self, request):
@@ -708,7 +709,7 @@ class ArrearsDownloadAllView(APIView):
         return resp
 
 
-class ArrearsHistoryView(APIView):
+class ArrearsHistoryView(SessionRequiredAPIView):
     """What has been generated, newest first - and the way to clear it out."""
 
     def get(self, request):

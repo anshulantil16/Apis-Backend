@@ -9,6 +9,7 @@ import re
 import secrets
 import openpyxl
 from django.core.cache import cache
+from accounts.auth import SessionRequiredAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -17,7 +18,7 @@ from ..models import (PMSEmployee, PMSAuditLog, PMSSettings, OfferLetter,
 
 from .common import _clip_to_field
 
-class OfferLetterTemplateView(APIView):
+class OfferLetterTemplateView(SessionRequiredAPIView):
     """Generate Excel template for Offer Letter upload."""
 
     def get(self, request):
@@ -292,7 +293,7 @@ def _process_offer_batch(rows, batch_id, send_emails):
         connections.close_all()  # release this thread's DB connections
 
 
-class OfferLetterUploadView(APIView):
+class OfferLetterUploadView(SessionRequiredAPIView):
     """Parse the uploaded Excel instantly, then generate letters in a background
     thread. Returns a batch_id the UI polls for progress — scales to 500-1000+."""
     parser_classes = (MultiPartParser, FormParser)
@@ -529,7 +530,7 @@ def _letter_filename(offer):
     return f"{safe_code}_PMS {fy}.pdf"
 
 
-class OfferLetterPDFView(APIView):
+class OfferLetterPDFView(SessionRequiredAPIView):
     """Download/view a generated offer-letter PDF."""
     def get(self, request, offer_letter_id):
         from django.http import FileResponse
@@ -543,7 +544,7 @@ class OfferLetterPDFView(APIView):
                             filename=_letter_filename(offer))
 
 
-class OfferLetterDownloadAllView(APIView):
+class OfferLetterDownloadAllView(SessionRequiredAPIView):
     """Bulk-download every (optionally filtered) stored letter as one ZIP,
     each PDF named via _letter_filename() for easy searching once archived."""
     def get(self, request):
@@ -593,7 +594,7 @@ class OfferLetterDownloadAllView(APIView):
         return resp
 
 
-class OfferLetterBatchStatusView(APIView):
+class OfferLetterBatchStatusView(SessionRequiredAPIView):
     """Poll bulk-generation progress. Returns live counts while running and the
     per-letter results once completed."""
     def get(self, request, batch_id):
@@ -636,7 +637,7 @@ class OfferLetterBatchStatusView(APIView):
         return Response(data)
 
 
-class OfferLetterHistoryView(APIView):
+class OfferLetterHistoryView(SessionRequiredAPIView):
     """Persistent dashboard of every generated letter — survives page refresh,
     unlike the in-memory batch-results view which resets once you navigate
     away. Every letter that OfferLetterUploadView ever queued lives in the

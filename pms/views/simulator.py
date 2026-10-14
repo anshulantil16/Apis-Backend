@@ -9,6 +9,7 @@ import re
 import secrets
 import openpyxl
 from django.core.cache import cache
+from accounts.auth import SessionRequiredAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -364,7 +365,7 @@ def build_summary(employees):
     return result
 
 
-class PMSListView(APIView):
+class PMSListView(SessionRequiredAPIView):
     def get(self, request):
         employees = list(PMSEmployee.objects.all())
         return Response({'employees': [serialize_emp(e) for e in employees], 'summary': build_summary(employees)})
@@ -383,7 +384,7 @@ class PMSListView(APIView):
         return Response({'message': 'All PMS data cleared.'})
 
 
-class PMSImportView(APIView):
+class PMSImportView(SessionRequiredAPIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
@@ -694,7 +695,7 @@ class PMSImportView(APIView):
         })
 
 
-class PMSEmployeeUpdateView(APIView):
+class PMSEmployeeUpdateView(SessionRequiredAPIView):
     def patch(self, request, emp_id):
         try:
             emp = PMSEmployee.objects.get(id=emp_id)
@@ -773,7 +774,7 @@ class PMSEmployeeUpdateView(APIView):
         return Response(serialize_emp(emp))
 
 
-class PMSSettingsView(APIView):
+class PMSSettingsView(SessionRequiredAPIView):
     """Get / set company-wide PMS settings (currently the single Management Score)."""
     def get(self, request):
         s = PMSSettings.get_solo()
@@ -795,7 +796,7 @@ class PMSSettingsView(APIView):
         })
 
 
-class PMSTemplateView(APIView):
+class PMSTemplateView(SessionRequiredAPIView):
     def get(self, request):
         from django.http import HttpResponse
         from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -913,7 +914,7 @@ class PMSTemplateView(APIView):
         return resp
 
 
-class PMSExportView(APIView):
+class PMSExportView(SessionRequiredAPIView):
     """Complete appraisal-finalization workbook: full per-employee detail + org summary."""
     def get(self, request):
         from django.http import HttpResponse

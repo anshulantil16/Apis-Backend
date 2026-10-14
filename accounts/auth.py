@@ -9,6 +9,8 @@ vacancies, referrals, tada and sales.
 Nothing here decides *what* a user may do beyond the superadmin flag; per-tool
 access still comes from PortalUser.can_open.
 """
+from rest_framework import status
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -126,3 +128,39 @@ class PortalScopedAPIView(APIView):
     """
     authentication_classes = []
     permission_classes = []
+
+
+class SessionRequiredAPIView(PortalScopedAPIView):
+    """Base for endpoints that must not answer anyone who is not signed in.
+
+    PortalScopedAPIView turns DRF's own authentication off and leaves each
+    view to check for itself. That is right for endpoints with a rule of
+    their own -- "approved documents to everyone, pending ones to their
+    uploader" -- and wrong as a default, because a view that simply forgets
+    to check answers the whole world. On 14-10-2026 a sweep of the live site
+    with no session at all found 40 endpoints answering 200, among them the
+    full PMS employee table: 317 people with four years of CTC, their
+    increment amounts and their new CTC, plus the same as a spreadsheet.
+
+    Inheriting this instead moves the default the other way: no valid portal
+    session, no answer, and a view has to opt out deliberately to be public.
+    It says nothing about WHAT the caller may see -- a view that shows one
+    person's data still has to check it is their data. It only settles that
+    there is a caller.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        # Answered here rather than by raising NotAuthenticated, which DRF
+        # turns into 403 when no authentication class is installed -- and
+        # these views install none on purpose (see PortalScopedAPIView).
+        # The rest of the portal answers 401 for "not signed in", and the
+        # frontend drops a dead token when it sees one; a 403 would leave it
+        # retrying with a token that will never work again.
+        if current_session(self.initialize_request(request, *args, **kwargs)) is None:
+            r = Response({'error': 'Sign in to the intranet to use this.'},
+                         status=status.HTTP_401_UNAUTHORIZED)
+            r.accepted_renderer = JSONRenderer()
+            r.accepted_media_type = 'application/json'
+            r.renderer_context = {}
+            return r.render()
+        return super().dispatch(request, *args, **kwargs)

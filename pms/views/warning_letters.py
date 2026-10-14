@@ -9,6 +9,7 @@ import re
 import secrets
 import openpyxl
 from django.core.cache import cache
+from accounts.auth import SessionRequiredAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -252,7 +253,7 @@ def _process_warning_batch(rows, batch_id, send_emails):
         connections.close_all()
 
 
-class WarningLetterTemplateView(APIView):
+class WarningLetterTemplateView(SessionRequiredAPIView):
     """Excel template for bulk warning letters."""
 
     def get(self, request):
@@ -337,7 +338,7 @@ class WarningLetterTemplateView(APIView):
         return resp
 
 
-class WarningLetterCreateView(APIView):
+class WarningLetterCreateView(SessionRequiredAPIView):
     """Create + generate a SINGLE warning letter from the on-screen form.
     Runs inline (one letter is fast) and returns the outcome immediately."""
 
@@ -439,7 +440,7 @@ class WarningLetterCreateView(APIView):
         }, status=200 if generated else 500)
 
 
-class WarningLetterUploadView(APIView):
+class WarningLetterUploadView(SessionRequiredAPIView):
     """Bulk warning letters from Excel — parses instantly, generates in a
     background thread, returns a batch_id the UI polls."""
     parser_classes = (MultiPartParser, FormParser)
@@ -634,7 +635,7 @@ class WarningLetterUploadView(APIView):
         })
 
 
-class WarningLetterBatchStatusView(APIView):
+class WarningLetterBatchStatusView(SessionRequiredAPIView):
     """Poll bulk warning-letter progress."""
 
     def get(self, request, batch_id):
@@ -673,7 +674,7 @@ class WarningLetterBatchStatusView(APIView):
         return Response(data)
 
 
-class WarningLetterPDFView(APIView):
+class WarningLetterPDFView(SessionRequiredAPIView):
     """Download/view a generated warning-letter PDF."""
 
     def get(self, request, warning_letter_id):
@@ -688,7 +689,7 @@ class WarningLetterPDFView(APIView):
                             filename=_warning_filename(w))
 
 
-class WarningLetterDownloadAllView(APIView):
+class WarningLetterDownloadAllView(SessionRequiredAPIView):
     """Bulk-download every (optionally filtered) warning letter as one ZIP."""
 
     def get(self, request):
@@ -739,7 +740,7 @@ class WarningLetterDownloadAllView(APIView):
         return resp
 
 
-class WarningLetterHistoryView(APIView):
+class WarningLetterHistoryView(SessionRequiredAPIView):
     """Persistent dashboard of every warning letter issued."""
 
     def get(self, request):

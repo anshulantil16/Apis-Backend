@@ -1,5 +1,22 @@
 import io
-from django.test import TestCase
+from django.test import Client, TestCase
+
+from accounts.models import PortalSession, PortalUser
+
+
+def signed_in():
+    """A client carrying a portal session.
+
+    Every PMS endpoint but the login now requires one: this table holds four
+    years of everybody's CTC, and before 14-10-2026 it answered anyone at
+    all. See accounts.auth.SessionRequiredAPIView.
+    """
+    user, _ = PortalUser.objects.get_or_create(
+        employee_code='TEST-PMS',
+        defaults={'email': 'pms-tests@apisindia.com', 'name': 'PMS Tests'})
+    c = Client()
+    c.defaults['HTTP_AUTHORIZATION'] = f'Bearer {PortalSession.start(user)}'
+    return c
 
 # Create your tests here.
 
@@ -193,7 +210,7 @@ class ArrearsStructure(TestCase):
         import io, openpyxl
         from django.test import Client
         wb = openpyxl.load_workbook(
-            io.BytesIO(Client().get('/api/pms/arrears/template/').content))
+            io.BytesIO(signed_in().get('/api/pms/arrears/template/').content))
         self.assertEqual(wb.sheetnames, ['Arrears', 'Master', 'Monthly'])
         heads = [c.value for c in wb['Monthly'][1]]
         self.assertEqual(heads[:3], ['Employee ID *', 'Month *', 'Present Days'])
@@ -219,7 +236,7 @@ class ArrearsStructure(TestCase):
 
         b = ArrearsLetterBatch.objects.create(batch_id='B-STALL', total=10,
                                               processed=3, status='running')
-        c = Client()
+        c = signed_in()
         self.assertEqual(c.get('/api/pms/arrears/batch/B-STALL/').data['status'], 'running')
 
         # auto_now would overwrite a normal save, so move the heartbeat directly
@@ -240,7 +257,7 @@ class ArrearsStructure(TestCase):
         ArrearsLetter.objects.bulk_create([
             ArrearsLetter(employee_code=f'E{i:04d}', employee_name=f'Person {i}',
                           status='generated') for i in range(540)])
-        c = Client()
+        c = signed_in()
         d = c.get('/api/pms/arrears/history/').data
         self.assertEqual(d['total'], 540)
         self.assertEqual(d['returned'], 500)
@@ -262,7 +279,7 @@ class ArrearsStructure(TestCase):
         example you must remember to delete is a trap."""
         import io, openpyxl
         from django.test import Client
-        c = Client()
+        c = signed_in()
         wb = openpyxl.load_workbook(io.BytesIO(c.get('/api/pms/arrears/template/').content))
         codes = [r[1] for r in wb.active.iter_rows(min_row=2, values_only=True)]
         self.assertTrue(any(str(x).startswith('SAMPLE-') for x in codes))
@@ -310,7 +327,7 @@ class MonthsExcelTurnedIntoDates(TestCase):
         import openpyxl
         from pms.views.arrears_letters import MONTHLY_SHEET
 
-        r = self.client.get('/api/pms/arrears/template/')
+        r = signed_in().get('/api/pms/arrears/template/')
         self.assertEqual(r.status_code, 200)
         wb = openpyxl.load_workbook(io.BytesIO(r.content))
         sh = wb[MONTHLY_SHEET]
@@ -358,7 +375,7 @@ class TheReDesignationColumn(TestCase):
         buf.seek(0)
         buf.name = 'increments.xlsx'
         from django.test import Client
-        return Client().post('/api/pms/import/', {'file': buf})
+        return signed_in().post('/api/pms/import/', {'file': buf})
 
     def test_a_title_in_that_column_is_kept_as_the_new_designation(self):
         from pms.models import PMSEmployee
@@ -387,3 +404,43 @@ class TheReDesignationColumn(TestCase):
         e = PMSEmployee.objects.get(employee_id='E1')
         self.assertEqual(e.new_designation, 'Area Manager')
         self.assertFalse(e.redesignation)
+
+
+class NobodySignedInSeesNothing(TestCase):
+    """PMS holds four years of every employee's CTC, their increment amounts
+    and their new CTC.
+
+    On 14-10-2026 a sweep of the live site carrying no session at all found
+    /api/pms/employees/ answering 200 with all 317 of them, and
+    /api/pms/export/ handing over the same as a spreadsheet. The views were
+    plain DRF APIViews, and DRF with no default permission class allows
+    everyone. Nothing had gone wrong; nothing had ever been asked.
+    """
+
+    OPEN_TO_ALL = ['/api/pms/login/']
+
+    def test_every_pms_endpoint_refuses_an_anonymous_caller(self):
+        from django.urls import get_resolver
+        paths = ['/api/pms/' + str(e.pattern) for e in
+                 get_resolver().url_patterns
+                 if getattr(e, 'app_name', None) is None and 'pms' in str(e.pattern)
+                 for e in getattr(e, 'url_patterns', [])]
+        checked = [p for p in paths if '<' not in p and p not in self.OPEN_TO_ALL]
+        self.assertGreater(len(checked), 10, 'the url list did not resolve')
+        for path in checked:
+            with self.subTest(path=path):
+                self.assertEqual(Client().get(path).status_code, 401, path)
+
+    def test_the_salary_table_and_its_export_are_both_shut(self):
+        for path in ('/api/pms/employees/', '/api/pms/export/'):
+            r = Client().get(path)
+            self.assertEqual(r.status_code, 401, path)
+            self.assertNotIn(b'current_ctc', r.content)
+
+    def test_signing_in_still_opens_them(self):
+        """The gate must stop strangers, not the people who use this daily."""
+        self.assertEqual(signed_in().get('/api/pms/employees/').status_code, 200)
+
+    def test_the_login_endpoint_stays_open(self):
+        """Gating the way in locks everybody out of everything."""
+        self.assertNotEqual(Client().post('/api/pms/login/', {}).status_code, 401)
