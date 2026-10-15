@@ -975,3 +975,84 @@ class YourOwnProfile(TestCase):
 
     def test_it_is_not_public(self):
         self.assertEqual(self.client.get('/api/accounts/portal/profile/').status_code, 401)
+
+
+class WhatTheFilteredEndpointGivesUs(TestCase):
+    """Pocket HRMS's answers of 15-10-2026, each one a thing we had wrong.
+
+    Three columns we had written off as "not available on this tenant" were
+    only missing because of how we were asking, and a duplicate we had been
+    working around in code was only there because we asked for the whole
+    history instead of today's staff.
+    """
+
+    def test_the_grade_arrives_under_a_name_we_were_not_reading(self):
+        """GRADE on the filtered endpoint, with the value in it -- no String
+        partner. We were reading GradeString, which that endpoint does not
+        send, so every grade came through empty."""
+        from accounts.services import hrms
+        self.assertEqual(hrms._grade({'GRADE': '05'}), '05')
+        self.assertEqual(hrms._grade({'GRADE': 'M4'}), 'M4')
+        # The old endpoint's spelling still works, so switching back cannot
+        # silently empty a column PMS reads.
+        self.assertEqual(hrms._grade({'GradeString': 'O2'}), 'O2')
+        self.assertEqual(hrms._grade({}), '')
+
+    def test_the_reporting_manager_is_split_into_a_code_and_a_name(self):
+        """It arrives as one string: "(HO0235)Pankaj Tripathi". The code is
+        what joins a person to their manager; the name is what a screen
+        shows; the string holding both is no use for either."""
+        from accounts.services import hrms
+        self.assertEqual(hrms._manager({'PocketReportingManager': '(HO0235)Pankaj Tripathi'}),
+                         ('HO0235', 'Pankaj Tripathi'))
+        # Mapped to nobody: empty, not a stray bracket.
+        self.assertEqual(hrms._manager({'PocketReportingManager': ''}), ('', ''))
+        self.assertEqual(hrms._manager({}), ('', ''))
+        # A name with no code is kept as a name rather than thrown away.
+        self.assertEqual(hrms._manager({'PocketReportingManager': 'Pankaj Tripathi'}),
+                         ('', 'Pankaj Tripathi'))
+
+    def test_the_sync_asks_for_current_staff_and_stores_both_halves(self):
+        from accounts.services import hrms
+        with mock.patch('accounts.services.hrms.fetch_all') as fetch:
+            fetch.return_value = [{
+                'Code': 'HO0149', 'FName': 'Kanchan Juneja', 'EmpStatus': 'Live',
+                'Email': 'kanchan@apisindia.com', 'GRADE': '05',
+                'PocketReportingManager': '(HO0235)Pankaj Tripathi',
+            }]
+            hrms.sync_employees(triggered_by='test')
+        # Asked for Active only, which is what leaves the separated record out.
+        self.assertEqual(fetch.call_args.kwargs['emp_status'], hrms.ACTIVE_ONLY)
+        u = PortalUser.objects.get(employee_code='HO0149')
+        self.assertEqual(u.grade, '05')
+        self.assertEqual(u.reporting_manager_code, 'HO0235')
+        self.assertEqual(u.reporting_manager_name, 'Pankaj Tripathi')
+
+    def test_a_short_feed_cannot_switch_off_the_company(self):
+        """Asking for Active only means the list IS the staff list, so anyone
+        absent has left -- which is right, and is also exactly what half an
+        answer from upstream looks like."""
+        from accounts.services import hrms
+        for i in range(20):
+            PortalUser.objects.create(employee_code=f'E{i}', email=f'e{i}@apisindia.com',
+                                      name=f'Person {i}', from_hrms=True, is_active=True)
+        with mock.patch('accounts.services.hrms.fetch_all') as fetch:
+            fetch.return_value = [{'Code': 'E0', 'FName': 'Person 0', 'EmpStatus': 'Live',
+                                   'Email': 'e0@apisindia.com'}]
+            log = hrms.sync_employees(triggered_by='test')
+        self.assertEqual(log.deactivated, 0)
+        self.assertEqual(PortalUser.objects.filter(is_active=True).count(), 20)
+        self.assertIn('Refused to deactivate', log.message)
+
+    def test_real_leavers_are_still_switched_off(self):
+        """The ceiling must not become a reason nobody is ever deactivated."""
+        from accounts.services import hrms
+        for i in range(20):
+            PortalUser.objects.create(employee_code=f'E{i}', email=f'e{i}@apisindia.com',
+                                      name=f'Person {i}', from_hrms=True, is_active=True)
+        rows = [{'Code': f'E{i}', 'FName': f'Person {i}', 'EmpStatus': 'Live',
+                 'Email': f'e{i}@apisindia.com'} for i in range(19)]
+        with mock.patch('accounts.services.hrms.fetch_all', return_value=rows):
+            log = hrms.sync_employees(triggered_by='test')
+        self.assertEqual(log.deactivated, 1)
+        self.assertFalse(PortalUser.objects.get(employee_code='E19').is_active)

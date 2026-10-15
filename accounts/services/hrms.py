@@ -41,6 +41,7 @@ requested anyway, so the day HR fills them in this starts working on its own.
 
 Employee master data is read-only to us. Nothing in this module writes back.
 """
+import re
 from datetime import date, datetime
 
 import requests
@@ -63,19 +64,44 @@ _DEFAULT_FIELDS = [
     'Department', 'DepartmentString',
     'Designation', 'DesignationString',
     'Location', 'LocationString',
-    'Grade', 'GradeString',
+    # GRADE, not Grade/GradeString. On the filtered endpoint the cadre code
+    # arrives under this name and carries the value itself -- "05", "M4" --
+    # with no String partner. Both spellings are asked for and both are read,
+    # so neither endpoint loses it.
+    'GRADE', 'Grade', 'GradeString',
     'Category', 'CategoryString',
-    # Empty on this tenant today, requested so it starts working by itself if
-    # HR ever fills the reporting line in. See the module docstring.
+    # Now populated, where it was empty for all 2,365 employees until their
+    # support fixed it on 15-10-2026. The value is "(HO0235)Pankaj Tripathi"
+    # -- code and name in one string. See _manager.
     'PocketReportingManager', 'POCKETREPORTINGMANAGERstring',
     'EmpStatus', 'DateOfJoining', 'DateOfBirth',
     'OfficeMobileNo', 'PersonalMobileNo',
 ]
 
+# Which endpoint. "...filtered" is not a tidier version of the other one: it
+# is the only one that answers with GRADE and PocketReportingManager at all.
+# On GetEmployeeMaster both come back missing however they are asked for,
+# which read for months like "this tenant does not have that data". Their
+# support told us the difference on 15-10-2026. Overridable in case they
+# rename it again.
+EMPLOYEE_PATH = '/api/EmployeeMaster/GetEmployeeMasterfiltered'
+
 # The one EmpStatus that means "works here today". Everything else - the
 # resignations, separations, suspensions, terminations - is a former employee
 # and must not get a working portal login.
 ACTIVE_EMP_STATUS = 'live'
+
+# What to send as the EmpStatus header to be given only current staff.
+#
+# On the old endpoint this header did nothing: Live, ALL and A all returned
+# the complete history, so the filtering had to happen here. On the filtered
+# endpoint it works, and it solves something our own code could not. The feed
+# carries a rehired person twice, under their old code and their new one, and
+# nothing in either row says which is current -- that is why Kanchan Juneja
+# appeared as both HO0080 and HO0149, and Gopa Chakraborty as AONE30 and
+# HO0175. Asked for Active only, the separated record is simply not there,
+# and the code that comes back is the one that is current today.
+ACTIVE_ONLY = 'Active'
 
 
 def _configured_fields():
@@ -90,6 +116,10 @@ def _configured_fields():
 # import, same as every other Django setting - change POCKET_HRMS_EMPLOYEE_
 # FIELDS in .env and restart the process, same as any other config change.
 EMPLOYEE_FIELDS = _configured_fields()
+
+# The share of the directory one sync may switch off before it refuses. See
+# the deactivation step in _write_employees.
+DEACTIVATION_CEILING = 0.10
 
 PAGE_SIZE = 200          # tuned down if the API starts timing out
 MAX_PAGES = 100          # a stop, so a paging bug cannot loop forever
@@ -138,13 +168,14 @@ def fetch_page(take=PAGE_SIZE, offset=FIRST_OFFSET, emp_status='ALL', modified_s
     almost every VALUE, so it is only good for discovery.
     """
     base = _cfg('POCKET_HRMS_BASE_URL', 'https://api.pockethrms.com').rstrip('/')
+    path = _cfg('POCKET_HRMS_EMPLOYEE_PATH', EMPLOYEE_PATH)
     extra = {'Take': str(take), 'OffSet': str(offset), 'EmpStatus': emp_status}
     if modified_since:
         # The range format the API actually wants - see the module docstring.
         extra['ModifiedDate'] = '%s - %s' % (
             modified_since.strftime('%d/%m/%Y'), date.today().strftime('%d/%m/%Y'))
     try:
-        r = requests.get(f'{base}/api/EmployeeMaster/GetEmployeeMaster',
+        r = requests.get(f'{base}{path}',
                          headers=_headers(extra, fields=fields), timeout=60)
     except requests.RequestException as e:
         raise HrmsError(f'Could not reach Pocket HRMS: {e}') from e
@@ -218,6 +249,38 @@ def _resolved(row, base, string_name=None):
     looks like data and reads like nonsense on the screen.
     """
     return _pick(row, string_name or f'{base}String')
+
+
+def _manager(row):
+    """-> (code, name) of this person's reporting manager.
+
+    The feed sends one string with both in it: "(HO0235)Pankaj Tripathi".
+    Split rather than stored whole, because the code is what joins a person
+    to their manager's record and the name is what a screen shows -- and a
+    string holding both is useless for either without doing this first.
+
+    Anything that does not match the shape is kept as the name with no code,
+    which is the honest reading of "we were given something, but not an
+    employee code".
+    """
+    raw = _pick(row, 'PocketReportingManager', 'POCKETREPORTINGMANAGERstring',
+                'ReportingManager', 'ManagerNames')
+    if not raw:
+        return '', ''
+    m = re.match(r'^\s*\(([^)]+)\)\s*(.*)$', raw)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return '', raw.strip()
+
+
+def _grade(row):
+    """-> the cadre code: "05", "M4", "O2".
+
+    GRADE on the filtered endpoint, Grade/GradeString on the old one. Read
+    from whichever is there so a change of endpoint cannot silently empty a
+    column that PMS reads.
+    """
+    return _pick(row, 'GRADE', 'Grade', 'GradeString')
 
 
 def _date(row, *names):
@@ -315,7 +378,7 @@ def _fit(value, field, code, trimmed):
     return value
 
 
-def sync_employees(triggered_by='', emp_status='ALL', modified_since=None,
+def sync_employees(triggered_by='', emp_status=ACTIVE_ONLY, modified_since=None,
                    deactivate_missing=True, fields=EMPLOYEE_FIELDS):
     """Pull the employee master into PortalUser rows.
 
@@ -410,11 +473,11 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status,
             'designation': _resolved(row, 'Designation'),
             'department': _resolved(row, 'Department'),
             'location': _resolved(row, 'Location'),
-            'reporting_manager_code': _resolved(row, 'PocketReportingManager',
-                                                'POCKETREPORTINGMANAGERstring'),
+            'reporting_manager_code': _manager(row)[0],
+            'reporting_manager_name': _manager(row)[1],
             'date_of_birth': _date(row, 'DateOfBirth'),
             'date_of_joining': _date(row, 'DateOfJoining'),
-            'grade': _resolved(row, 'Grade'),
+            'grade': _grade(row),
             'category': _resolved(row, 'Category'),
             'office_mobile': _pick(row, 'OfficeMobileNo'),
             'hrms_id': _pick(row, 'Id'),
@@ -465,17 +528,36 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status,
     # rather than their record deleted, so their history stays attributable.
     # Only ever applied to rows HRMS owns, and only on a full sync - a filtered
     # or incremental pull is not evidence that anyone left.
-    if deactivate_missing and seen_codes and not modified_since and emp_status == 'ALL':
+    if deactivate_missing and seen_codes and not modified_since and emp_status in ('ALL', ACTIVE_ONLY):
         gone = (PortalUser.objects
                 .filter(from_hrms=True, is_active=True)
                 .exclude(employee_code__in=seen_codes)
                 .exclude(is_superadmin=True)
                 .exclude(email__iexact=SUPERADMIN_BOOTSTRAP_EMAIL))
-        log.deactivated = gone.count()
-        gone.update(is_active=False)
+        # A short feed must not be read as a redundancy. Asking for Active
+        # employees only means the list IS the staff list, so anyone absent
+        # from it has left -- which is right, and is also exactly what a half
+        # answer from upstream looks like. A bad page, a filter they change
+        # again, a timeout mid-walk, and a few hundred people lose their
+        # login at once. Past this share it stops and says so instead; a sync
+        # that deactivates nobody is a morning's annoyance, one that
+        # deactivates everybody is a day of the company locked out.
+        standing = PortalUser.objects.filter(from_hrms=True, is_active=True).count()
+        count = gone.count()
+        if standing and count > standing * DEACTIVATION_CEILING:
+            log.message_prefix = (
+                f'Refused to deactivate {count} of {standing} people: that is more '
+                f'than {int(DEACTIVATION_CEILING * 100)}% of the directory in one run, '
+                f'which looks like a short answer from Pocket HRMS rather than that '
+                f'many leavers. Nobody was deactivated. Check the feed, then re-run.')
+        else:
+            log.deactivated = count
+            gone.update(is_active=False)
 
     log.ok, log.finished_at = True, timezone.now()
-    log.message = (f'{log.created} created, {log.updated} updated, '
+    prefix = getattr(log, 'message_prefix', '')
+    log.message = (prefix + '\n\n') if prefix else ''
+    log.message += (f'{log.created} created, {log.updated} updated, '
                    f'{log.deactivated} deactivated, {log.skipped_no_email} skipped (no email), '
                    f'{log.skipped_leavers} skipped (already left).')
     if refused:

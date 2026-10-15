@@ -92,7 +92,13 @@ class PortalUser(models.Model):
     designation   = models.CharField(max_length=200, blank=True)
     department    = models.CharField(max_length=200, blank=True)
     location      = models.CharField(max_length=200, blank=True)
+    # Who this person reports to. Pocket HRMS sends both in one string --
+    # "(HO0235)Pankaj Tripathi" -- so they are split on the way in: the code
+    # is what joins a person to their manager's record, the name is what a
+    # screen shows, and the string holding both is no use for either. Empty
+    # for everybody until their support populated the column on 15-10-2026.
     reporting_manager_code = models.CharField(max_length=50, blank=True)
+    reporting_manager_name = models.CharField(max_length=200, blank=True)
 
     # Already requested from HRMS and already arriving on every row; they
     # were being dropped on the floor.
