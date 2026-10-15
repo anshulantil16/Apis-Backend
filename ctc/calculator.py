@@ -289,7 +289,9 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     reimbursements = [{**_line(label, amount), 'key': key} for key, label, amount in reimb]
     benefits = [
         _line('Employer PF Contribution', pf,
-              f'{rules.PF_PERCENT}% of Basic (wages capped at Rs {s.pf_wage_ceiling:,})'),
+              f'{rules.PF_PERCENT}% of Basic' if basic <= s.pf_wage_ceiling else
+              f'Capped at Rs {_r(s.pf_wage_ceiling * rules.PF_PERCENT / 100):,} '
+              f'(Basic above Rs {s.pf_wage_ceiling:,})'),
         _line('Employer ESI Contribution', esi,
               f'{rules.ESI_PERCENT}% of Gross Salary' if small else 'Not applicable'),
         _line('Mediclaim Charges', med, f'Grade {grade}' if grade else ''),

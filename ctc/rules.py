@@ -26,6 +26,7 @@ BASIC_PERCENT = 50                       # of Gross Salary, or the state minimum
 HRA_PERCENT = {'D': 50, 'C': 50, 'M': 50, 'O': 50, 'W': 20}   # of Basic
 
 PF_PERCENT = 12                          # employer, of Basic up to the PF wage ceiling
+                                         # (Rs 25,000 -> PF never above Rs 3,000)
 ESI_PERCENT = 3.25                       # employer, of gross salary — small salaries only
 BONUS_PERCENT = 8.33                     # statutory, of Basic — small salaries only
 

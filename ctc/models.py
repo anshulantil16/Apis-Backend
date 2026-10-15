@@ -93,7 +93,8 @@ class CtcSettings(models.Model):
     d_driver = models.PositiveIntegerField(default=0, help_text='Driver, per month, cadre D')
     d_health = models.PositiveIntegerField(default=0, help_text='Health & wellness, per month, cadre D')
 
-    pf_wage_ceiling = models.PositiveIntegerField(default=15000, help_text='PF wage ceiling per month')
+    pf_wage_ceiling = models.PositiveIntegerField(
+        default=25000, help_text='PF wage ceiling per month (12% of Basic up to this; Rs 3,000 at 25,000)')
     esi_bonus_gross_limit = models.PositiveIntegerField(
         default=21000, help_text='ESI and Statutory Bonus apply up to this gross per month')
 

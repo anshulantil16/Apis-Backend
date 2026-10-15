@@ -223,7 +223,7 @@ class Calculator(TestCase):
 
     def test_components_add_up_to_the_ctc(self):
         for ctc, cadre, grade, cat, loc in [(1200000, 'M', 'M1', 'Sales', 'Delhi HO'),
-                                            (330000, 'O', 'O3', 'Plant', 'Delhi'),
+                                            (345000, 'O', 'O3', 'Plant', 'Delhi'),
                                             (300000, 'O', 'O3', 'Plant', 'Roorkee'),
                                             (3500000, 'C', 'C2', 'HO', 'Mumbai'),
                                             (180000, 'W', 'W2', 'Plant', 'Rajasthan'),
@@ -290,8 +290,16 @@ class Calculator(TestCase):
     def test_pf_is_capped_and_mediclaim_follows_grade(self):
         b = {x['label']: x['monthly'] for x in self.calc(ctc_annual=3500000, cadre='C', grade='C2',
                                                           category='HO')['benefits']}
-        self.assertEqual(b['Employer PF Contribution'], 1800)
+        self.assertEqual(b['Employer PF Contribution'], 3000)     # Basic > 25,000 -> capped
         self.assertEqual(b['Mediclaim Charges'], 950)
+
+    def test_pf_is_12_percent_of_basic_below_25000(self):
+        b = self.calc(ctc_annual=420000, cadre='O', grade='O3', category='Plant',
+                      work_location='Uttar Pradesh')
+        basic = next(x['monthly'] for x in b['earnings'] if x['label'].startswith('Basic'))
+        pf = next(x['monthly'] for x in b['benefits'] if x['label'] == 'Employer PF Contribution')
+        self.assertLess(basic, 25000)
+        self.assertEqual(pf, round(basic * 0.12))
 
     def test_full_slab_reimbursements_and_special_takes_the_balance(self):
         from .rules import REIMBURSEMENTS
@@ -319,9 +327,9 @@ class Calculator(TestCase):
             self.assertEqual(state_for(typed), state, typed)
 
     def test_basic_never_below_the_state_minimum_wage(self):
-        # Rs 3.3 lakh in Delhi: half of gross is well under Delhi's Rs 22,500, so
+        # Rs 3.45 lakh in Delhi: half of gross is well under Delhi's Rs 22,500, so
         # Basic is lifted to it and HRA shrinks to fit.
-        b = self.calc(ctc_annual=330000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
+        b = self.calc(ctc_annual=345000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
         basic, hra = b['earnings'][0], b['earnings'][1]
         self.assertEqual(basic['monthly'], 22500)
         self.assertIn('Minimum wage, Delhi', basic['note'])
