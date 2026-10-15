@@ -53,6 +53,8 @@ class CtcCandidate(models.Model):
     designation    = models.CharField(max_length=120, blank=True)
     grade          = models.CharField(max_length=40, blank=True)
     cadre          = models.CharField(max_length=60, blank=True)
+    # Sets the Child Education Allowance (rules.CEA_PER_CHILD).
+    number_of_children = models.PositiveSmallIntegerField(default=0)
     date_of_joining = models.DateField(null=True, blank=True)
     work_location  = models.CharField(max_length=120, blank=True)
     # Annual CTC in rupees, as offered.

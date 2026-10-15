@@ -135,6 +135,13 @@ def parse(fileobj):
                     errors.append(f'Row {n}: CTC {ctc_text} is outside the expected range.')
                 else:
                     row['ctc'] = amount.quantize(Decimal('0.01'))
+            kids_text, row['number_of_children'] = row['number_of_children'], 0
+            if kids_text:
+                if kids_text.isdigit() and int(kids_text) <= 20:
+                    row['number_of_children'] = int(kids_text)
+                else:
+                    errors.append(f'Row {n}: Number of Children "{kids_text}" should be a whole number '
+                                  'such as 0, 1 or 2.')
             doj_text, row['date_of_joining'] = row['date_of_joining'], None
             if doj_text:
                 row['date_of_joining'] = _date(raw['date_of_joining'])
@@ -142,7 +149,7 @@ def parse(fileobj):
                     errors.append(f'Row {n}: Date of Joining "{doj_text}" is not a date '
                                   '(write it like 01-07-2026).')
             for field, value in row.items():
-                if field in ('ctc', 'date_of_joining'):
+                if field in ('ctc', 'date_of_joining', 'number_of_children'):
                     continue
                 if len(value) > MAX_LENGTH[field]:
                     heading = next(h for h, f, *_ in COLUMNS if f == field)

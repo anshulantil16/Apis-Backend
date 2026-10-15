@@ -32,7 +32,9 @@ BONUS_PERCENT = 8.33                     # statutory, of Basic — small salarie
 GIFT_MONTHLY = {'D': 1250, 'C': 1250, 'M': 1250, 'O': 0, 'W': 0}   # Rs 15,000 a year, paid quarterly
 
 # Children Education Allowance — part of gross earnings. Preference index 1.
-CEA_MONTHLY = {'D': 6000, 'C': 6000, 'M': 6000, 'O': 0, 'W': 0}
+# Per child, for at most two children: Rs 6,000 a month is the two-child cap.
+CEA_PER_CHILD = {'D': 3000, 'C': 3000, 'M': 3000, 'O': 0, 'W': 0}
+CEA_MAX_CHILDREN = 2
 
 # Reimbursements, in the workbook's preference order (index 2..9, gift 7
 # is paid separately). When a CTC is too small to carry all of them they

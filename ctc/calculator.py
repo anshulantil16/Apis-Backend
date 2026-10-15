@@ -9,7 +9,8 @@
     Basic             = 50% of Gross Salary, or the work location's state
                         minimum wage if that is higher
     HRA               = 50% of Basic          (W: 20%)
-    CEA, LTA and the cadre's reimbursements are fixed amounts
+    CEA               = Rs 3,000 per child, up to 2 children (D, C, M)
+    LTA and the cadre's reimbursements are fixed amounts
     Special Allowance = Gross Salary - everything else in it (the balance)
 
 Basic depends on Gross, and Gross on PF and Bonus, which depend on Basic -
@@ -111,7 +112,7 @@ def _line(label, monthly, note=''):
 
 
 def calculate(*, ctc_annual, cadre, grade, category, department='', designation='',
-              work_location='', settings):
+              work_location='', children=0, settings):
     """The full break-up as plain data, or {'error': ...} if it can't be
     worked out. `settings` is a CtcSettings."""
     s = settings
@@ -162,7 +163,8 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     gross = F - pf - esi - med - bonus - grat        # exact, so the fixed part adds up
 
     hra = _r(basic * rules.HRA_PERCENT[cadre] / 100)
-    cea = rules.CEA_MONTHLY[cadre]
+    counted = min(max(int(children or 0), 0), rules.CEA_MAX_CHILDREN)
+    cea = rules.CEA_PER_CHILD[cadre] * counted
     lta = s.lta_for(cadre)
 
     reimb = []
@@ -211,7 +213,9 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         _line('Basic Salary (Inclusive of DA/VDA)', basic,
               f'Minimum wage, {state}' if on_min_wage else f'{rules.BASIC_PERCENT}% of Gross Salary'),
         _line('House Rent Allowance (HRA)', hra, hra_note),
-        _line('Child Education Allowance (CEA)', cea, 'Max 2 children' if cea else ''),
+        _line('Child Education Allowance (CEA)', cea,
+              f'Rs {rules.CEA_PER_CHILD[cadre]:,} x {counted} child{"ren" if counted != 1 else ""}'
+              if cea else ''),
         _line('Leave Travel Allowance (LTA)', lta, 'As per cadre' if lta else ''),
         _line('Special Allowance (Flexi Pay)', spl, 'Balance of Gross Salary'),
     ]

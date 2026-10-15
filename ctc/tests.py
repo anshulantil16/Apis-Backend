@@ -29,7 +29,7 @@ def _xlsx(rows, headings=HEADINGS, name='candidates.xlsx'):
 FIELDS = [f for _h, f, *_ in COLUMNS]
 BASE_ROW = dict(employee_code='SL00225', candidate_name='Rahul Sharma', category='Sales',
                 department='General Trade', designation='Area Sales Manager', grade='M1', cadre='M',
-                date_of_joining='01-07-2026', work_location='Delhi HO', ctc=1200000)
+                number_of_children=2, date_of_joining='01-07-2026', work_location='Delhi HO', ctc=1200000)
 
 
 def _row(**over):
@@ -80,6 +80,7 @@ class CtcUploads(TestCase):
         self.assertEqual(r.json()['rowCount'], 2)
         rahul = CtcCandidate.objects.get(candidate_name='Rahul Sharma')
         self.assertEqual((rahul.employee_code, str(rahul.date_of_joining)), ('SL00225', '2026-07-01'))
+        self.assertEqual(rahul.number_of_children, 2)
         priya = CtcCandidate.objects.get(candidate_name='Priya Verma')
         self.assertIsNone(priya.date_of_joining)
         self.assertEqual((priya.category, priya.grade, priya.cadre), ('HO', 'M3', 'M'))
@@ -93,7 +94,7 @@ class CtcUploads(TestCase):
 
     def test_headings_are_matched_loosely(self):
         loose = ['employee code', 'candidate name ', 'CATEGORY', 'department', 'designation', 'Grade',
-                 'cadre', 'date_of_joining',
+                 'cadre', 'number of children', 'date_of_joining',
                  'work_location', 'ctc']
         self.assertEqual(self._upload(self.alice, _xlsx([ROW], headings=loose)).status_code, 201)
 
@@ -114,6 +115,7 @@ class CtcUploads(TestCase):
             _row(candidate_name='Raj', category='HO', grade='O4', cadre='M'),  # row 8: grade/cadre clash
             _row(candidate_name='Sia', category='HO', grade='', cadre=''),    # row 9: no grade/cadre
             _row(candidate_name='Tara', date_of_joining='sometime soon'),     # row 10: bad date
+            _row(candidate_name='Uma', number_of_children='two'),            # row 11: bad count
         ]
         r = self._upload(self.alice, _xlsx([ROW, *bad]))
         self.assertEqual(r.status_code, 400)
@@ -122,7 +124,8 @@ class CtcUploads(TestCase):
                          'Row 5: CTC is empty', 'Row 6: Category "Marketing"',
                          'Row 8: Grade O4 does not belong to cadre M',
                          'Row 9: Grade is empty', 'Row 9: Cadre is empty',
-                         'Row 10: Date of Joining "sometime soon" is not a date'):
+                         'Row 10: Date of Joining "sometime soon" is not a date',
+                         'Row 11: Number of Children "two"'):
             self.assertIn(expected, p)
         self.assertNotIn('Row 7', p, '"Officer" should read as cadre O')
         self.assertFalse(CtcUpload.objects.exists())
@@ -303,6 +306,14 @@ class Calculator(TestCase):
         # A CTC that can't cover the minimum wage at all is refused, not fudged.
         low = self.calc(ctc_annual=240000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
         self.assertIn('minimum wage', low['error'])
+
+    def test_cea_is_3000_per_child_for_up_to_two(self):
+        cea = lambda **kw: next(x for x in self.calc(**kw)['earnings'] if x['label'].startswith('Child'))
+        self.assertEqual(cea(children=0)['monthly'], 0)
+        self.assertEqual(cea(children=1)['monthly'], 3000)
+        self.assertEqual(cea(children=2)['monthly'], 6000)
+        self.assertEqual(cea(children=4)['monthly'], 6000)
+        self.assertEqual(cea(ctc_annual=300000, cadre='O', grade='O3', category='Plant', children=2)['monthly'], 0)
 
     def test_unworkable_input_is_an_error_not_a_number(self):
         self.assertIn('error', self.calc(cadre='Z'))

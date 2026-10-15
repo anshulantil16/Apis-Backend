@@ -16,6 +16,9 @@ COLUMNS = [
      'Job title being offered, e.g. Area Sales Manager.'),
     ('Grade',          'grade',          10, True,  'e.g. M1, M3, O5, C2. Required.'),
     ('Cadre',          'cadre',          10, True,  'D, C, M, O or W. Required.'),
+    ('Number of Children', 'number_of_children', 12, False,
+     'Optional - 0, 1, 2 ... Leave blank for none.\n\nChild Education Allowance is '
+     'Rs 3,000 a month per child, for up to 2 children (cadres D, C, M).'),
     ('Date of Joining', 'date_of_joining', 16, False,
      'Optional - as a date, or typed day-month-year, e.g. 01-07-2026.\n\n'
      'Printed on the Annexure A.'),

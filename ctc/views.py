@@ -45,7 +45,7 @@ def _candidate(c):
             'dateOfJoining': c.date_of_joining.isoformat() if c.date_of_joining else None,
             'candidateName': c.candidate_name, 'category': c.category, 'department': c.department,
             'designation': c.designation, 'grade': c.grade, 'cadre': c.cadre,
-            'workLocation': c.work_location,
+            'workLocation': c.work_location, 'numberOfChildren': c.number_of_children,
             'ctc': str(c.ctc) if c.ctc is not None else None}
 
 
@@ -197,7 +197,8 @@ def _visible_candidate(user, pk):
 def _breakdown(c):
     return calculate(ctc_annual=c.ctc, cadre=c.cadre, grade=c.grade, category=c.category,
                      department=c.department, designation=c.designation,
-                     work_location=c.work_location, settings=CtcSettings.current())
+                     work_location=c.work_location, children=c.number_of_children,
+                     settings=CtcSettings.current())
 
 
 class CtcBreakdownView(PortalScopedAPIView):
