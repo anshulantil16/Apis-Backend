@@ -68,7 +68,7 @@ MEDICLAIM = {
 }
 
 # Variable / Performance Pay, as a % of total CTC.
-# Sales: by grade + designation, within a department (None = either).
+# Sales: by grade; department (None = either) settles grades with two rates.
 VPP_SALES = [
     # grade, department,            designation,                        %
     ('C2', 'General Trade',       'NSH',                               15),
@@ -80,11 +80,8 @@ VPP_SALES = [
     ('M4', None,                  'Regional Sales Manager',            12),
     ('M5', 'Alternate Channels',  'Assistant General Manager',         15),
 ]
-# HO and Plant: by grade alone, any department or designation.
-VPP_BY_GRADE = {
-    'HO':    ({'C1', 'C2', 'M3', 'M4', 'M5'}, 8),
-    'Plant': ({'M3', 'M4', 'M5'}, 8),
-}
+# Everyone outside Sales (HO and Plant), whatever their grade.
+VPP_NON_SALES = 8
 
 # Minimum wages per month, by state (P & C's table). Basic is never below
 # the minimum wage of the candidate's work location.

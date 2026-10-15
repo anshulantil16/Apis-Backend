@@ -223,7 +223,7 @@ class Calculator(TestCase):
 
     def test_components_add_up_to_the_ctc(self):
         for ctc, cadre, grade, cat, loc in [(1200000, 'M', 'M1', 'Sales', 'Delhi HO'),
-                                            (300000, 'O', 'O3', 'Plant', 'Delhi'),
+                                            (330000, 'O', 'O3', 'Plant', 'Delhi'),
                                             (300000, 'O', 'O3', 'Plant', 'Roorkee'),
                                             (3500000, 'C', 'C2', 'HO', 'Mumbai'),
                                             (180000, 'W', 'W2', 'Plant', 'Rajasthan'),
@@ -251,9 +251,10 @@ class Calculator(TestCase):
         self.assertEqual(vpp['annual'], 120000)              # 10% of 12 lakh
         self.assertEqual(gift['monthly'], 1250)
         for cadre, grade in (('O', 'O3'), ('W', 'W2')):
-            other = self.calc(ctc_annual=300000, cadre=cadre, grade=grade, category='Plant')['otherPayments']
+            other = self.calc(ctc_annual=300000, cadre=cadre, grade=grade, category='Plant',
+                              work_location='Rajasthan')['otherPayments']
             self.assertEqual(other[1]['annual'], 0, f'cadre {cadre} should get no gift')
-        self.assertEqual(self.calc(category='HO', grade='M1')['vppPercent'], 0)
+        self.assertEqual(self.calc(category='HO', grade='M1')['vppPercent'], 8)
         self.assertEqual(self.calc(category='HO', grade='M3', cadre='M')['vppPercent'], 8)
         self.assertEqual(self.calc(category='Plant', grade='M4')['vppPercent'], 8)
 
@@ -273,9 +274,9 @@ class Calculator(TestCase):
         self.assertIn('two VPP rates', why)
         # Not in the table at all: 0, with the reason.
         self.assertEqual(vpp_percent('Sales', 'O5', 'GT', 'Executive')[0], 0)
-        pct, why = vpp_percent('HO', 'O5', 'IT', 'Analyst')
-        self.assertEqual(pct, 0)
-        self.assertIn('No VPP for HO grade O5', why)
+        # Non-sales: 8% for every grade.
+        for cat, grade in (('HO', 'O5'), ('HO', 'C2'), ('Plant', 'C2'), ('Plant', 'W1')):
+            self.assertEqual(vpp_percent(cat, grade, 'IT', 'Analyst')[0], 8, (cat, grade))
 
     def test_esi_and_bonus_only_for_small_salaries(self):
         small = self.calc(ctc_annual=240000, cadre='O', grade='O1', category='Plant', work_location='Rajasthan')
@@ -306,15 +307,15 @@ class Calculator(TestCase):
             self.assertEqual(state_for(typed), state, typed)
 
     def test_basic_never_below_the_state_minimum_wage(self):
-        # Rs 3 lakh in Delhi: half of gross is well under Delhi's Rs 22,500, so
+        # Rs 3.3 lakh in Delhi: half of gross is well under Delhi's Rs 22,500, so
         # Basic is lifted to it and HRA shrinks to fit.
-        b = self.calc(ctc_annual=300000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
+        b = self.calc(ctc_annual=330000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
         basic, hra = b['earnings'][0], b['earnings'][1]
         self.assertEqual(basic['monthly'], 22500)
         self.assertIn('Minimum wage, Delhi', basic['note'])
         self.assertIn('Reduced', hra['note'])
         # Same CTC in Rajasthan (Rs 8,950): 50% of gross is higher, so that stands.
-        r = self.calc(ctc_annual=300000, cadre='O', grade='O1', category='Plant', work_location='Rajasthan')
+        r = self.calc(ctc_annual=330000, cadre='O', grade='O1', category='Plant', work_location='Rajasthan')
         self.assertIn('% of Gross Salary', r['earnings'][0]['note'])
         self.assertGreater(r['earnings'][0]['monthly'], 8950)
         unknown = self.calc(work_location='Atlantis')
@@ -329,7 +330,8 @@ class Calculator(TestCase):
         self.assertEqual(cea(children=1)['monthly'], 3000)
         self.assertEqual(cea(children=2)['monthly'], 6000)
         self.assertEqual(cea(children=4)['monthly'], 6000)
-        self.assertEqual(cea(ctc_annual=300000, cadre='O', grade='O3', category='Plant', children=2)['monthly'], 0)
+        self.assertEqual(cea(ctc_annual=300000, cadre='O', grade='O3', category='Plant', children=2,
+                             work_location='Rajasthan')['monthly'], 0)
 
     def test_unworkable_input_is_an_error_not_a_number(self):
         self.assertIn('error', self.calc(cadre='Z'))

@@ -97,6 +97,7 @@ def vpp_percent(category, grade, department, designation):
     """(percent, description). With a percent, the description names the
     rule that gave it; with 0, it says why there is none.
 
+    Non-sales (HO, Plant) is a flat rules.VPP_NON_SALES for every grade.
     Sales VPP is set by grade. Where one grade has two rates (M1, M3: 10% in
     General Trade, 12% in Alternate Channels) the Department picks between
     them, and failing that the Designation. Designation never has to match
@@ -118,12 +119,8 @@ def vpp_percent(category, grade, department, designation):
                            'to pick one.')
         r_grade, r_dept, r_desig, pct = rows[0]
         return pct, f'Sales · {r_grade}' + (f' · {r_dept}' if r_dept else '')
-    grades, pct = rules.VPP_BY_GRADE.get(category, (set(), 0))
-    if g in grades:
-        return pct, f'{category} · {g}'
-    if category in rules.VPP_BY_GRADE:
-        return 0, (f'No VPP for {category} grade {g or "-"} '
-                   f'(the VPP table covers {", ".join(sorted(grades))}).')
+    if category in ('HO', 'Plant'):
+        return rules.VPP_NON_SALES, f'{category} (non-sales)'
     return 0, ''
 
 
