@@ -103,6 +103,23 @@ class CtcCalculator(TestCase):
         self.assertEqual(mine[0]['candidates'][0]['ctc'], '1200000.00')
         self.assertEqual(len(self.client.get(f'{BASE}/uploads/', **self._auth(self.admin)).json()), 2)
 
+    def test_reset_needs_the_word_and_erases_only_what_the_caller_sees(self):
+        self._upload(self.alice, _xlsx([ROW, ROW]))
+        self._upload(self.bob, _xlsx([ROW]))
+        url = f'{BASE}/reset/'
+        self.assertEqual(self.client.post(url, {}).status_code, 401)
+        self.assertEqual(self.client.post(url, {'confirm': 'yes'}, **self._auth(self.alice)).status_code, 400)
+        self.assertEqual(CtcUpload.objects.count(), 2)
+
+        r = self.client.post(url, {'confirm': 'RESET'}, **self._auth(self.alice))
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()['deleted'], {'uploads': 1, 'candidates': 2})
+        self.assertEqual(list(CtcUpload.objects.values_list('uploaded_by', flat=True)), [self.bob.id],
+                         "Alice's reset touched Bob's upload")
+
+        self.client.post(url, {'confirm': 'reset'}, **self._auth(self.admin))
+        self.assertFalse(CtcCandidate.objects.exists())
+
     def test_only_the_uploader_or_admin_removes_an_upload(self):
         self._upload(self.alice, _xlsx([ROW]))
         u = CtcUpload.objects.get()

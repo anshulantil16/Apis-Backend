@@ -4,6 +4,8 @@
     GET    /api/ctc/uploads/         uploads the caller may see, with their rows
     POST   /api/ctc/uploads/         upload a filled-in template (multipart, "file")
     DELETE /api/ctc/uploads/<id>/    remove an upload and its rows
+    POST   /api/ctc/reset/           erase every upload the caller can see
+                                     (body: {"confirm": "RESET"})
 
 Everything needs a signed-in session. A person sees the uploads they made;
 a super admin sees everyone's. Candidate names and the grades they are
@@ -139,3 +141,38 @@ class CtcUploadDetailView(PortalScopedAPIView):
                      summary=f'CTC upload: {count} candidates', detail={'file': name},
                      request=request)
         return Response({'message': f'{name or "Upload"} removed.'})
+
+
+class CtcResetView(PortalScopedAPIView):
+    """Danger zone: erase the candidates so a fresh set can be uploaded.
+
+    Removes exactly what the caller sees on the page — their own uploads, or
+    everyone's for a super admin — never someone else's behind their back.
+    Needs the word RESET in the body as well as the page's own confirmation,
+    so a stray request can't wipe anything.
+    """
+
+    def post(self, request):
+        user, err = require_user(request)
+        if err:
+            return err
+        if str(request.data.get('confirm') or '').strip().upper() != 'RESET':
+            return Response({'error': 'Confirmation required: type RESET.'},
+                            status=http.HTTP_400_BAD_REQUEST)
+
+        uploads = CtcUpload.objects.all()
+        if not user.is_superadmin:
+            uploads = uploads.filter(uploaded_by=user)
+        n_uploads = uploads.count()
+        n_candidates = CtcCandidate.objects.filter(upload__in=uploads).count()
+        uploads.delete()                 # candidates go with them (CASCADE)
+
+        log_activity(user, 'deleted', object_type='ctcupload',
+                     summary=f'CTC reset: {n_candidates} candidates in {n_uploads} uploads',
+                     detail={'everyone': user.is_superadmin}, request=request)
+        return Response({
+            'message': (f'Reset done — removed {n_candidates} candidate'
+                        f'{"s" if n_candidates != 1 else ""} from {n_uploads} upload'
+                        f'{"s" if n_uploads != 1 else ""}.'),
+            'deleted': {'uploads': n_uploads, 'candidates': n_candidates},
+        })
