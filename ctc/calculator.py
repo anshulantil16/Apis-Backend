@@ -216,7 +216,9 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         _line('Special Allowance (Flexi Pay)', spl, 'Balance of Gross Salary'),
     ]
     gross_earnings = sum(r['monthly'] for r in earnings)
-    reimbursements = [_line(label, amount) for _k, label, amount in reimb if amount]
+    # Every reimbursement, zeros included and keyed, so the Annexure A PDF can
+    # print its fixed rows; the screen shows only the ones that apply.
+    reimbursements = [{**_line(label, amount), 'key': key} for key, label, amount in reimb]
     benefits = [
         _line('Employer PF Contribution', pf,
               f'{rules.PF_PERCENT}% of Basic (wages capped at Rs {s.pf_wage_ceiling:,})'),
