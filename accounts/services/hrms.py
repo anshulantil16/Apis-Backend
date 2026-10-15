@@ -70,9 +70,15 @@ _DEFAULT_FIELDS = [
     # so neither endpoint loses it.
     'GRADE', 'Grade', 'GradeString',
     'Category', 'CategoryString',
-    # Now populated, where it was empty for all 2,365 employees until their
-    # support fixed it on 15-10-2026. The value is "(HO0235)Pankaj Tripathi"
-    # -- code and name in one string. See _manager.
+    # Asked for in CAPITALS, which is not a style choice. Their own example
+    # sends POCKETREPORTINGMANAGER and the reply comes back keyed
+    # PocketReportingManager; asked for in that mixed case the column is
+    # simply absent, with a 200 and no complaint -- the same silent miss that
+    # hid GRADE for months. First tried on 15-10-2026 in mixed case: one
+    # employee in 703 came back with a manager. Every spelling is sent, since
+    # an unrecognised field name costs nothing and a missing column costs a
+    # re-run against 2,400 people.
+    'POCKETREPORTINGMANAGER',
     'PocketReportingManager', 'POCKETREPORTINGMANAGERstring',
     'EmpStatus', 'DateOfJoining', 'DateOfBirth',
     'OfficeMobileNo', 'PersonalMobileNo',

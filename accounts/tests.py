@@ -1056,3 +1056,22 @@ class WhatTheFilteredEndpointGivesUs(TestCase):
             log = hrms.sync_employees(triggered_by='test')
         self.assertEqual(log.deactivated, 1)
         self.assertFalse(PortalUser.objects.get(employee_code='E19').is_active)
+
+
+class TheFieldNamesWeSend(TestCase):
+    """Pocket HRMS answers 200 and quietly leaves out a column it does not
+    recognise, so a wrong spelling in the REQUEST looks exactly like data the
+    tenant does not hold. That is how GRADE stayed empty for months, and on
+    15-10-2026 it cost a second run: asked for as PocketReportingManager, one
+    employee in 703 came back with a manager; their own example asks for
+    POCKETREPORTINGMANAGER."""
+
+    def test_both_spellings_of_the_manager_column_are_asked_for(self):
+        from accounts.services import hrms
+        asked = {f.upper() for f in hrms.EMPLOYEE_FIELDS}
+        self.assertIn('POCKETREPORTINGMANAGER', asked)
+        self.assertIn('GRADE', asked)
+        # The exact capitalisation their example uses must be in the list as
+        # sent, not merely matched case-insensitively after the fact.
+        self.assertIn('POCKETREPORTINGMANAGER', hrms.EMPLOYEE_FIELDS)
+        self.assertIn('GRADE', hrms.EMPLOYEE_FIELDS)
