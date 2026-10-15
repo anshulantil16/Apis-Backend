@@ -92,6 +92,13 @@ _DEFAULT_FIELDS = [
 # rename it again.
 EMPLOYEE_PATH = '/api/EmployeeMaster/GetEmployeeMasterfiltered'
 
+# The older endpoint, kept for one job only. The filtered one refuses a call
+# with no EmployeeFields header -- 400, "pass at least one field" -- and that
+# call is exactly how their support said to read back the column names a
+# tenant actually has. So discovery asks the old endpoint, which still
+# answers it, and everything else asks the filtered one.
+LEGACY_EMPLOYEE_PATH = '/api/EmployeeMaster/GetEmployeeMaster'
+
 # The one EmpStatus that means "works here today". Everything else - the
 # resignations, separations, suspensions, terminations - is a former employee
 # and must not get a working portal login.
@@ -162,7 +169,7 @@ def _headers(extra=None, fields=EMPLOYEE_FIELDS):
 
 
 def fetch_page(take=PAGE_SIZE, offset=FIRST_OFFSET, emp_status='ALL', modified_since=None,
-               fields=EMPLOYEE_FIELDS):
+               fields=EMPLOYEE_FIELDS, path=None):
     """One page of the employee master.
 
     offset is 1-based and offset=0 returns an empty list, not the first page -
@@ -174,7 +181,7 @@ def fetch_page(take=PAGE_SIZE, offset=FIRST_OFFSET, emp_status='ALL', modified_s
     almost every VALUE, so it is only good for discovery.
     """
     base = _cfg('POCKET_HRMS_BASE_URL', 'https://api.pockethrms.com').rstrip('/')
-    path = _cfg('POCKET_HRMS_EMPLOYEE_PATH', EMPLOYEE_PATH)
+    path = path or _cfg('POCKET_HRMS_EMPLOYEE_PATH', EMPLOYEE_PATH)
     extra = {'Take': str(take), 'OffSet': str(offset), 'EmpStatus': emp_status}
     if modified_since:
         # The range format the API actually wants - see the module docstring.
@@ -225,7 +232,8 @@ def discover_fields(sample_size=3):
 
     A handful of rows is enough; this exists to read column NAMES, not data.
     """
-    rows = fetch_page(take=sample_size, offset=FIRST_OFFSET, emp_status='ALL', fields=None)
+    rows = fetch_page(take=sample_size, offset=FIRST_OFFSET, emp_status='ALL',
+                      fields=None, path=LEGACY_EMPLOYEE_PATH)
     columns = sorted({k for r in rows if isinstance(r, dict) for k in r})
     return columns, rows
 

@@ -13,13 +13,38 @@ from this list rather than from a guess.
     ./venv/bin/python manage.py hrms_columns
     ./venv/bin/python manage.py hrms_columns --like cadre
     ./venv/bin/python manage.py hrms_columns --values     # one sample row
+    ./venv/bin/python manage.py hrms_columns --probe CADRE,HOD,Band
 
-Asking with no header blanks almost every VALUE, so --values is for seeing
-which columns carry anything at all on a normal fetch, not for reading data.
+The listing comes from the OLD endpoint, which still answers a call with no
+EmployeeFields header; the filtered one refuses that with a 400. Asking with
+no header also blanks almost every VALUE, so the listing is for names.
+
+--probe is the other half: it asks the FILTERED endpoint -- the one the sync
+actually uses -- for the names given, and says which came back and which
+carried anything. An unrecognised name is dropped silently with a 200, so
+"absent" and "not a real column" look identical and this is the only way to
+tell them apart. With no list it tries the names we might want next: the
+cadre, the reporting HOD, and the rest of the master data.
 """
 from django.core.management.base import BaseCommand
 
 from accounts.services import hrms
+
+
+# Names worth trying on the filtered endpoint. Spellings included in both
+# cases on purpose: GRADE answers and Grade does not, which is what hid the
+# column for months.
+CANDIDATES = [
+    'CADRE', 'Cadre', 'CadreString',
+    'HOD', 'HODName', 'ReportingHOD', 'POCKETREPORTINGHOD', 'PocketReportingHOD',
+    'Band', 'BAND', 'Level', 'LEVEL',
+    'Category', 'CategoryString', 'CATEGORY',
+    'Division', 'DivisionString', 'Zone', 'SubZone', 'Branch', 'BranchString',
+    'CostCenter', 'CostCentre', 'State', 'StateString',
+    'Confirmed', 'ConfirmationDate', 'ProbationEndDate',
+    'Gender', 'MaritalStatus', 'Qualification', 'BloodGroup',
+    'DateOfLeaving', 'EmployeeType', 'EmploymentType',
+]
 
 
 class Command(BaseCommand):
@@ -28,6 +53,9 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--like', default='',
                             help='only columns whose name contains this (case-insensitive)')
+        parser.add_argument('--probe', nargs='?', const='', default=None,
+                            help='ask the filtered endpoint for these field names '
+                                 '(comma-separated), or a built-in list of candidates')
         parser.add_argument('--values', action='store_true',
                             help='also fetch one row with the columns we normally ask for, '
                                  'and show which of them came back with anything in it')
@@ -47,6 +75,43 @@ class Command(BaseCommand):
         for c in shown:
             asked = ' (already asked for)' if c.lower() in {f.lower() for f in hrms.EMPLOYEE_FIELDS} else ''
             self.stdout.write(f'  {c}{asked}')
+
+        probe = options['probe']
+        if probe is not None:
+            names = [n.strip() for n in probe.split(',') if n.strip()] or CANDIDATES
+            self.stdout.write('')
+            self.stdout.write(f'Asking the filtered endpoint for {len(names)} names...')
+            rows = hrms.fetch_page(take=25, offset=hrms.FIRST_OFFSET,
+                                   emp_status=hrms.ACTIVE_ONLY, fields=names)
+            if not rows:
+                self.stdout.write('  nothing came back.')
+                return
+            answered = {k for r in rows if isinstance(r, dict) for k in r}
+            carrying = {k for r in rows if isinstance(r, dict)
+                        for k, v in r.items() if v not in (None, '', 'NULL')}
+
+            self.stdout.write('')
+            self.stdout.write(f'  came back WITH values ({len(carrying)}) '
+                              f'-- these are worth storing:')
+            for k in sorted(carrying):
+                self.stdout.write(f'    {k}')
+
+            empty = answered - carrying
+            if empty:
+                self.stdout.write('')
+                self.stdout.write(f'  came back EMPTY on all {len(rows)} sampled '
+                                  f'employees ({len(empty)}) -- a real column that '
+                                  f'nobody has filled in:')
+                for k in sorted(empty):
+                    self.stdout.write(f'    {k}')
+
+            missing = [n for n in names if n not in answered]
+            if missing:
+                self.stdout.write('')
+                self.stdout.write(f'  not answered at all ({len(missing)}) -- not a '
+                                  f'column on this tenant, under that spelling:')
+                self.stdout.write('    ' + ', '.join(missing))
+            return
 
         if not options['values']:
             return
