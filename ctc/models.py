@@ -5,8 +5,9 @@ per candidate and uploads it back. Each upload is kept as a batch, so the
 page can show what came in together, who sent it and when, and a mistaken
 upload can be removed in one go without touching anyone else's.
 
-These are the calculator's inputs only. Nothing here works out a salary
-yet — that waits on APIS's own CTC breakup rules.
+The break-up itself is worked out on demand (calculator.py) from these
+inputs, the rules in rules.py and the editable values in CtcSettings, so a
+change to a setting shows on every candidate at once.
 """
 from django.db import models
 
@@ -45,6 +46,8 @@ class CtcCandidate(models.Model):
     row_number = models.PositiveIntegerField()
 
     candidate_name = models.CharField(max_length=200)
+    # Sales / HO / Plant — decides which VPP table applies.
+    category       = models.CharField(max_length=20, blank=True)
     department     = models.CharField(max_length=120, blank=True)
     designation    = models.CharField(max_length=120, blank=True)
     grade          = models.CharField(max_length=40, blank=True)
@@ -61,3 +64,52 @@ class CtcCandidate(models.Model):
 
     def __str__(self):
         return self.candidate_name
+
+
+class CtcSettings(models.Model):
+    """The values P & C's workbook leaves open, editable by a super admin.
+
+    A single row (pk=1). Everything starts at 0 except the two statutory
+    limits, so nothing on a salary sheet is a guess: until someone sets LTA
+    or Gratuity, the break-up shows them as 0.
+    """
+
+    lta_d = models.PositiveIntegerField(default=0, help_text='LTA per month, cadre D')
+    lta_c = models.PositiveIntegerField(default=0, help_text='LTA per month, cadre C')
+    lta_m = models.PositiveIntegerField(default=0, help_text='LTA per month, cadre M')
+    lta_o = models.PositiveIntegerField(default=0, help_text='LTA per month, cadre O')
+    lta_w = models.PositiveIntegerField(default=0, help_text='LTA per month, cadre W')
+
+    gratuity_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0,
+                                           help_text='% of Basic, per month')
+
+    # The D cadre's "Actual" reimbursements in the workbook.
+    d_fuel   = models.PositiveIntegerField(default=0, help_text='Fuel & vehicle, per month, cadre D')
+    d_driver = models.PositiveIntegerField(default=0, help_text='Driver, per month, cadre D')
+    d_health = models.PositiveIntegerField(default=0, help_text='Health & wellness, per month, cadre D')
+
+    w_min_wage = models.PositiveIntegerField(default=0, help_text='Minimum wage per month, cadre W')
+    pf_wage_ceiling = models.PositiveIntegerField(default=15000, help_text='PF wage ceiling per month')
+    esi_bonus_gross_limit = models.PositiveIntegerField(
+        default=21000, help_text='ESI and Statutory Bonus apply up to this gross per month')
+
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by_name = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        verbose_name = 'CTC settings'
+        verbose_name_plural = 'CTC settings'
+
+    def __str__(self):
+        return 'CTC settings'
+
+    @classmethod
+    def current(cls):
+        return cls.objects.get_or_create(pk=1)[0]
+
+    def lta_for(self, cadre):
+        return getattr(self, f'lta_{cadre.lower()}', 0)
+
+    def actual_for(self, key):
+        """A D-cadre "Actual" reimbursement."""
+        return getattr(self, f'd_{key}', 0)

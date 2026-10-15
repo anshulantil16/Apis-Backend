@@ -14,6 +14,7 @@ from decimal import Decimal, InvalidOperation
 
 from openpyxl import load_workbook
 
+from .calculator import normalise_cadre, normalise_category
 from .columns import COLUMNS, MAX_CTC, MAX_LENGTH
 from .template import SHEET_NAME
 
@@ -83,8 +84,25 @@ def parse(fileobj):
                 continue                                  # blank line
             if len(rows) >= MAX_ROWS:
                 raise SheetError(f'Please upload at most {MAX_ROWS} candidates at a time.')
-            if not row['candidate_name']:
-                errors.append(f'Row {n}: Candidate Name is empty.')
+            for heading, field, _w, required, _help in COLUMNS:
+                if required and field != 'ctc' and not row[field]:
+                    errors.append(f'Row {n}: {heading} is empty.')
+            if row['category']:
+                category = normalise_category(row['category'])
+                if category:
+                    row['category'] = category
+                else:
+                    errors.append(f'Row {n}: Category "{row["category"]}" should be Sales, HO or Plant.')
+            if row['cadre']:
+                cadre = normalise_cadre(row['cadre'])
+                if cadre:
+                    row['cadre'] = cadre
+                else:
+                    errors.append(f'Row {n}: Cadre "{row["cadre"]}" should be D, C, M, O or W.')
+            if row['grade']:
+                row['grade'] = row['grade'].upper()
+                if row['cadre'] in 'DCMOW' and row['cadre'] and not row['grade'].startswith(row['cadre']):
+                    errors.append(f'Row {n}: Grade {row["grade"]} does not belong to cadre {row["cadre"]}.')
             ctc_text, row['ctc'] = row['ctc'], None
             if not ctc_text:
                 errors.append(f'Row {n}: CTC is empty.')

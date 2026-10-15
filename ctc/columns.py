@@ -5,18 +5,29 @@ and the uploader read, so the two cannot drift apart.
 """
 COLUMNS = [
     ('Candidate Name', 'candidate_name', 28, True,  'Full name of the candidate. Required.'),
-    ('Department',     'department',     24, False, 'e.g. Sales, Marketing, P&C Admin & IT.'),
-    ('Designation',    'designation',    26, False, 'Job title being offered.'),
-    ('Grade',          'grade',          12, False, 'e.g. M1, M3, O5.'),
-    ('Cadre',          'cadre',          16, False, 'e.g. Management, Officer, Staff.'),
+    ('Category',       'category',       12, True,
+     'Sales, HO or Plant. Required.\n\nDecides which Variable Pay table applies.'),
+    ('Department',     'department',     24, False,
+     'e.g. General Trade, Alternate Channels, Finance.\n\nFor Sales, used with the '
+     'designation to find the Variable Pay %.'),
+    ('Designation',    'designation',    30, False,
+     'Job title being offered, e.g. Area Sales Manager.'),
+    ('Grade',          'grade',          10, True,  'e.g. M1, M3, O5, C2. Required.'),
+    ('Cadre',          'cadre',          10, True,  'D, C, M, O or W. Required.'),
     ('Work Location',  'work_location',  20, False, 'City or site, e.g. Delhi HO, Roorkee.'),
     ('CTC',            'ctc',            16, True,
-     'Annual CTC in rupees, as a plain number. Required.\n\ne.g. 1200000 '
-     '(commas and the ₹ sign are fine too).'),
+     'Total annual CTC in rupees, including Variable Pay and Gift. Required.\n\n'
+     'e.g. 1200000 (commas and the ₹ sign are fine too).'),
 ]
 
+# Dropdowns on the template.
+CHOICES = {
+    'category': ['Sales', 'HO', 'Plant'],
+    'cadre': ['D', 'C', 'M', 'O', 'W'],
+}
+
 MAX_LENGTH = {
-    'candidate_name': 200, 'department': 120, 'designation': 120,
+    'candidate_name': 200, 'category': 20, 'department': 120, 'designation': 120,
     'grade': 40, 'cadre': 60, 'work_location': 120,
 }
 

@@ -6,12 +6,17 @@
     DELETE /api/ctc/uploads/<id>/    remove an upload and its rows
     POST   /api/ctc/reset/           erase every upload the caller can see
                                      (body: {"confirm": "RESET"})
+    GET    /api/ctc/candidates/<id>/breakdown/   the worked-out break-up
+    GET    /api/ctc/candidates/<id>/pdf/         the same, as the Annexure A PDF
+    GET    /api/ctc/settings/        the editable values; PUT (super admin) to change
 
 Everything needs a signed-in session. A person sees the uploads they made;
 a super admin sees everyone's. Candidate names and the grades they are
 offered are not for the whole company.
 """
 import os
+import re
+from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from django.http import HttpResponse
@@ -19,12 +24,14 @@ from rest_framework import status as http
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
-from accounts.auth import PortalScopedAPIView, require_user
+from accounts.auth import PortalScopedAPIView, require_superadmin, require_user
 from accounts.moderation import log_activity
 
+from .calculator import calculate
 from .columns import COLUMNS
 from .ingest import SheetError, parse
-from .models import CtcCandidate, CtcUpload
+from .models import CtcCandidate, CtcSettings, CtcUpload
+from .pdf import build_pdf
 from .template import build_template
 
 MAX_BYTES = 5 * 1024 * 1024          # a few thousand rows is well under this
@@ -34,7 +41,7 @@ FIELDS = [field for _h, field, *_ in COLUMNS]
 
 def _candidate(c):
     return {'id': c.id, 'rowNumber': c.row_number,
-            'candidateName': c.candidate_name, 'department': c.department,
+            'candidateName': c.candidate_name, 'category': c.category, 'department': c.department,
             'designation': c.designation, 'grade': c.grade, 'cadre': c.cadre,
             'workLocation': c.work_location,
             'ctc': str(c.ctc) if c.ctc is not None else None}
@@ -176,3 +183,104 @@ class CtcResetView(PortalScopedAPIView):
                         f'{"s" if n_uploads != 1 else ""}.'),
             'deleted': {'uploads': n_uploads, 'candidates': n_candidates},
         })
+
+
+def _visible_candidate(user, pk):
+    """The candidate, if this user may see it (their own upload, or any for
+    a super admin) - else None, so other people's rows read as not found."""
+    c = CtcCandidate.objects.select_related('upload').filter(pk=pk).first()
+    return c if c and c.upload.can_manage(user) else None
+
+
+def _breakdown(c):
+    return calculate(ctc_annual=c.ctc, cadre=c.cadre, grade=c.grade, category=c.category,
+                     department=c.department, designation=c.designation,
+                     settings=CtcSettings.current())
+
+
+class CtcBreakdownView(PortalScopedAPIView):
+    def get(self, request, pk):
+        user, err = require_user(request)
+        if err:
+            return err
+        c = _visible_candidate(user, pk)
+        if not c:
+            return Response({'error': 'Candidate not found.'}, status=http.HTTP_404_NOT_FOUND)
+        return Response({'candidate': _candidate(c), 'breakdown': _breakdown(c)})
+
+
+class CtcPdfView(PortalScopedAPIView):
+    def get(self, request, pk):
+        user, err = require_user(request)
+        if err:
+            return err
+        c = _visible_candidate(user, pk)
+        if not c:
+            return Response({'error': 'Candidate not found.'}, status=http.HTTP_404_NOT_FOUND)
+        b = _breakdown(c)
+        if b.get('error'):
+            return Response({'error': b['error']}, status=http.HTTP_400_BAD_REQUEST)
+        safe = re.sub(r'[^A-Za-z0-9]+', '_', c.candidate_name).strip('_') or 'candidate'
+        r = HttpResponse(build_pdf(c, b), content_type='application/pdf')
+        r['Content-Disposition'] = f'attachment; filename="CTC_Breakup_{safe}.pdf"'
+        return r
+
+
+SETTING_FIELDS = {
+    # api key: (model field, label)
+    'ltaD': ('lta_d', 'LTA per month - cadre D'),
+    'ltaC': ('lta_c', 'LTA per month - cadre C'),
+    'ltaM': ('lta_m', 'LTA per month - cadre M'),
+    'ltaO': ('lta_o', 'LTA per month - cadre O'),
+    'ltaW': ('lta_w', 'LTA per month - cadre W'),
+    'gratuityPercent': ('gratuity_percent', 'Gratuity, % of Basic'),
+    'dFuel': ('d_fuel', 'Fuel & vehicle per month - cadre D'),
+    'dDriver': ('d_driver', 'Driver per month - cadre D'),
+    'dHealth': ('d_health', 'Health & wellness per month - cadre D'),
+    'wMinWage': ('w_min_wage', 'Minimum wage per month - cadre W'),
+    'pfWageCeiling': ('pf_wage_ceiling', 'PF wage ceiling per month'),
+    'esiBonusGrossLimit': ('esi_bonus_gross_limit', 'ESI & Bonus apply up to gross per month'),
+}
+
+
+def _settings(s, viewer):
+    return {
+        'values': {k: (str(getattr(s, f)) if f == 'gratuity_percent' else getattr(s, f))
+                   for k, (f, _l) in SETTING_FIELDS.items()},
+        'labels': {k: label for k, (_f, label) in SETTING_FIELDS.items()},
+        'updatedBy': s.updated_by_name,
+        'updatedAt': s.updated_at.isoformat() if s.updated_at else None,
+        'canEdit': bool(viewer and viewer.is_superadmin),
+    }
+
+
+class CtcSettingsView(PortalScopedAPIView):
+    def get(self, request):
+        user, err = require_user(request)
+        if err:
+            return err
+        return Response(_settings(CtcSettings.current(), user))
+
+    def put(self, request):
+        user, err = require_superadmin(request)
+        if err:
+            return err
+        s = CtcSettings.current()
+        for key, (field, label) in SETTING_FIELDS.items():
+            if key not in request.data:
+                continue
+            raw = str(request.data.get(key)).strip() or '0'
+            try:
+                value = Decimal(raw)
+            except InvalidOperation:
+                return Response({'error': f'{label}: "{raw}" is not a number.'},
+                                status=http.HTTP_400_BAD_REQUEST)
+            limit = 100 if field == 'gratuity_percent' else 10_000_000
+            if not value.is_finite() or value < 0 or value > limit:
+                return Response({'error': f'{label} must be between 0 and {limit:,}.'},
+                                status=http.HTTP_400_BAD_REQUEST)
+            setattr(s, field, value.quantize(Decimal('0.01')) if field == 'gratuity_percent' else int(value))
+        s.updated_by_name = user.name or user.email or ''
+        s.save()
+        log_activity(user, 'updated', s, summary='CTC calculator settings', request=request)
+        return Response({**_settings(s, user), 'message': 'Settings saved.'})

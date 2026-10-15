@@ -13,12 +13,13 @@ from openpyxl import Workbook
 from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 
-from .columns import COLUMNS
+from .columns import CHOICES, COLUMNS
 
 SHEET_NAME = 'Candidates'
 
-EXAMPLE = ['Rahul Sharma', 'Sales', 'Area Sales Manager', 'M3', 'Management', 'Delhi HO', 1200000]
+EXAMPLE = ['Rahul Sharma', 'Sales', 'General Trade', 'Area Sales Manager', 'M1', 'M', 'Delhi HO', 1200000]
 
 HEADER_FILL = PatternFill('solid', fgColor='F59E0B')     # APIS amber
 REQUIRED_FILL = PatternFill('solid', fgColor='D97706')
@@ -38,6 +39,17 @@ def build_template() -> bytes:
         ws.column_dimensions[get_column_letter(i)].width = width
     ws.row_dimensions[1].height = 22
     ws.freeze_panes = 'A2'
+
+    # Dropdowns, so Category and Cadre can only be typed one way.
+    for i, (_h, field, *_rest) in enumerate(COLUMNS, start=1):
+        if field in CHOICES:
+            dv = DataValidation(type='list', formula1='"' + ','.join(CHOICES[field]) + '"',
+                                allow_blank=True, showErrorMessage=True,
+                                errorTitle='Pick from the list',
+                                error='Choose one of: ' + ', '.join(CHOICES[field]))
+            col = get_column_letter(i)
+            dv.add(f'{col}2:{col}2001')
+            ws.add_data_validation(dv)
 
     ex = wb.create_sheet('Example')
     ex.cell(row=1, column=1, value='How a filled-in row looks. This sheet is never uploaded — '
