@@ -375,8 +375,8 @@ class Calculator(TestCase):
         self.assertTrue(any('No minimum wage found' in n for n in unknown['notes']))
         # Below it: refused, with the gross worked out and the lowest CTC that works.
         low = self.calc(ctc_annual=288000, cadre='O', grade='O4', category='HO', work_location='Delhi')
-        self.assertIn("below Delhi's minimum wage of Rs 22,500", low['error'])
-        self.assertIn('lowest CTC that works', low['error'])
+        self.assertIn("Below Delhi's minimum wage", low['error'])
+        self.assertIn('Raise the CTC to at least', low['error'])
         # The same CTC clears Rajasthan's Rs 8,950.
         self.assertNotIn('error', self.calc(ctc_annual=288000, cadre='O', grade='O4', category='HO',
                                             work_location='Rajasthan'))

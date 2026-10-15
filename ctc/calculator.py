@@ -307,11 +307,12 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
                                      department=department, designation=designation,
                                      work_location=work_location, children=children,
                                      options=options, settings=s)) if _search else None
-            return {'error': f'CTC is too low for {state}: Rs {_inr(ctc_m)} a month in total, and after '
-                             f'{taken} the gross salary is Rs {_inr(gross)} - below '
-                             f"{state}'s minimum wage of Rs {_inr(min_wage)} a month."
-                             + (f' The lowest CTC that works here is about Rs {_inr(need)} a year.'
-                                if need else '')}
+            return {'error': f"Below {state}'s minimum wage. The minimum wage of Rs {_inr(min_wage)} a month "
+                             f'is checked against the Gross Salary, not the CTC. This CTC is '
+                             f'Rs {_inr(ctc_m)} a month, but {taken} are part of the CTC and not paid '
+                             f'as monthly salary, which leaves a Gross Salary of Rs {_inr(gross)} - '
+                             f'Rs {_inr(min_wage - gross)} short.'
+                             + (f' Raise the CTC to at least about Rs {_inr(need)} a year.' if need else '')}
     if balance() < 0:
         return {'error': 'CTC is too low for this cadre: Basic alone exceeds the gross salary.'}
     spl = balance()
