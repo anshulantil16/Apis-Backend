@@ -1,5 +1,6 @@
 import pandas as pd
 from django.utils import timezone
+from .base import EOMAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -10,7 +11,7 @@ from ..serializers import EOMEmployeeSerializer, EOMCycleSerializer, EOMNominati
 
 # ── Employee management ──────────────────────────────────────────────────────
 
-class EOMEmployeeImportView(APIView):
+class EOMEmployeeImportView(EOMAPIView):
     """POST /api/eom/employees/import/"""
     parser_classes = (MultiPartParser, FormParser)
 
@@ -95,7 +96,7 @@ class EOMEmployeeImportView(APIView):
         })
 
 
-class EOMEmployeeListView(APIView):
+class EOMEmployeeListView(EOMAPIView):
     """GET /api/eom/employees/ — list active employees
        POST /api/eom/employees/ — add a single employee"""
 
@@ -125,7 +126,7 @@ class EOMEmployeeListView(APIView):
         return Response(EOMEmployeeSerializer(emp).data, status=201 if created else 200)
 
 
-class EOMEmployeeDetailView(APIView):
+class EOMEmployeeDetailView(EOMAPIView):
     """GET/PATCH/DELETE /api/eom/employees/<employee_id>/"""
 
     def get(self, request, employee_id):
@@ -159,7 +160,7 @@ class EOMEmployeeDetailView(APIView):
 
 # ── Cycle management ─────────────────────────────────────────────────────────
 
-class EOMCycleListCreateView(APIView):
+class EOMCycleListCreateView(EOMAPIView):
     """GET/POST /api/eom/cycles/"""
 
     def get(self, request):
@@ -173,7 +174,7 @@ class EOMCycleListCreateView(APIView):
         return Response(s.errors, status=400)
 
 
-class EOMCycleUpdateView(APIView):
+class EOMCycleUpdateView(EOMAPIView):
     """PATCH /api/eom/cycles/<cycle_id>/"""
 
     def patch(self, request, cycle_id):
@@ -188,7 +189,7 @@ class EOMCycleUpdateView(APIView):
         return Response(s.errors, status=400)
 
 
-class EOMPanelMembersView(APIView):
+class EOMPanelMembersView(EOMAPIView):
     """POST /api/eom/cycles/<cycle_id>/panel-members/ — Set panel members for this cycle"""
 
     def post(self, request, cycle_id):
@@ -227,7 +228,7 @@ class EOMPanelMembersView(APIView):
 
 # ── Nominations ──────────────────────────────────────────────────────────────
 
-class EOMAllNominationsView(APIView):
+class EOMAllNominationsView(EOMAPIView):
     """GET /api/eom/all-nominations/?cycle_id=<id>"""
 
     def get(self, request):
@@ -238,7 +239,7 @@ class EOMAllNominationsView(APIView):
         return Response(EOMNominationSerializer(qs, many=True, context={'request': request}).data)
 
 
-class EOMOverviewView(APIView):
+class EOMOverviewView(EOMAPIView):
     """GET /api/eom/org/overview/?cycle_id=<id>"""
 
     def get(self, request):
@@ -267,7 +268,7 @@ class EOMOverviewView(APIView):
         })
 
 
-class EOMHRFinalizeView(APIView):
+class EOMHRFinalizeView(EOMAPIView):
     """PATCH /api/eom/nominations/<nom_id>/hr-finalize/"""
 
     def patch(self, request, nom_id):
@@ -284,7 +285,7 @@ class EOMHRFinalizeView(APIView):
         return Response(EOMNominationSerializer(nom, context={'request': request}).data)
 
 
-class EOMDatabaseResetView(APIView):
+class EOMDatabaseResetView(EOMAPIView):
     """POST /api/eom/admin/reset-database/
     Clears all EOM data — nominations, OTP tokens, employees, and cycles.
     Same pattern as the appraisal ResetDatabaseView.

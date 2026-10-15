@@ -1,4 +1,5 @@
 from django.utils import timezone
+from .base import EOMAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
@@ -17,7 +18,7 @@ PANEL_SCORE_FIELDS = [
 ]
 
 
-class EOMPanelNominationsView(APIView):
+class EOMPanelNominationsView(EOMAPIView):
     """GET /api/eom/panel/nominations/?cycle_id=<id>
     Returns only HOD-approved nominations (hod_rejected are excluded).
     """
@@ -35,7 +36,7 @@ class EOMPanelNominationsView(APIView):
         return Response(EOMNominationSerializer(noms, many=True, context={'request': request}).data)
 
 
-class EOMPanelReviewView(APIView):
+class EOMPanelReviewView(EOMAPIView):
     """PATCH /api/eom/nominations/<nom_id>/panel-review/"""
 
     def patch(self, request, nom_id):

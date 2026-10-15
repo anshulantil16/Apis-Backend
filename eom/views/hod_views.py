@@ -1,4 +1,5 @@
 from django.utils import timezone
+from .base import EOMAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
@@ -11,7 +12,7 @@ HOD_SCORE_FIELDS = [
 ]
 
 
-class EOMHODTeamView(APIView):
+class EOMHODTeamView(EOMAPIView):
     """GET /api/eom/hod/<hod_id>/team/?cycle_id=<id>"""
 
     def get(self, request, hod_id):
@@ -38,7 +39,7 @@ class EOMHODTeamView(APIView):
         return Response(result)
 
 
-class EOMHODReviewView(APIView):
+class EOMHODReviewView(EOMAPIView):
     """PATCH /api/eom/nominations/<nom_id>/hod-review/"""
 
     def patch(self, request, nom_id):

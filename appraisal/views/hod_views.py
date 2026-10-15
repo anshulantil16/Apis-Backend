@@ -2,6 +2,7 @@
 HOD-facing API views.
 HODs see all manager-approved goal cards for employees under them and submit their own remarks.
 """
+from .base import AppraisalAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.utils import timezone
@@ -11,7 +12,7 @@ from appraisal.serializers import GoalCardSerializer
 from ..notifications import notify_on_hod_approval
 
 
-class HODTeamView(APIView):
+class HODTeamView(AppraisalAPIView):
     """GET /api/performance/hod/<hod_id>/team/?cycle_id=<id> — all employees under this HOD."""
 
     def get(self, request, hod_id):
@@ -46,7 +47,7 @@ class HODTeamView(APIView):
         return Response(result)
 
 
-class HODKPIScoresView(APIView):
+class HODKPIScoresView(AppraisalAPIView):
     """PATCH /api/performance/goal-cards/<gc_id>/hod-kpi-scores/ — save per-KPI HOD scores."""
 
     def patch(self, request, gc_id):
@@ -68,7 +69,7 @@ class HODKPIScoresView(APIView):
         return Response(GoalCardSerializer(gc, context={'request': request}).data)
 
 
-class HODReviewGoalCardView(APIView):
+class HODReviewGoalCardView(AppraisalAPIView):
     """PATCH /api/performance/goal-cards/<gc_id>/hod-review/ — HOD submits their review."""
 
     def patch(self, request, gc_id):

@@ -6,6 +6,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from django.http import HttpResponse
+from .base import AppraisalAPIView
 from rest_framework.views import APIView
 
 from appraisal.models import GoalCard, PerformanceCycle
@@ -76,7 +77,7 @@ _BAND_FILL = {
 }
 
 
-class AppraisalExportView(APIView):
+class AppraisalExportView(AppraisalAPIView):
     """GET /api/appraisal/export/ — full Excel export for management."""
 
     def get(self, request):

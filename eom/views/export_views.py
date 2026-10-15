@@ -7,6 +7,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from django.http import HttpResponse
+from .base import EOMAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
@@ -31,7 +32,7 @@ def _winner_fill():
     return PatternFill(start_color='FFF3CD', end_color='FFF3CD', fill_type='solid')
 
 
-class EOMExportView(APIView):
+class EOMExportView(EOMAPIView):
     """GET /api/eom/export/ — full Excel export for management."""
 
     def get(self, request):

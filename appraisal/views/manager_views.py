@@ -2,6 +2,7 @@
 Manager-facing API views.
 Managers can see their direct reports' goal cards and provide ratings.
 """
+from .base import AppraisalAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -12,7 +13,7 @@ from appraisal.serializers import GoalCardSerializer, QuarterlyReviewSerializer
 from ..notifications import notify_on_manager_approval
 
 
-class ManagerTeamView(APIView):
+class ManagerTeamView(AppraisalAPIView):
     """GET /api/performance/manager/<manager_id>/team/ — list direct reports with their goal cards."""
 
     def get(self, request, manager_id):
@@ -46,7 +47,7 @@ class ManagerTeamView(APIView):
         return Response(result)
 
 
-class ManagerReviewGoalCardView(APIView):
+class ManagerReviewGoalCardView(AppraisalAPIView):
     """PATCH /api/performance/goal-cards/<gc_id>/manager-review/ — approve/reject/adjust goals."""
 
     def patch(self, request, gc_id):
@@ -105,7 +106,7 @@ class ManagerReviewGoalCardView(APIView):
         return Response(GoalCardSerializer(gc, context={'request': request}).data)
 
 
-class ManagerRateReviewView(APIView):
+class ManagerRateReviewView(AppraisalAPIView):
     """PATCH /api/performance/reviews/<review_id>/manager-rate/ — manager provides per-goal ratings."""
 
     def patch(self, request, review_id):
@@ -156,7 +157,7 @@ class ManagerRateReviewView(APIView):
         return Response(QuarterlyReviewSerializer(review).data)
 
 
-class ManagerKPIScoresView(APIView):
+class ManagerKPIScoresView(AppraisalAPIView):
     """PATCH /api/performance/goal-cards/<gc_id>/manager-kpi-scores/ — save per-KPI manager scores and comments."""
 
     def patch(self, request, gc_id):
@@ -180,7 +181,7 @@ class ManagerKPIScoresView(APIView):
         return Response(GoalCardSerializer(gc, context={'request': request}).data)
 
 
-class ManagerPendingReviewsView(APIView):
+class ManagerPendingReviewsView(AppraisalAPIView):
     """GET /api/performance/manager/<manager_id>/pending-reviews/ — submitted reviews awaiting manager rating."""
 
     def get(self, request, manager_id):

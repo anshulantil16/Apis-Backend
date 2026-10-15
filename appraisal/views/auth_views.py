@@ -5,6 +5,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.mail import send_mail
 from django.utils import timezone
+from accounts.models import AppSession
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -132,6 +133,14 @@ class VerifyOTPView(APIView):
 
         data = EmployeeProfileSerializer(emp).data
         data['detected_roles'] = detected_roles
+        # The session this login hands back. Until 15-10-2026 it issued
+        # nothing at all: the OTP proved who you were once, and every request
+        # after that named an employee id in the URL and was believed. See
+        # accounts.models.AppSession.
+        data['session_token'] = AppSession.start(
+            'appraisal', emp.employee_id,
+            request.META.get('HTTP_USER_AGENT', ''),
+            request.META.get('REMOTE_ADDR', ''))
         return Response(data)
 
 
@@ -196,6 +205,10 @@ class AdminBootstrapVerifyView(APIView):
         cache.delete(_ADMIN_OTP_CACHE_KEY)
 
         return Response({
+            'session_token': AppSession.start(
+                'appraisal', 'ADMIN',
+                request.META.get('HTTP_USER_AGENT', ''),
+                request.META.get('REMOTE_ADDR', '')),
             'employee_id': 'ADMIN',
             'name': 'System Admin',
             'designation': 'Administrator',

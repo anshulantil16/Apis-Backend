@@ -201,6 +201,20 @@ CORS_ALLOWED_ORIGINS = [
     *[o.strip() for o in os.getenv('CORS_EXTRA_ORIGINS', '').split(',') if o.strip()],
 ]
 
+# Whether Appraisal and EOM refuse a request that carries no session.
+#
+# Off by default on purpose. Those two tools kept their own OTP login from
+# before the portal, and until 15-10-2026 that login proved who you were at
+# the door and issued nothing -- every request afterwards just named an
+# employee id and was believed. Issuing sessions and demanding them in one
+# release would sign out everyone already working, so the two are separate:
+# this ships off while browsers pick up tokens, and goes on afterwards.
+#
+# Set ENFORCE_APP_SESSIONS=1 in the environment to turn it on. Unsetting it
+# turns it off again at the next restart, which is the whole reason it is a
+# flag rather than a code change.
+ENFORCE_APP_SESSIONS = os.environ.get('ENFORCE_APP_SESSIONS', '') in ('1', 'true', 'True', 'yes')
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',

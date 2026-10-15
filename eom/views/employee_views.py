@@ -1,4 +1,5 @@
 from django.utils import timezone
+from .base import EOMAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -16,14 +17,14 @@ EMPLOYEE_FORM_FIELDS = [
 ]
 
 
-class EOMActiveCyclesView(APIView):
+class EOMActiveCyclesView(EOMAPIView):
     """GET /api/eom/cycles/active/"""
 
     def get(self, request):
         return Response(EOMCycleSerializer(EOMCycle.objects.filter(status='open'), many=True).data)
 
 
-class EOMNominationView(APIView):
+class EOMNominationView(EOMAPIView):
     """GET/POST /api/eom/nominations/<employee_id>/<cycle_id>/"""
 
     def get(self, request, employee_id, cycle_id):
@@ -55,7 +56,7 @@ class EOMNominationView(APIView):
         return Response(EOMNominationSerializer(nom, context={'request': request}).data)
 
 
-class EOMDocumentUploadView(APIView):
+class EOMDocumentUploadView(EOMAPIView):
     """POST /api/eom/nominations/<nom_id>/upload-document/"""
     parser_classes = (MultiPartParser, FormParser)
 
@@ -102,7 +103,7 @@ class EOMDocumentUploadView(APIView):
         return Response({'message': 'Document removed.'})
 
 
-class EOMSubmitNominationView(APIView):
+class EOMSubmitNominationView(EOMAPIView):
     """PATCH /api/eom/nominations/<nom_id>/submit/"""
 
     def patch(self, request, nom_id):

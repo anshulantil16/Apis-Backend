@@ -2,6 +2,7 @@
 Employee-facing API views.
 """
 import json
+from .base import AppraisalAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -17,7 +18,7 @@ from appraisal.serializers import (
 from ..notifications import notify_manager_on_employee_submit
 
 
-class EmployeeProfileView(APIView):
+class EmployeeProfileView(AppraisalAPIView):
     def get(self, request, employee_id):
         try:
             emp = EmployeeProfile.objects.get(employee_id=employee_id, is_active=True)
@@ -26,7 +27,7 @@ class EmployeeProfileView(APIView):
             return Response({'error': 'Employee not found'}, status=404)
 
 
-class ActiveCyclesView(APIView):
+class ActiveCyclesView(AppraisalAPIView):
     def get(self, request):
         cycles = PerformanceCycle.objects.filter(
             status__in=['goal_setting', 'goals_locked', 'review_open']
@@ -48,7 +49,7 @@ class ActiveCyclesView(APIView):
         return Response(PerformanceCycleSerializer(cycles, many=True).data)
 
 
-class EmployeeGoalCardView(APIView):
+class EmployeeGoalCardView(AppraisalAPIView):
     def get(self, request, employee_id, cycle_id):
         try:
             emp = EmployeeProfile.objects.get(employee_id=employee_id)
@@ -175,7 +176,7 @@ class EmployeeGoalCardView(APIView):
         return Response(GoalCardSerializer(gc, context={'request': request}).data, status=201 if created else 200)
 
 
-class SubmitGoalCardView(APIView):
+class SubmitGoalCardView(AppraisalAPIView):
     def patch(self, request, gc_id):
         try:
             gc = GoalCard.objects.get(id=gc_id)
@@ -207,7 +208,7 @@ class SubmitGoalCardView(APIView):
         return Response(GoalCardSerializer(gc, context={'request': request}).data)
 
 
-class EmployeeAllGoalCardsView(APIView):
+class EmployeeAllGoalCardsView(AppraisalAPIView):
     def get(self, request, employee_id):
         try:
             emp = EmployeeProfile.objects.get(employee_id=employee_id)
@@ -217,7 +218,7 @@ class EmployeeAllGoalCardsView(APIView):
             return Response({'error': 'Employee not found'}, status=404)
 
 
-class EmployeeSupportDocumentUploadView(APIView):
+class EmployeeSupportDocumentUploadView(AppraisalAPIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, gc_id):
@@ -263,7 +264,7 @@ class EmployeeSupportDocumentUploadView(APIView):
         return Response({'message': 'Document removed.'})
 
 
-class SubmitQuarterlyReviewView(APIView):
+class SubmitQuarterlyReviewView(AppraisalAPIView):
     def post(self, request, gc_id):
         try:
             gc = GoalCard.objects.get(id=gc_id)

@@ -3,6 +3,7 @@ HR Admin-facing API views.
 HR has full access: employee import, cycle management, final calibration, leaderboard.
 """
 import pandas as pd
+from .base import AppraisalAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -19,7 +20,7 @@ from appraisal.serializers import (
 )
 
 
-class EmployeeImportView(APIView):
+class EmployeeImportView(AppraisalAPIView):
     """POST /api/performance/employees/import/ — HR uploads employee master Excel/CSV."""
     parser_classes = (MultiPartParser, FormParser)
 
@@ -133,7 +134,7 @@ class EmployeeImportView(APIView):
         })
 
 
-class EmployeeListView(APIView):
+class EmployeeListView(AppraisalAPIView):
     """GET /api/appraisal/employees/ — list employees
        POST /api/appraisal/employees/ — add a single employee"""
 
@@ -179,7 +180,7 @@ class EmployeeListView(APIView):
         return Response(EmployeeProfileSerializer(emp).data, status=201 if created else 200)
 
 
-class EmployeeDetailView(APIView):
+class EmployeeDetailView(AppraisalAPIView):
     """GET/PATCH/DELETE /api/appraisal/employees/<employee_id>/"""
 
     def get(self, request, employee_id):
@@ -212,7 +213,7 @@ class EmployeeDetailView(APIView):
         return Response({'message': f'{emp.name} deactivated successfully.'})
 
 
-class CycleListCreateView(APIView):
+class CycleListCreateView(AppraisalAPIView):
     """
     GET  /api/performance/cycles/ — list all cycles
     POST /api/performance/cycles/ — HR creates a new cycle
@@ -230,7 +231,7 @@ class CycleListCreateView(APIView):
         return Response(serializer.errors, status=400)
 
 
-class CycleUpdateView(APIView):
+class CycleUpdateView(AppraisalAPIView):
     """PATCH /api/performance/cycles/<cycle_id>/ — update cycle status."""
 
     def patch(self, request, cycle_id):
@@ -247,7 +248,7 @@ class CycleUpdateView(APIView):
         return Response(PerformanceCycleSerializer(cycle).data)
 
 
-class HRFinalizeReviewView(APIView):
+class HRFinalizeReviewView(AppraisalAPIView):
     """PATCH /api/performance/reviews/<review_id>/hr-finalize/ — HR calibrates and publishes final scores."""
 
     def patch(self, request, review_id):
@@ -313,7 +314,7 @@ class HRFinalizeReviewView(APIView):
         return Response(QuarterlyReviewSerializer(review).data)
 
 
-class OrgOverviewView(APIView):
+class OrgOverviewView(AppraisalAPIView):
     """GET /api/performance/org/overview/ — HR org-wide statistics for a cycle."""
 
     def get(self, request):
@@ -369,7 +370,7 @@ class OrgOverviewView(APIView):
         })
 
 
-class LeaderboardView(APIView):
+class LeaderboardView(AppraisalAPIView):
     """GET /api/performance/leaderboard/?cycle_id=<id> — ranked leaderboard."""
 
     def get(self, request):
@@ -404,7 +405,7 @@ class LeaderboardView(APIView):
         return Response(leaderboard)
 
 
-class AllGoalCardsView(APIView):
+class AllGoalCardsView(AppraisalAPIView):
     """GET /api/performance/goal-cards/?cycle_id=<id>&status=<status> — HR sees all."""
 
     def get(self, request):
@@ -423,7 +424,7 @@ class AllGoalCardsView(APIView):
         return Response(GoalCardSerializer(qs, many=True, context={'request': request}).data)
 
 
-class AllReviewsView(APIView):
+class AllReviewsView(AppraisalAPIView):
     """GET /api/performance/reviews/?cycle_id=<id> — HR sees all quarterly reviews."""
 
     def get(self, request):
@@ -442,7 +443,7 @@ class AllReviewsView(APIView):
         return Response(QuarterlyReviewSerializer(qs, many=True).data)
 
 
-class ReopenFormView(APIView):
+class ReopenFormView(AppraisalAPIView):
     """PATCH /api/appraisal/goal-cards/<gc_id>/reopen/ — HR admin reopens a submitted form for employee to re-edit."""
 
     def patch(self, request, gc_id):
@@ -473,7 +474,7 @@ class ReopenFormView(APIView):
         })
 
 
-class ResetDatabaseView(APIView):
+class ResetDatabaseView(AppraisalAPIView):
     """POST /api/performance/org/reset/ — HR resets the appraisal database. Requires confirmation key."""
 
     def post(self, request):

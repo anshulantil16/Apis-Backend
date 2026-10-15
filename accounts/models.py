@@ -304,6 +304,71 @@ class PortalSession(models.Model):
         self.save(update_fields=['last_seen_at', 'expires_at'])
 
 
+class AppSession(models.Model):
+    """A signed-in browser for one of the standalone tools.
+
+    Appraisal and EOM were built before the portal and kept their own OTP
+    logins, which people outside the portal still use. Until now that login
+    proved who you were once, at the door, and handed back a profile and
+    nothing else: every request afterwards said who it was by putting an
+    employee id in the URL, and the server believed it. A sweep on
+    14-10-2026 found /api/appraisal/employees/ and /api/eom/employees/
+    answering anyone at all -- names, employee ids, email addresses and
+    phone numbers -- with no credential of any kind.
+
+    This is the missing half of that login: it issues something only the
+    person who passed the OTP holds. Deliberately the same shape as
+    PortalSession, including storing only the hash, so that whoever can read
+    this table cannot thereby become everyone in it.
+
+    Keyed by app and employee id rather than a foreign key: Appraisal and
+    EOM each have their own employee table, and one FK cannot point at both.
+    """
+    TTL = timedelta(hours=12)
+
+    app          = models.CharField(max_length=20, db_index=True)   # 'appraisal' | 'eom'
+    employee_id  = models.CharField(max_length=50, db_index=True)
+    token_hash   = models.CharField(max_length=64, unique=True, db_index=True)
+    user_agent   = models.CharField(max_length=300, blank=True)
+    ip_address   = models.CharField(max_length=64, blank=True)
+    revoked_at   = models.DateTimeField(null=True, blank=True)
+    expires_at   = models.DateTimeField()
+    created_at   = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-last_seen_at']
+
+    def __str__(self):
+        return f'{self.app}:{self.employee_id}'
+
+    @staticmethod
+    def hash_token(token):
+        return hashlib.sha256(str(token).encode()).hexdigest()
+
+    @classmethod
+    def start(cls, app, employee_id, user_agent='', ip=''):
+        """Open a session and hand back the raw token - the only time it exists."""
+        token = secrets.token_urlsafe(32)
+        cls.objects.create(app=app, employee_id=str(employee_id),
+                           token_hash=cls.hash_token(token),
+                           user_agent=(user_agent or '')[:300], ip_address=(ip or '')[:64],
+                           expires_at=timezone.now() + cls.TTL)
+        return token
+
+    @property
+    def is_live(self):
+        return self.revoked_at is None and self.expires_at > timezone.now()
+
+    def touch(self):
+        """Slide the window forward so an active user is not logged out
+        halfway through a goal sheet."""
+        now = timezone.now()
+        self.last_seen_at = now
+        self.expires_at = now + self.TTL
+        self.save(update_fields=['last_seen_at', 'expires_at'])
+
+
 class HrmsSyncLog(models.Model):
     """What a sync did, so an unexpected change to the directory is traceable.
 

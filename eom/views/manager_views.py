@@ -1,4 +1,5 @@
 from django.utils import timezone
+from .base import EOMAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
@@ -16,7 +17,7 @@ MANAGER_SCORE_FIELDS = [
 ]
 
 
-class EOMManagerTeamView(APIView):
+class EOMManagerTeamView(EOMAPIView):
     """GET /api/eom/manager/<manager_id>/team/?cycle_id=<id>"""
 
     def get(self, request, manager_id):
@@ -43,7 +44,7 @@ class EOMManagerTeamView(APIView):
         return Response(result)
 
 
-class EOMManagerReviewView(APIView):
+class EOMManagerReviewView(EOMAPIView):
     """PATCH /api/eom/nominations/<nom_id>/manager-review/"""
 
     def patch(self, request, nom_id):

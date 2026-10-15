@@ -2,6 +2,7 @@
 Progress tracking and report views.
 Handles mid-quarter updates, employee progress reports, team dashboards, and org analytics.
 """
+from .base import AppraisalAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -13,7 +14,7 @@ from appraisal.models import (
 from appraisal.serializers import GoalProgressUpdateSerializer
 
 
-class GoalProgressView(APIView):
+class GoalProgressView(AppraisalAPIView):
     """GET/POST progress updates for a single goal."""
 
     def get(self, request, goal_id):
@@ -42,7 +43,7 @@ class GoalProgressView(APIView):
         return Response(serializer.errors, status=400)
 
 
-class EmployeeProgressReportView(APIView):
+class EmployeeProgressReportView(AppraisalAPIView):
     """Full performance history for one employee — all cycles, goals, updates, scores."""
 
     def get(self, request, employee_id):
@@ -156,7 +157,7 @@ class EmployeeProgressReportView(APIView):
         })
 
 
-class TeamProgressReportView(APIView):
+class TeamProgressReportView(AppraisalAPIView):
     """Manager's team progress dashboard for a given cycle."""
 
     def get(self, request, manager_id):
@@ -253,7 +254,7 @@ class TeamProgressReportView(APIView):
         })
 
 
-class OrgAnalyticsView(APIView):
+class OrgAnalyticsView(AppraisalAPIView):
     """HR org-wide analytics for a cycle — feeds all charts on the HR dashboard."""
 
     def get(self, request):

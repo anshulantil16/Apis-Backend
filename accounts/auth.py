@@ -9,12 +9,14 @@ vacancies, referrals, tada and sales.
 Nothing here decides *what* a user may do beyond the superadmin flag; per-tool
 access still comes from PortalUser.can_open.
 """
+from django.conf import settings
+
 from rest_framework import status
 from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import PortalSession
+from .models import AppSession, PortalSession
 
 
 def client_ip(request):
@@ -163,4 +165,64 @@ class SessionRequiredAPIView(PortalScopedAPIView):
             r.accepted_media_type = 'application/json'
             r.renderer_context = {}
             return r.render()
+        return super().dispatch(request, *args, **kwargs)
+
+
+# ── the standalone tools: Appraisal and EOM ─────────────────────────────────
+
+def _bearer(request):
+    raw = request.META.get('HTTP_AUTHORIZATION', '')
+    return raw[7:].strip() if raw.lower().startswith('bearer ') else raw.strip()
+
+
+def current_app_session(request, app):
+    """The live AppSession behind this request for `app`, or None."""
+    token = _bearer(request)
+    if not token:
+        return None
+    s = (AppSession.objects
+         .filter(app=app, token_hash=AppSession.hash_token(token))
+         .first())
+    return s if (s and s.is_live) else None
+
+
+def signed_in_for(request, app):
+    """Whether this request carries ANY credential good for `app`.
+
+    Either of two counts. A portal session, because inside the intranet
+    these tools are opened by someone already signed in and sending that
+    token. Or the app's own session, for the people who use Appraisal and
+    EOM on their own, outside the portal, with the OTP login those tools
+    have always had.
+    """
+    return current_session(request) is not None or current_app_session(request, app) is not None
+
+
+class AppSessionRequiredAPIView(PortalScopedAPIView):
+    """Base for Appraisal and EOM endpoints. Subclasses set APP.
+
+    Enforcement is behind settings.ENFORCE_APP_SESSIONS, which is off by
+    default, and that is the point rather than an oversight. Turning the
+    requirement on in the same release that starts issuing the tokens would
+    sign out everyone who was already working -- mid goal sheet, mid
+    nomination -- because their browser has no token to send yet. So this
+    ships inert: the login starts handing out sessions, the pages start
+    sending them, and nobody notices. Once the people using these tools are
+    carrying tokens, the flag goes on and the door shuts.
+
+    Checked per request rather than at import, so the flag can be turned on
+    with a restart and turned off again just as fast if it bites.
+    """
+    APP = ''
+
+    def dispatch(self, request, *args, **kwargs):
+        if getattr(settings, 'ENFORCE_APP_SESSIONS', False):
+            drf_request = self.initialize_request(request, *args, **kwargs)
+            if not signed_in_for(drf_request, self.APP):
+                r = Response({'error': 'Please sign in again to continue.'},
+                             status=status.HTTP_401_UNAUTHORIZED)
+                r.accepted_renderer = JSONRenderer()
+                r.accepted_media_type = 'application/json'
+                r.renderer_context = {}
+                return r.render()
         return super().dispatch(request, *args, **kwargs)
