@@ -6,17 +6,17 @@
       = Fixed CTC, per month (F)
 
     F = Gross Salary + employer PF + ESI + Mediclaim + Statutory Bonus + Gratuity
-    Gross Salary   = Gross Earnings + the cadre's reimbursements (full slab)
+    Gross Salary   = Gross Earnings + the reimbursements picked (full slab)
     Gross Earnings = Basic + HRA + CEA + LTA + Special Allowance
-    Basic             = 50% of Gross Earnings
+    Basic             = 50% of Gross Salary
     HRA               = 50% of Basic          (W: 20%)
     CEA               = Rs 3,000 per child, up to 2 children (D, C, M)
     LTA               = per cadre (settings)
     Special Allowance = Gross Salary - every other component (the balance)
 
-Reimbursements are paid at their full slab; only when a CTC is too small
-for Special Allowance to stay above zero are they reduced, from the end of
-the preference order. Basic depends on Gross, and Gross on PF and Bonus,
+Reimbursements picked on the template are paid at their full slab; only
+when what is left after Basic, HRA, CEA and LTA can't hold them all are
+they reduced, from the end of the preference order, and Special is then 0. Basic depends on Gross, and Gross on PF and Bonus,
 which depend on Basic - so they are solved together; the loop settles in a
 handful of passes.
 Gross Salary must be at least the work location's state minimum wage
@@ -132,12 +132,12 @@ def vpp_percent(category, grade, department, designation):
     return 0, ''
 
 
-def _solve(F, med, s, small, reimb_total):
+def _solve(F, med, s, small):
     """Monthly gross salary for one branch: small=True applies ESI and Bonus.
     Basic is a share of gross earnings, i.e. gross less reimbursements."""
     gross = F - med
     for _ in range(60):
-        basic = (gross - reimb_total) * rules.BASIC_PERCENT / 100
+        basic = gross * rules.BASIC_PERCENT / 100
         pf = min(basic, s.pf_wage_ceiling) * rules.PF_PERCENT / 100
         grat = basic * float(s.gratuity_percent) / 100
         bonus = basic * rules.BONUS_PERCENT / 100 if small else 0
@@ -233,16 +233,12 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         reimb.append([key, label, paid, int(amount)])
 
     def settle():
-        """Gross salary, Basic, HRA and the employer items. Basic is set off
-        the cadre's entitlement - every item as if answered Yes - so one
-        answered No leaves Basic, HRA and PF alone and its whole amount
-        goes to Special Allowance."""
-        r_total = sum(e for _k, _l, _p, e in reimb)
-        gross = _solve(F, med, s, small=False, reimb_total=r_total)
+        """Gross salary, Basic, HRA and the employer items."""
+        gross = _solve(F, med, s, small=False)
         small = gross <= s.esi_bonus_gross_limit
         if small:
-            gross = _solve(F, med, s, small=True, reimb_total=r_total)
-        half = (gross - r_total) * rules.BASIC_PERCENT / 100
+            gross = _solve(F, med, s, small=True)
+        half = gross * rules.BASIC_PERCENT / 100
         basic = _r(half)
         pf = _r(min(basic, s.pf_wage_ceiling) * rules.PF_PERCENT / 100)
         grat = _r(basic * float(s.gratuity_percent) / 100)
@@ -265,11 +261,7 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
             short = -balance()
             if short <= 0 or not item[2]:
                 break
-            # Each rupee of reimbursement moved back into Gross Earnings only
-            # frees a quarter of a rupee for Special (Basic and HRA take the rest).
-            step = min(item[2], max(1, _r(short * 4)))
-            item[2] -= step
-            item[3] -= step
+            item[2] -= min(item[2], short)          # Basic doesn't move: rupee for rupee
             x = settle()
             if item[1] not in reduced:
                 reduced.append(item[1])
@@ -292,27 +284,28 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         lta -= min(lta, -balance())
         reduced.append('Leave Travel Allowance')
     if reduced:
-        notes.append('CTC is too low for the full cadre entitlement, so these were reduced: '
+        notes.append('After Basic (50% of Gross Salary), HRA and CEA there was not room for '
+                     'everything picked, so these were reduced: '
                      + ', '.join(reduced) + '.')
     gross, basic = x['gross'], x['basic']
     pf, grat, bonus, esi, small = x['pf'], x['grat'], x['bonus'], x['esi'], x['small']
     # The minimum wage is on the total gross salary per month.
     if gross < min_wage:
-            ctc_m = _r(float(ctc_annual) / 12)
-            taken = [(f'VPP {pct}%', _r(vpp_annual / 12)), ('Gift', gift_m), ('Employer PF', pf),
-                     ('Employer ESI', esi), ('Statutory Bonus', bonus), ('Mediclaim', med),
-                     ('Gratuity', grat)]
-            taken = ', '.join(f'{label} Rs {_inr(amt)}' for label, amt in taken if amt)
-            need = _minimum_ctc(dict(cadre=cadre, grade=grade, category=category,
-                                     department=department, designation=designation,
-                                     work_location=work_location, children=children,
-                                     options=options, settings=s)) if _search else None
-            return {'error': f"Below {state}'s minimum wage. The minimum wage of Rs {_inr(min_wage)} a month "
-                             f'is checked against the Gross Salary, not the CTC. This CTC is '
-                             f'Rs {_inr(ctc_m)} a month, but {taken} are part of the CTC and not paid '
-                             f'as monthly salary, which leaves a Gross Salary of Rs {_inr(gross)} - '
-                             f'Rs {_inr(min_wage - gross)} short.'
-                             + (f' Raise the CTC to at least about Rs {_inr(need)} a year.' if need else '')}
+        ctc_m = _r(float(ctc_annual) / 12)
+        taken = [(f'VPP {pct}%', _r(vpp_annual / 12)), ('Gift', gift_m), ('Employer PF', pf),
+                 ('Employer ESI', esi), ('Statutory Bonus', bonus), ('Mediclaim', med),
+                 ('Gratuity', grat)]
+        taken = ', '.join(f'{label} Rs {_inr(amt)}' for label, amt in taken if amt)
+        need = _minimum_ctc(dict(cadre=cadre, grade=grade, category=category,
+                                 department=department, designation=designation,
+                                 work_location=work_location, children=children,
+                                 options=options, settings=s)) if _search else None
+        return {'error': f"Below {state}'s minimum wage. The minimum wage of Rs {_inr(min_wage)} a month "
+                         f'is checked against the Gross Salary, not the CTC. This CTC is '
+                         f'Rs {_inr(ctc_m)} a month, but {taken} are part of the CTC and not paid '
+                         f'as monthly salary, which leaves a Gross Salary of Rs {_inr(gross)} - '
+                         f'Rs {_inr(min_wage - gross)} short.'
+                         + (f' Raise the CTC to at least about Rs {_inr(need)} a year.' if need else '')}
     if balance() < 0:
         return {'error': 'CTC is too low for this cadre: Basic alone exceeds the gross salary.'}
     spl = balance()
@@ -321,7 +314,7 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
 
     earnings = [
         _line('Basic Salary (Inclusive of DA/VDA)', basic,
-              f'{rules.BASIC_PERCENT}% of Gross Earnings'),
+              f'{rules.BASIC_PERCENT}% of Gross Salary'),
         _line('House Rent Allowance (HRA)', hra, hra_note),
         _line('Child Education Allowance (CEA)', cea,
               f'Rs {rules.CEA_PER_CHILD[cadre]:,} x {counted} child{"ren" if counted != 1 else ""}'

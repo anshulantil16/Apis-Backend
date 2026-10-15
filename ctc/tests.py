@@ -256,10 +256,11 @@ class Calculator(TestCase):
             self.assertEqual(sum(x['annual'] for x in b['earnings']), b['grossEarningsAnnual'])
             self.assertEqual(b['fixedAnnual'] + sum(x['annual'] for x in b['otherPayments']), ctc)
 
-    def test_basic_is_half_of_gross_earnings_and_hra_half_of_basic(self):
+    def test_basic_is_half_of_gross_salary_and_hra_half_of_basic(self):
         b = self.calc()
         basic, hra = b['earnings'][0]['monthly'], b['earnings'][1]['monthly']
-        self.assertAlmostEqual(basic, b['grossEarnings'] / 2, delta=1)
+        self.assertAlmostEqual(basic, b['grossSalary'] / 2, delta=1)
+        self.assertEqual(b['earnings'][0]['note'], '50% of Gross Salary')
         self.assertAlmostEqual(hra, basic / 2, delta=1)
         w = self.calc(ctc_annual=180000, cadre='W', grade='W2', category='Plant', work_location='Rajasthan')
         self.assertAlmostEqual(w['earnings'][1]['monthly'], w['earnings'][0]['monthly'] * 0.2, delta=1)
@@ -321,7 +322,7 @@ class Calculator(TestCase):
         self.assertEqual(pf, round(basic * 0.12))
 
     def test_gross_earnings_answered_no_are_not_paid(self):
-        base = dict(ctc_annual=1500000, cadre='C', grade='C3', category='HO', work_location='Delhi')
+        base = dict(ctc_annual=3500000, cadre='C', grade='C2', category='HO', work_location='Delhi')
         full = self.calc(**base)
         some = self.calc(**base, options={'telephone': False, 'uniform': False, 'car': True})
         paid = {x['key']: x['monthly'] for x in some['reimbursements']}
@@ -333,7 +334,7 @@ class Calculator(TestCase):
         self.assertEqual(spl(some) - spl(full), 10000 + 10000)
         self.assertEqual(some['earnings'][:2], full['earnings'][:2])
         self.assertEqual(some['benefits'], full['benefits'])
-        self.assertEqual(some['totalCtcAnnual'], 1500000)
+        self.assertEqual(some['totalCtcAnnual'], 3500000)
         # O and W have no Gross Earnings items, whatever is passed.
         o = self.calc(ctc_annual=600000, cadre='O', grade='O3', category='Plant',
                       work_location='Uttar Pradesh', options={'car': True})
@@ -341,7 +342,7 @@ class Calculator(TestCase):
 
     def test_full_slab_reimbursements_and_special_takes_the_balance(self):
         from .rules import REIMBURSEMENTS
-        b = self.calc(ctc_annual=1500000, cadre='C', grade='C3', category='HO', children=2,
+        b = self.calc(ctc_annual=3500000, cadre='C', grade='C2', category='HO', children=2,
                       work_location='Delhi')
         paid = {x['key']: x['monthly'] for x in b['reimbursements']}
         self.assertEqual(paid, {k: amounts['C'] for k, _l, amounts in REIMBURSEMENTS})
@@ -369,8 +370,8 @@ class Calculator(TestCase):
         b = self.calc(ctc_annual=345000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
         self.assertNotIn('error', b)
         self.assertGreaterEqual(b['grossSalary'], 22500)
-        self.assertIn('50% of Gross Earnings', b['earnings'][0]['note'])
-        self.assertAlmostEqual(b['earnings'][0]['monthly'], b['grossEarnings'] / 2, delta=1)
+        self.assertIn('50% of Gross Salary', b['earnings'][0]['note'])
+        self.assertAlmostEqual(b['earnings'][0]['monthly'], b['grossSalary'] / 2, delta=1)
         unknown = self.calc(work_location='Atlantis')
         self.assertTrue(any('No minimum wage found' in n for n in unknown['notes']))
         # Below it: refused, with the gross worked out and the lowest CTC that works.
