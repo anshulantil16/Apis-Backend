@@ -2,7 +2,7 @@
 
     Total CTC (per annum, as uploaded)
       - Variable / Performance Pay      VPP % of total CTC (rules.VPP_*)
-      - Gift Reimbursement              Rs 1,250 a month, paid quarterly
+      - Gift Reimbursement              Rs 1,250 a month for D, C, M (none for O, W)
       = Fixed CTC, per month (F)
 
     F = Gross Salary + employer PF + ESI + Mediclaim + Statutory Bonus + Gratuity
@@ -111,7 +111,7 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     # -- off the top: VPP and Gift ------------------------------------------
     pct, vpp_rule = vpp_percent(category, grade, department, designation)
     vpp_annual = _r(ctc_annual * pct / 100)
-    gift_m = rules.GIFT_MONTHLY
+    gift_m = rules.GIFT_MONTHLY[cadre]
     F = _r((ctc_annual - vpp_annual - gift_m * 12) / 12)
     if F <= 0:
         return {'error': 'CTC is too low to cover VPP and the gift reimbursement.'}
@@ -189,7 +189,7 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     other = [
         {'label': 'Variable / Performance Pay', 'monthly': _r(vpp_annual / 12), 'annual': vpp_annual,
          'note': f'{pct}% of CTC ({vpp_rule}), paid quarterly' if pct else 'Not applicable'},
-        {'label': 'Gift Reimbursement', 'monthly': gift_m, 'annual': gift_m * 12, 'note': 'Paid quarterly'},
+        {'label': 'Gift Reimbursement', 'monthly': gift_m, 'annual': gift_m * 12, 'note': 'Paid quarterly' if gift_m else 'Not applicable'},
     ]
     total_annual = fixed * 12 + vpp_annual + gift_m * 12
     if total_annual != ctc_annual:

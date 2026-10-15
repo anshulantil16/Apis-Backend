@@ -215,6 +215,9 @@ class Calculator(TestCase):
         vpp, gift = b['otherPayments']
         self.assertEqual(vpp['annual'], 120000)              # 10% of 12 lakh
         self.assertEqual(gift['monthly'], 1250)
+        for cadre, grade in (('O', 'O3'), ('W', 'W2')):
+            other = self.calc(ctc_annual=300000, cadre=cadre, grade=grade, category='Plant')['otherPayments']
+            self.assertEqual(other[1]['annual'], 0, f'cadre {cadre} should get no gift')
         self.assertEqual(self.calc(category='HO', grade='M1')['vppPercent'], 0)
         self.assertEqual(self.calc(category='HO', grade='M3', cadre='M')['vppPercent'], 8)
         self.assertEqual(self.calc(category='Plant', grade='M4')['vppPercent'], 8)

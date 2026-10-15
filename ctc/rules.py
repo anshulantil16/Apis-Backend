@@ -29,7 +29,7 @@ PF_PERCENT = 12                          # employer, of Basic up to the PF wage 
 ESI_PERCENT = 3.25                       # employer, of gross salary — small salaries only
 BONUS_PERCENT = 8.33                     # statutory, of Basic — small salaries only
 
-GIFT_MONTHLY = 1250                      # every cadre; Rs 15,000 a year, paid quarterly
+GIFT_MONTHLY = {'D': 1250, 'C': 1250, 'M': 1250, 'O': 0, 'W': 0}   # Rs 15,000 a year, paid quarterly
 
 # Children Education Allowance — part of gross earnings. Preference index 1.
 CEA_MONTHLY = {'D': 6000, 'C': 6000, 'M': 6000, 'O': 0, 'W': 0}
