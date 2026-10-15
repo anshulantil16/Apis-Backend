@@ -1075,3 +1075,33 @@ class TheFieldNamesWeSend(TestCase):
         # sent, not merely matched case-insensitively after the fact.
         self.assertIn('POCKETREPORTINGMANAGER', hrms.EMPLOYEE_FIELDS)
         self.assertIn('GRADE', hrms.EMPLOYEE_FIELDS)
+
+
+class WhereTheReadableValueLives(TestCase):
+    """The two Pocket HRMS endpoints disagree, and reading only one of them
+    silently empties a column on the other.
+
+    Old endpoint: a numeric id under the plain name, the text under
+    "<name>String". Filtered endpoint: no String partner at all, the text in
+    the plain column -- confirmed by probe on 15-10-2026, where Category
+    answered with values and CategoryString was not a column.
+    """
+
+    def test_the_string_partner_is_used_when_it_is_there(self):
+        from accounts.services import hrms
+        self.assertEqual(
+            hrms._resolved({'Department': '37', 'DepartmentString': 'SALES (MT)'},
+                           'Department'), 'SALES (MT)')
+
+    def test_the_plain_column_is_used_when_it_carries_the_text(self):
+        from accounts.services import hrms
+        self.assertEqual(hrms._resolved({'Category': 'Sales'}, 'Category'), 'Sales')
+        self.assertEqual(hrms._resolved({'Department': 'ADMIN'}, 'Department'), 'ADMIN')
+
+    def test_a_bare_id_is_never_stored_as_a_name(self):
+        """"37" looks like data and reads like nonsense on a screen; a blank
+        at least says nothing rather than something wrong."""
+        from accounts.services import hrms
+        self.assertEqual(hrms._resolved({'Department': '37'}, 'Department'), '')
+        self.assertEqual(hrms._resolved({'Department': '0'}, 'Department'), '')
+        self.assertEqual(hrms._resolved({}, 'Department'), '')

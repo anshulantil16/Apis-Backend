@@ -82,6 +82,19 @@ _DEFAULT_FIELDS = [
     'PocketReportingManager', 'POCKETREPORTINGMANAGERstring',
     'EmpStatus', 'DateOfJoining', 'DateOfBirth',
     'OfficeMobileNo', 'PersonalMobileNo',
+
+    # Proved to carry values by `manage.py hrms_columns --probe` on
+    # 15-10-2026. Asked for so the master data is complete in one place and
+    # nobody has to re-type it into a spreadsheet for the next tool.
+    'CostCentre', 'State', 'Gender', 'MaritalStatus', 'ConfirmationDate',
+
+    # Real columns that nobody has filled in yet. Costs nothing to ask, and
+    # the day HR maps the reporting line this starts working on its own --
+    # which is exactly how PocketReportingManager behaved: written off as
+    # "not available on this tenant" for months, then one employee had it.
+    # There is no CADRE column of any spelling; the cadre is the letter in
+    # front of the grade -- O2, M3, W1 -- so `grade` already carries it.
+    'HOD', 'Branch',
 ]
 
 # Which endpoint. "...filtered" is not a tidier version of the other one: it
@@ -256,13 +269,25 @@ def _pick(row, *names):
 def _resolved(row, base, string_name=None):
     """The readable name behind one of the lookup columns.
 
-    Department, Designation, Location and the rest come back twice: a numeric
-    id under the plain name and the text under "<name>String". Only the text
-    is ever wanted here, and there is deliberately no fallback to the id - a
-    department recorded as "0" or "37" is worse than a blank one, because it
-    looks like data and reads like nonsense on the screen.
+    The two endpoints disagree about where it lives, and reading only one of
+    them empties a column on the other.
+
+    On the old endpoint a lookup comes back twice: a numeric id under the
+    plain name and the text under "<name>String". On the filtered endpoint
+    there is no String partner at all -- the plain name carries the text
+    itself, the same way GRADE does. A probe on 15-10-2026 confirmed it:
+    Category answered with values, CategoryString was not a column.
+
+    So: take the String if it is there, otherwise the plain column -- unless
+    the plain column is just digits, which is the old endpoint's id and is
+    worse than a blank, because "37" looks like data and reads like nonsense
+    on a screen.
     """
-    return _pick(row, string_name or f'{base}String')
+    text = _pick(row, string_name or f'{base}String')
+    if text:
+        return text
+    plain = _pick(row, base)
+    return '' if plain.isdigit() else plain
 
 
 def _manager(row):
