@@ -237,10 +237,10 @@ class Calculator(TestCase):
             self.assertEqual(sum(x['annual'] for x in b['earnings']), b['grossEarningsAnnual'])
             self.assertEqual(b['fixedAnnual'] + sum(x['annual'] for x in b['otherPayments']), ctc)
 
-    def test_basic_is_half_of_gross_and_hra_half_of_basic(self):
+    def test_basic_is_half_of_gross_earnings_and_hra_half_of_basic(self):
         b = self.calc()
         basic, hra = b['earnings'][0]['monthly'], b['earnings'][1]['monthly']
-        self.assertAlmostEqual(basic, b['grossSalary'] / 2, delta=1)
+        self.assertAlmostEqual(basic, b['grossEarnings'] / 2, delta=1)
         self.assertAlmostEqual(hra, basic / 2, delta=1)
         w = self.calc(ctc_annual=180000, cadre='W', grade='W2', category='Plant', work_location='Rajasthan')
         self.assertAlmostEqual(w['earnings'][1]['monthly'], w['earnings'][0]['monthly'] * 0.2, delta=1)
@@ -293,6 +293,18 @@ class Calculator(TestCase):
         self.assertEqual(b['Employer PF Contribution'], 1800)
         self.assertEqual(b['Mediclaim Charges'], 950)
 
+    def test_full_slab_reimbursements_and_special_takes_the_balance(self):
+        from .rules import REIMBURSEMENTS
+        b = self.calc(ctc_annual=1500000, cadre='C', grade='C3', category='HO', children=2,
+                      work_location='Delhi')
+        paid = {x['key']: x['monthly'] for x in b['reimbursements']}
+        self.assertEqual(paid, {k: amounts['C'] for k, _l, amounts in REIMBURSEMENTS})
+        spl = next(x for x in b['earnings'] if x['label'].startswith('Special'))['monthly']
+        self.assertGreater(spl, 0)
+        others = sum(x['monthly'] for x in b['earnings'] if not x['label'].startswith('Special'))
+        self.assertEqual(spl, b['grossSalary'] - others - sum(paid.values()))
+        self.assertEqual(b['notes'], [])
+
     def test_reimbursements_are_trimmed_not_overdrawn(self):
         b = self.calc(ctc_annual=420000, category='HO')
         spl = next(x for x in b['earnings'] if x['label'].startswith('Special'))
@@ -316,7 +328,7 @@ class Calculator(TestCase):
         self.assertIn('Reduced', hra['note'])
         # Same CTC in Rajasthan (Rs 8,950): 50% of gross is higher, so that stands.
         r = self.calc(ctc_annual=330000, cadre='O', grade='O1', category='Plant', work_location='Rajasthan')
-        self.assertIn('% of Gross Salary', r['earnings'][0]['note'])
+        self.assertIn('% of Gross Earnings', r['earnings'][0]['note'])
         self.assertGreater(r['earnings'][0]['monthly'], 8950)
         unknown = self.calc(work_location='Atlantis')
         self.assertTrue(any('No minimum wage found' in n for n in unknown['notes']))

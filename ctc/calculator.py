@@ -6,15 +6,20 @@
       = Fixed CTC, per month (F)
 
     F = Gross Salary + employer PF + ESI + Mediclaim + Statutory Bonus + Gratuity
-    Basic             = 50% of Gross Salary, or the work location's state
+    Gross Salary   = Gross Earnings + the cadre's reimbursements (full slab)
+    Gross Earnings = Basic + HRA + CEA + LTA + Special Allowance
+    Basic             = 50% of Gross Earnings, or the work location's state
                         minimum wage if that is higher
     HRA               = 50% of Basic          (W: 20%)
     CEA               = Rs 3,000 per child, up to 2 children (D, C, M)
-    LTA and the cadre's reimbursements are fixed amounts
-    Special Allowance = Gross Salary - everything else in it (the balance)
+    LTA               = per cadre (settings)
+    Special Allowance = Gross Salary - every other component (the balance)
 
-Basic depends on Gross, and Gross on PF and Bonus, which depend on Basic -
-so the two are solved together; the loop settles in a handful of passes.
+Reimbursements are paid at their full slab; only when a CTC is too small
+for Special Allowance to stay above zero are they reduced, from the end of
+the preference order. Basic depends on Gross, and Gross on PF and Bonus,
+which depend on Basic - so they are solved together; the loop settles in a
+handful of passes.
 ESI and Statutory Bonus apply only when Gross Salary is within the limit
 (Rs 21,000 a month by default).
 
@@ -124,11 +129,12 @@ def vpp_percent(category, grade, department, designation):
     return 0, ''
 
 
-def _solve(F, med, min_wage, s, small):
-    """Monthly gross for one branch: small=True applies ESI and Bonus."""
+def _solve(F, med, min_wage, s, small, reimb_total):
+    """Monthly gross salary for one branch: small=True applies ESI and Bonus.
+    Basic is a share of gross earnings, i.e. gross less reimbursements."""
     gross = F - med
     for _ in range(60):
-        basic = max(gross * rules.BASIC_PERCENT / 100, min_wage)
+        basic = max((gross - reimb_total) * rules.BASIC_PERCENT / 100, min_wage)
         pf = min(basic, s.pf_wage_ceiling) * rules.PF_PERCENT / 100
         grat = basic * float(s.gratuity_percent) / 100
         bonus = basic * rules.BONUS_PERCENT / 100 if small else 0
@@ -182,22 +188,6 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         notes.append(f'No minimum wage found for work location "{work_location or "-"}", '
                      'so Basic was not checked against one.')
 
-    # -- Gross, Basic and the employer items, solved together ---------------
-    gross = _solve(F, med, min_wage, s, small=False)
-    small = gross <= s.esi_bonus_gross_limit
-    if small:
-        gross = _solve(F, med, min_wage, s, small=True)
-
-    half = gross * rules.BASIC_PERCENT / 100
-    on_min_wage = min_wage > half
-    basic = _r(max(half, min_wage))
-    pf = _r(min(basic, s.pf_wage_ceiling) * rules.PF_PERCENT / 100)
-    grat = _r(basic * float(s.gratuity_percent) / 100)
-    bonus = _r(basic * rules.BONUS_PERCENT / 100) if small else 0
-    esi = _r(gross * rules.ESI_PERCENT / 100) if small else 0
-    gross = F - pf - esi - med - bonus - grat        # exact, so the fixed part adds up
-
-    hra = _r(basic * rules.HRA_PERCENT[cadre] / 100)
     counted = min(max(int(children or 0), 0), rules.CEA_MAX_CHILDREN)
     cea = rules.CEA_PER_CHILD[cadre] * counted
     lta = s.lta_for(cadre)
@@ -209,23 +199,60 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
             amount = s.actual_for(key)
         reimb.append([key, label, int(amount)])
 
-    # -- Special Allowance is the balance; trim reimbursements if short -----
+    def settle():
+        """Gross salary, Basic, HRA and the employer items for the
+        reimbursements as they stand."""
+        r_total = sum(a for _k, _l, a in reimb)
+        gross = _solve(F, med, min_wage, s, small=False, reimb_total=r_total)
+        small = gross <= s.esi_bonus_gross_limit
+        if small:
+            gross = _solve(F, med, min_wage, s, small=True, reimb_total=r_total)
+        half = (gross - r_total) * rules.BASIC_PERCENT / 100
+        on_min = min_wage > half
+        basic = _r(max(half, min_wage))
+        pf = _r(min(basic, s.pf_wage_ceiling) * rules.PF_PERCENT / 100)
+        grat = _r(basic * float(s.gratuity_percent) / 100)
+        bonus = _r(basic * rules.BONUS_PERCENT / 100) if small else 0
+        esi = _r(gross * rules.ESI_PERCENT / 100) if small else 0
+        gross = F - pf - esi - med - bonus - grat    # exact, so the fixed part adds up
+        hra = _r(basic * rules.HRA_PERCENT[cadre] / 100)
+        return dict(gross=gross, basic=basic, hra=hra, pf=pf, grat=grat, bonus=bonus,
+                    esi=esi, small=small, on_min=on_min)
+
+    # -- Special Allowance is the balance; trim reimbursements only if short --
+    x = settle()
+
     def balance():
-        return gross - basic - hra - cea - lta - sum(a for _k, _l, a in reimb)
+        return x['gross'] - x['basic'] - x['hra'] - cea - lta - sum(a for _k, _l, a in reimb)
 
     reduced = []
     for item in reversed(reimb):
+        for _ in range(200):
+            short = -balance()
+            if short <= 0 or not item[2]:
+                break
+            # Each rupee of reimbursement moved back into Gross Earnings only
+            # frees a quarter of a rupee for Special (Basic and HRA take the
+            # rest) unless Basic is sitting on the minimum wage.
+            step = short if x['on_min'] else short * 4
+            item[2] -= min(item[2], max(1, _r(step)))
+            x = settle()
+            if item[1] not in reduced:
+                reduced.append(item[1])
         if balance() >= 0:
             break
-        if item[2]:
-            item[2] -= min(item[2], -balance())
-            reduced.append(item[1])
+    # From here Basic and the employer items are fixed; what is left to give
+    # way is CEA, then HRA, then LTA - each a straight rupee-for-rupee cut.
+    hra = full_hra = x['hra']
+
+    def balance():                                      # noqa: F811 - HRA can now shrink
+        return x['gross'] - x['basic'] - hra - cea - lta - sum(a for _k, _l, a in reimb)
+
     if balance() < 0 and cea:
         cea -= min(cea, -balance())
         reduced.append('Child Education Allowance')
     # Basic on a state minimum wage can leave no room for HRA at its usual
     # share; the minimum wage is the legal floor, so HRA (then LTA) gives way.
-    full_hra = hra
     if balance() < 0 and hra:
         hra -= min(hra, -balance())
         reduced.append('House Rent Allowance')
@@ -235,6 +262,8 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     if reduced:
         notes.append('CTC is too low for the full cadre entitlement, so these were reduced: '
                      + ', '.join(reduced) + '.')
+    gross, basic, on_min_wage = x['gross'], x['basic'], x['on_min']
+    pf, grat, bonus, esi, small = x['pf'], x['grat'], x['bonus'], x['esi'], x['small']
     if balance() < 0:
         if on_min_wage:
             return {'error': f'CTC is too low: the gross salary is below the {state} minimum wage '
@@ -246,13 +275,13 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
 
     earnings = [
         _line('Basic Salary (Inclusive of DA/VDA)', basic,
-              f'Minimum wage, {state}' if on_min_wage else f'{rules.BASIC_PERCENT}% of Gross Salary'),
+              f'Minimum wage, {state}' if on_min_wage else f'{rules.BASIC_PERCENT}% of Gross Earnings'),
         _line('House Rent Allowance (HRA)', hra, hra_note),
         _line('Child Education Allowance (CEA)', cea,
               f'Rs {rules.CEA_PER_CHILD[cadre]:,} x {counted} child{"ren" if counted != 1 else ""}'
               if cea else ''),
         _line('Leave Travel Allowance (LTA)', lta, 'As per cadre' if lta else ''),
-        _line('Special Allowance (Flexi Pay)', spl, 'Balance of Gross Salary'),
+        _line('Special Allowance (Flexi Pay)', spl, 'Gross Salary less all other components'),
     ]
     gross_earnings = sum(r['monthly'] for r in earnings)
     # Every reimbursement, zeros included and keyed, so the Annexure A PDF can
