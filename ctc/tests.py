@@ -233,7 +233,9 @@ class Calculator(TestCase):
             gross = sum(x['monthly'] for x in b['earnings']) + sum(x['monthly'] for x in b['reimbursements'])
             self.assertEqual(gross, b['grossSalary'])
             self.assertEqual(b['grossSalary'] + b['benefitsTotal'], b['fixedMonthly'])
-            self.assertLessEqual(abs(b['totalCtcAnnual'] - ctc), 12, (ctc, cadre))
+            self.assertEqual(b['totalCtcAnnual'], ctc, (ctc, cadre))
+            self.assertEqual(sum(x['annual'] for x in b['earnings']), b['grossEarningsAnnual'])
+            self.assertEqual(b['fixedAnnual'] + sum(x['annual'] for x in b['otherPayments']), ctc)
 
     def test_basic_is_half_of_gross_and_hra_half_of_basic(self):
         b = self.calc()

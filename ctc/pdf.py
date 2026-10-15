@@ -172,14 +172,14 @@ def build_pdf(candidate, b) -> bytes:
     earning('Child Education Allowance (CEA) @', 'Child Education Allowance')
     earning('Leave Travel Allowance (LTA)', 'Leave Travel Allowance')
     earning('Special Allowance (Flexi Pay)', 'Special Allowance')
-    total('GROSS EARNINGS', b['grossEarnings'], b['grossEarnings'] * 12, GREY)
+    total('GROSS EARNINGS', b['grossEarnings'], b['grossEarningsAnnual'], GREY)
 
     reimb = {x.get('key'): x for x in b['reimbursements']}
     for key, text in REIMBURSEMENT_ROWS:
         x = reimb.get(key, {'monthly': 0, 'annual': 0})
         row(text, x['monthly'], x['annual'], fill=ORANGE_SOFT)
     row('Car Lease / Company Car Benefit', 0, 0)
-    total('Gross Salary', b['grossSalary'], b['grossSalary'] * 12, GREY)
+    total('Gross Salary', b['grossSalary'], b['grossSalaryAnnual'], GREY)
 
     section('Annual Benefits')
     ben = {x['label']: x for x in b['benefits']}
@@ -193,7 +193,7 @@ def build_pdf(candidate, b) -> bytes:
     benefit('Statutory Bonus (8.33% of Basic &amp; VDA)', 'Statutory Bonus')
     if ben['Gratuity']['monthly']:                 # not on the sheet unless a rate is set
         benefit('Gratuity', 'Gratuity')
-    total('Total Annual Benefits', b['benefitsTotal'], b['benefitsTotal'] * 12, GREY)
+    total('Total Annual Benefits', b['benefitsTotal'], b['benefitsTotalAnnual'], GREY)
     total('TOTAL Salary/ Compensation ( Per Month)', b['fixedMonthly'], b['fixedAnnual'], GREEN)
 
     section('Other Payments (Payout on Quarterly Basis)')

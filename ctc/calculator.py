@@ -18,8 +18,9 @@ so the two are solved together; the loop settles in a handful of passes.
 ESI and Statutory Bonus apply only when Gross Salary is within the limit
 (Rs 21,000 a month by default).
 
-Every component is a whole rupee a month, and annual = monthly x 12.
-Special Allowance absorbs the rounding, so the fixed part always adds up.
+Every component is a whole rupee a month, and annual = monthly x 12 - except
+that the few rupees monthly rounding leaves over go into the yearly Special
+Allowance, so the TOTAL CTC per annum is exactly the uploaded figure.
 
 Pure: takes plain values, returns plain data. Nothing here touches the
 database except through the settings object passed in.
@@ -239,19 +240,30 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
          'note': f'{pct}% of CTC ({vpp_rule}), paid quarterly' if pct else 'Not applicable'},
         {'label': 'Gift Reimbursement', 'monthly': gift_m, 'annual': gift_m * 12, 'note': 'Paid quarterly' if gift_m else 'Not applicable'},
     ]
-    total_annual = fixed * 12 + vpp_annual + gift_m * 12
-    if total_annual != ctc_annual:
-        notes.append(f'Total differs from the uploaded CTC by Rs {total_annual - ctc_annual:+,} '
-                     'from rounding each month to whole rupees.')
+    # Rounding each month to whole rupees leaves the year a few rupees off
+    # the uploaded CTC (monthly x 12 vs the exact figure). Put the difference
+    # into the yearly Special Allowance - or Basic, if Special is nil - so
+    # the TOTAL CTC per annum is exactly what was uploaded.
+    diff = (ctc_annual - vpp_annual - gift_m * 12) - fixed * 12
+    if diff:
+        spl_line, basic_line = earnings[4], earnings[0]
+        target = spl_line if spl_line['annual'] + diff >= 0 else basic_line
+        target['annual'] += diff
+
+    gross_earnings_annual = sum(r['annual'] for r in earnings)
+    gross_salary_annual = gross_earnings_annual + sum(r['annual'] for r in reimbursements)
+    benefits_annual = sum(r['annual'] for r in benefits)
+    fixed_annual = gross_salary_annual + benefits_annual
+    total_annual = fixed_annual + vpp_annual + gift_m * 12
 
     return {
         'cadre': cadre, 'cadreName': rules.CADRES[cadre], 'grade': grade, 'category': category,
         'state': state, 'minWage': min_wage,
         'ctcAnnual': ctc_annual, 'vppPercent': pct,
-        'earnings': earnings, 'grossEarnings': gross_earnings,
-        'reimbursements': reimbursements, 'grossSalary': gross,
-        'benefits': benefits, 'benefitsTotal': benefits_total,
-        'fixedMonthly': fixed, 'fixedAnnual': fixed * 12,
+        'earnings': earnings, 'grossEarnings': gross_earnings, 'grossEarningsAnnual': gross_earnings_annual,
+        'reimbursements': reimbursements, 'grossSalary': gross, 'grossSalaryAnnual': gross_salary_annual,
+        'benefits': benefits, 'benefitsTotal': benefits_total, 'benefitsTotalAnnual': benefits_annual,
+        'fixedMonthly': fixed, 'fixedAnnual': fixed_annual,
         'otherPayments': other,
         'totalCtcMonthly': _r(total_annual / 12), 'totalCtcAnnual': total_annual,
         'notes': notes,
