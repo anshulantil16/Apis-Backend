@@ -202,14 +202,15 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         amount = amounts[cadre]
         if amount is None:                               # "Actual" -> settings
             amount = s.actual_for(key)
-        if picked.get(key) is False:                     # "No" on the template
-            amount = 0
-        reimb.append([key, label, int(amount)])
+        paid = 0 if picked.get(key) is False else int(amount)   # "No" on the template
+        reimb.append([key, label, paid, int(amount)])
 
     def settle():
-        """Gross salary, Basic, HRA and the employer items for the
-        reimbursements as they stand."""
-        r_total = sum(a for _k, _l, a in reimb)
+        """Gross salary, Basic, HRA and the employer items. Basic is set off
+        the cadre's entitlement - every item as if answered Yes - so one
+        answered No leaves Basic, HRA and PF alone and its whole amount
+        goes to Special Allowance."""
+        r_total = sum(e for _k, _l, _p, e in reimb)
         gross = _solve(F, med, min_wage, s, small=False, reimb_total=r_total)
         small = gross <= s.esi_bonus_gross_limit
         if small:
@@ -230,7 +231,7 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     x = settle()
 
     def balance():
-        return x['gross'] - x['basic'] - x['hra'] - cea - lta - sum(a for _k, _l, a in reimb)
+        return x['gross'] - x['basic'] - x['hra'] - cea - lta - sum(p for _k, _l, p, _e in reimb)
 
     reduced = []
     for item in reversed(reimb):
@@ -241,8 +242,9 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
             # Each rupee of reimbursement moved back into Gross Earnings only
             # frees a quarter of a rupee for Special (Basic and HRA take the
             # rest) unless Basic is sitting on the minimum wage.
-            step = short if x['on_min'] else short * 4
-            item[2] -= min(item[2], max(1, _r(step)))
+            step = min(item[2], max(1, _r(short if x['on_min'] else short * 4)))
+            item[2] -= step
+            item[3] -= step
             x = settle()
             if item[1] not in reduced:
                 reduced.append(item[1])
@@ -253,7 +255,7 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     hra = full_hra = x['hra']
 
     def balance():                                      # noqa: F811 - HRA can now shrink
-        return x['gross'] - x['basic'] - hra - cea - lta - sum(a for _k, _l, a in reimb)
+        return x['gross'] - x['basic'] - hra - cea - lta - sum(p for _k, _l, p, _e in reimb)
 
     if balance() < 0 and cea:
         cea -= min(cea, -balance())
@@ -293,7 +295,7 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     gross_earnings = sum(r['monthly'] for r in earnings)
     # Every reimbursement, zeros included and keyed, so the Annexure A PDF can
     # print its fixed rows; the screen shows only the ones that apply.
-    reimbursements = [{**_line(label, amount), 'key': key} for key, label, amount in reimb]
+    reimbursements = [{**_line(label, amount), 'key': key} for key, label, amount, _e in reimb]
     benefits = [
         _line('Employer PF Contribution', pf,
               f'{rules.PF_PERCENT}% of Basic' if basic <= s.pf_wage_ceiling else

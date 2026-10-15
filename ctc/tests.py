@@ -329,7 +329,10 @@ class Calculator(TestCase):
         self.assertTrue(some['carLease'])
         self.assertFalse(full['carLease'])
         spl = lambda b: next(x['monthly'] for x in b['earnings'] if x['label'].startswith('Special'))
-        self.assertGreater(spl(some), spl(full))               # the money moves into Gross Earnings
+        # Every rupee not picked goes to Special; Basic, HRA and PF don't move.
+        self.assertEqual(spl(some) - spl(full), 10000 + 10000)
+        self.assertEqual(some['earnings'][:2], full['earnings'][:2])
+        self.assertEqual(some['benefits'], full['benefits'])
         self.assertEqual(some['totalCtcAnnual'], 1500000)
         # O and W have no Gross Earnings items, whatever is passed.
         o = self.calc(ctc_annual=600000, cadre='O', grade='O3', category='Plant',
