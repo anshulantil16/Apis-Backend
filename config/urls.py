@@ -51,6 +51,7 @@ urlpatterns = [
     path('api/wall/',        include('wall.urls')),
     path('api/noticeboard/', include('noticeboard.urls')),
     path('api/policies/',    include('policies.urls')),
+    path('api/ctc/',         include('ctc.urls')),
     # Before the catch-all below: see no_media.
     re_path(r'^media/(?P<path>policies/.*)$', no_media),
     # Always serve media files (works in both DEBUG and production mode)
