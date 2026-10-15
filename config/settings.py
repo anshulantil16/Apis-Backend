@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     'wall',
     'noticeboard',
     'policies',
+    'ctc',
 ]
 
 MIDDLEWARE = [
