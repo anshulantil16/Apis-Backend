@@ -75,20 +75,55 @@ def state_for(location):
     return ''
 
 
+# Ways people write the two Sales departments in the VPP table.
+_DEPT_ALIASES = {
+    'generaltrade': 'General Trade', 'gt': 'General Trade',
+    'alternatechannels': 'Alternate Channels', 'alternatechannel': 'Alternate Channels',
+    'ac': 'Alternate Channels',
+}
+
+
+def _sales_department(text):
+    k = _norm(text)
+    if k in _DEPT_ALIASES:
+        return _DEPT_ALIASES[k]
+    for key, dept in _DEPT_ALIASES.items():
+        if len(key) > 2 and key in k:
+            return dept
+    return ''
+
+
 def vpp_percent(category, grade, department, designation):
-    """(percent, rule description) - 0 when no rule covers this person."""
+    """(percent, description). With a percent, the description names the
+    rule that gave it; with 0, it says why there is none.
+
+    Sales VPP is set by grade. Where one grade has two rates (M1, M3: 10% in
+    General Trade, 12% in Alternate Channels) the Department picks between
+    them, and failing that the Designation. Designation never has to match
+    word for word when the grade alone decides."""
     g = (grade or '').strip().upper()
     if category == 'Sales':
-        for r_grade, r_dept, r_desig, pct in rules.VPP_SALES:
-            if g != r_grade or _norm(designation) != _norm(r_desig):
-                continue
-            if r_dept and _norm(department) and _norm(department) != _norm(r_dept):
-                continue
-            return pct, f'Sales · {r_desig} · {r_grade}'
-        return 0, ''
+        rows = [r for r in rules.VPP_SALES if r[0] == g]
+        if not rows:
+            listed = ', '.join(sorted({r[0] for r in rules.VPP_SALES}))
+            return 0, f'No Sales VPP for grade {g or "-"} (the VPP table covers {listed}).'
+        if len(rows) > 1:
+            dept = _sales_department(department)
+            by_dept = [r for r in rows if r[1] is None or r[1] == dept] if dept else []
+            by_desig = [r for r in rows if _norm(r[2]) == _norm(designation)]
+            rows = by_dept if len(by_dept) == 1 else by_desig
+            if len(rows) != 1:
+                options = ' or '.join(f'{r[1]} ({r[3]}%)' for r in rules.VPP_SALES if r[0] == g)
+                return 0, (f'Sales grade {g} has two VPP rates - set Department to {options} '
+                           'to pick one.')
+        r_grade, r_dept, r_desig, pct = rows[0]
+        return pct, f'Sales · {r_grade}' + (f' · {r_dept}' if r_dept else '')
     grades, pct = rules.VPP_BY_GRADE.get(category, (set(), 0))
     if g in grades:
         return pct, f'{category} · {g}'
+    if category in rules.VPP_BY_GRADE:
+        return 0, (f'No VPP for {category} grade {g or "-"} '
+                   f'(the VPP table covers {", ".join(sorted(grades))}).')
     return 0, ''
 
 
@@ -131,6 +166,8 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
 
     # -- off the top: VPP and Gift ------------------------------------------
     pct, vpp_rule = vpp_percent(category, grade, department, designation)
+    if not pct and vpp_rule:
+        notes.append(vpp_rule)
     vpp_annual = _r(ctc_annual * pct / 100)
     gift_m = rules.GIFT_MONTHLY[cadre]
     F = _r((ctc_annual - vpp_annual - gift_m * 12) / 12)

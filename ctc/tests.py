@@ -258,10 +258,24 @@ class Calculator(TestCase):
         self.assertEqual(self.calc(category='Plant', grade='M4')['vppPercent'], 8)
 
     def test_vpp_sales_table(self):
-        self.assertEqual(vpp_percent('Sales', 'M4', 'Alternate Channels', 'Regional Sales Manager')[0], 12)
-        self.assertEqual(vpp_percent('Sales', 'M1', 'Alternate Channels', 'key account manager')[0], 12)
-        self.assertEqual(vpp_percent('Sales', 'M1', 'General Trade', 'Key Account Manager')[0], 0)
+        # One rate for the grade: the grade alone decides, whatever the title.
+        self.assertEqual(vpp_percent('Sales', 'M2', 'Sales', 'Analyst')[0], 10)
+        self.assertEqual(vpp_percent('Sales', 'M4', '', 'Regional Sales Manager')[0], 12)
+        self.assertEqual(vpp_percent('Sales', 'M5', 'Sales', '')[0], 15)
         self.assertEqual(vpp_percent('Sales', 'C2', '', 'NSH')[0], 15)
+        # Two rates: Department picks, then Designation.
+        self.assertEqual(vpp_percent('Sales', 'M1', 'General Trade', 'Key Account Manager')[0], 10)
+        self.assertEqual(vpp_percent('Sales', 'M1', 'Alternate Channels', '')[0], 12)
+        self.assertEqual(vpp_percent('Sales', 'M3', 'GT', '')[0], 10)
+        self.assertEqual(vpp_percent('Sales', 'M3', 'Sales', 'Customer Development Manager')[0], 12)
+        pct, why = vpp_percent('Sales', 'M1', 'Sales', 'Analyst')
+        self.assertEqual(pct, 0)
+        self.assertIn('two VPP rates', why)
+        # Not in the table at all: 0, with the reason.
+        self.assertEqual(vpp_percent('Sales', 'O5', 'GT', 'Executive')[0], 0)
+        pct, why = vpp_percent('HO', 'O5', 'IT', 'Analyst')
+        self.assertEqual(pct, 0)
+        self.assertIn('No VPP for HO grade O5', why)
 
     def test_esi_and_bonus_only_for_small_salaries(self):
         small = self.calc(ctc_annual=240000, cadre='O', grade='O1', category='Plant', work_location='Rajasthan')
