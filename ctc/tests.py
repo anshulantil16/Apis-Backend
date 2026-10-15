@@ -26,7 +26,19 @@ def _xlsx(rows, headings=HEADINGS, name='candidates.xlsx'):
 
 
 # Candidate Name, Category, Department, Designation, Grade, Cadre, Work Location, CTC
-ROW = ['Rahul Sharma', 'Sales', 'General Trade', 'Area Sales Manager', 'M1', 'M', 'Delhi HO', 1200000]
+FIELDS = [f for _h, f, *_ in COLUMNS]
+BASE_ROW = dict(employee_code='SL00225', candidate_name='Rahul Sharma', category='Sales',
+                department='General Trade', designation='Area Sales Manager', grade='M1', cadre='M',
+                date_of_joining='01-07-2026', work_location='Delhi HO', ctc=1200000)
+
+
+def _row(**over):
+    """A template row by column name, in whatever order COLUMNS has."""
+    d = {**BASE_ROW, **over}
+    return [d[f] for f in FIELDS]
+
+
+ROW = _row()
 
 
 class CtcUploads(TestCase):
@@ -60,35 +72,48 @@ class CtcUploads(TestCase):
         self.assertEqual(self.client.post(f'{BASE}/uploads/', {'file': _xlsx([ROW])}).status_code, 401)
 
     def test_upload_stores_every_row(self):
-        second = ['Priya Verma', 'ho', 'Finance', 'Manager', 'm3', 'm', 'Roorkee', '12,50,000']
+        second = _row(employee_code='', candidate_name='Priya Verma', category='ho', department='Finance',
+                      designation='Manager', grade='m3', cadre='m', date_of_joining=None,
+                      work_location='Roorkee', ctc='12,50,000')
         r = self._upload(self.alice, _xlsx([ROW, [], second]))
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(r.json()['rowCount'], 2)
+        rahul = CtcCandidate.objects.get(candidate_name='Rahul Sharma')
+        self.assertEqual((rahul.employee_code, str(rahul.date_of_joining)), ('SL00225', '2026-07-01'))
         priya = CtcCandidate.objects.get(candidate_name='Priya Verma')
+        self.assertIsNone(priya.date_of_joining)
         self.assertEqual((priya.category, priya.grade, priya.cadre), ('HO', 'M3', 'M'))
         self.assertEqual(str(priya.ctc), '1250000.00')
         self.assertEqual(priya.row_number, 4)
 
+    def test_a_real_excel_date_is_read(self):
+        from datetime import datetime
+        self.assertEqual(self._upload(self.alice, _xlsx([_row(date_of_joining=datetime(2026, 8, 15))])).status_code, 201)
+        self.assertEqual(str(CtcCandidate.objects.get().date_of_joining), '2026-08-15')
+
     def test_headings_are_matched_loosely(self):
-        loose = ['candidate name ', 'CATEGORY', 'department', 'designation', 'Grade', 'cadre',
+        loose = ['employee code', 'candidate name ', 'CATEGORY', 'department', 'designation', 'Grade',
+                 'cadre', 'date_of_joining',
                  'work_location', 'ctc']
         self.assertEqual(self._upload(self.alice, _xlsx([ROW], headings=loose)).status_code, 201)
 
     def test_a_missing_column_is_named(self):
-        r = self._upload(self.alice, _xlsx([ROW[:5]], headings=HEADINGS[:5]))
+        keep = HEADINGS[:6]
+        r = self._upload(self.alice, _xlsx([ROW[:6]], headings=keep))
         self.assertEqual(r.status_code, 400)
         for heading in ('Cadre', 'Work Location', 'CTC'):
             self.assertIn(heading, r.json()['error'])
 
     def test_any_bad_row_and_nothing_is_stored(self):
         bad = [
-            ['', 'Sales', 'GT', 'ASM', 'M1', 'M', 'Delhi', 500000],                # row 3: no name
-            ['Ravi', 'Sales', 'GT', 'ASM', 'M1', 'M', 'Delhi', 'twelve lakh'],     # row 4: CTC text
-            ['Amit', 'Sales', 'GT', 'ASM', 'M1', 'M', 'Delhi', None],              # row 5: no CTC
-            ['Neha', 'Marketing', 'GT', 'ASM', 'M1', 'M', 'Delhi', 500000],        # row 6: category
-            ['Om', 'HO', 'Fin', 'Exec', 'O4', 'Officer', 'Delhi', 500000],         # row 7: ok-ish cadre "O"
-            ['Raj', 'HO', 'Fin', 'Exec', 'O4', 'M', 'Delhi', 500000],              # row 8: grade/cadre clash
-            ['Sia', 'HO', 'Fin', 'Exec', '', '', 'Delhi', 500000],                 # row 9: no grade/cadre
+            _row(candidate_name=''),                                        # row 3: no name
+            _row(candidate_name='Ravi', ctc='twelve lakh'),                   # row 4: CTC text
+            _row(candidate_name='Amit', ctc=None),                            # row 5: no CTC
+            _row(candidate_name='Neha', category='Marketing'),                # row 6: category
+            _row(candidate_name='Om', category='HO', grade='O4', cadre='Officer'),  # row 7: reads as O
+            _row(candidate_name='Raj', category='HO', grade='O4', cadre='M'),  # row 8: grade/cadre clash
+            _row(candidate_name='Sia', category='HO', grade='', cadre=''),    # row 9: no grade/cadre
+            _row(candidate_name='Tara', date_of_joining='sometime soon'),     # row 10: bad date
         ]
         r = self._upload(self.alice, _xlsx([ROW, *bad]))
         self.assertEqual(r.status_code, 400)
@@ -96,7 +121,8 @@ class CtcUploads(TestCase):
         for expected in ('Row 3: Candidate Name is empty', 'Row 4: CTC "twelve lakh" is not a number',
                          'Row 5: CTC is empty', 'Row 6: Category "Marketing"',
                          'Row 8: Grade O4 does not belong to cadre M',
-                         'Row 9: Grade is empty', 'Row 9: Cadre is empty'):
+                         'Row 9: Grade is empty', 'Row 9: Cadre is empty',
+                         'Row 10: Date of Joining "sometime soon" is not a date'):
             self.assertIn(expected, p)
         self.assertNotIn('Row 7', p, '"Officer" should read as cadre O')
         self.assertFalse(CtcUpload.objects.exists())

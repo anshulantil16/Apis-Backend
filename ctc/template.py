@@ -20,7 +20,8 @@ from .rules import MIN_WAGES
 
 SHEET_NAME = 'Candidates'
 
-EXAMPLE = ['Rahul Sharma', 'Sales', 'General Trade', 'Area Sales Manager', 'M1', 'M', 'Delhi', 1200000]
+EXAMPLE = ['SL00225', 'Rahul Sharma', 'Sales', 'General Trade', 'Area Sales Manager', 'M1', 'M',
+           '01-07-2026', 'Delhi', 1200000]
 
 HEADER_FILL = PatternFill('solid', fgColor='F59E0B')     # APIS amber
 REQUIRED_FILL = PatternFill('solid', fgColor='D97706')

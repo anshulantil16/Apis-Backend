@@ -45,6 +45,7 @@ class CtcCandidate(models.Model):
     # the line someone typed.
     row_number = models.PositiveIntegerField()
 
+    employee_code  = models.CharField(max_length=40, blank=True)
     candidate_name = models.CharField(max_length=200)
     # Sales / HO / Plant — decides which VPP table applies.
     category       = models.CharField(max_length=20, blank=True)
@@ -52,6 +53,7 @@ class CtcCandidate(models.Model):
     designation    = models.CharField(max_length=120, blank=True)
     grade          = models.CharField(max_length=40, blank=True)
     cadre          = models.CharField(max_length=60, blank=True)
+    date_of_joining = models.DateField(null=True, blank=True)
     work_location  = models.CharField(max_length=120, blank=True)
     # Annual CTC in rupees, as offered.
     ctc            = models.DecimalField(max_digits=12, decimal_places=2)

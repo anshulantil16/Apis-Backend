@@ -4,6 +4,8 @@ and the uploader read, so the two cannot drift apart.
 (heading in the sheet, model field, width, required, help shown on the cell)
 """
 COLUMNS = [
+    ('Employee Code',  'employee_code',  16, False,
+     'Optional - e.g. SL00225, HO00112, RK00045. Printed on the Annexure A.'),
     ('Candidate Name', 'candidate_name', 28, True,  'Full name of the candidate. Required.'),
     ('Category',       'category',       12, True,
      'Sales, HO or Plant. Required.\n\nDecides which Variable Pay table applies.'),
@@ -14,6 +16,9 @@ COLUMNS = [
      'Job title being offered, e.g. Area Sales Manager.'),
     ('Grade',          'grade',          10, True,  'e.g. M1, M3, O5, C2. Required.'),
     ('Cadre',          'cadre',          10, True,  'D, C, M, O or W. Required.'),
+    ('Date of Joining', 'date_of_joining', 16, False,
+     'Optional - as a date, or typed day-month-year, e.g. 01-07-2026.\n\n'
+     'Printed on the Annexure A.'),
     ('Work Location',  'work_location',  20, False,
      'State, picked from the list - or a city such as Delhi HO, Roorkee, Mumbai.\n\n'
      'Sets the minimum wage Basic is checked against.'),
@@ -29,7 +34,7 @@ CHOICES = {
 }
 
 MAX_LENGTH = {
-    'candidate_name': 200, 'category': 20, 'department': 120, 'designation': 120,
+    'employee_code': 40, 'candidate_name': 200, 'category': 20, 'department': 120, 'designation': 120,
     'grade': 40, 'cadre': 60, 'work_location': 120,
 }
 

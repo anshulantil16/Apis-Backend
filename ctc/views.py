@@ -41,6 +41,8 @@ FIELDS = [field for _h, field, *_ in COLUMNS]
 
 def _candidate(c):
     return {'id': c.id, 'rowNumber': c.row_number,
+            'employeeCode': c.employee_code,
+            'dateOfJoining': c.date_of_joining.isoformat() if c.date_of_joining else None,
             'candidateName': c.candidate_name, 'category': c.category, 'department': c.department,
             'designation': c.designation, 'grade': c.grade, 'cadre': c.cadre,
             'workLocation': c.work_location,

@@ -3,15 +3,16 @@
 ("Compensation Break-up Structure - Annexure A"), row for row.
 
 Colours, row order and wording are taken from that sheet: the yellow title
-bar, the blue section bars, the red Employee Code label, light-orange
+bar, the blue section bars, light-orange
 reimbursement rows, grey sub-totals and green totals. Every row the sheet
 has is printed, at 0 if it doesn't apply, so each candidate's PDF has the
 same shape. The sheet's double borders are drawn as single rules (the PDF
 toolkit has no double line), and its Abadi font as Helvetica.
 
 Takes a candidate and the dict calculator.calculate() returned; draws, does
-not decide. Employee Code, Function and Date of Joining are not collected
-by the upload, so they are left blank for P & C to fill.
+not decide. Function is not collected by the upload, so it is left blank
+for P & C to fill. (The sheet's red Employee Code label is a fill-me-in
+marker, so it is not reproduced.)
 """
 import io
 import os
@@ -28,7 +29,6 @@ LOGO_PATH = os.path.join(os.path.dirname(__file__), 'assets', 'apis_logo.png')
 # From the sheet's fills.
 YELLOW = colors.HexColor('#FFFF00')
 BLUE = colors.HexColor('#00B0F0')
-RED = colors.HexColor('#FF0000')
 GREY = colors.HexColor('#7C7C7C')        # theme accent3 (#A5A5A5) darkened 25%
 ORANGE_SOFT = colors.HexColor('#FBE5D6')  # theme accent2 (#ED7D31) lightened 80%
 GREEN = colors.HexColor('#92D050')
@@ -113,14 +113,15 @@ def build_pdf(candidate, b) -> bytes:
         [Paragraph('Employee Details', bar), ''],
     ]
     details = [
-        ('Employee Code', ''),
+        ('Employee Code', getattr(candidate, 'employee_code', '')),
         ('Employee Name (Candidate Name)', candidate.candidate_name),
         ('Department', candidate.department),
         ('Function', ''),
         ('Designation', candidate.designation),
         ('Cadre', b['cadre']),
         ('Grade', b['grade']),
-        ('Date of Joining', ''),
+        ('Date of Joining', candidate.date_of_joining.strftime('%d-%m-%Y')
+         if getattr(candidate, 'date_of_joining', None) else ''),
         ('Work Location', candidate.work_location),
     ]
     for k, v in details:
@@ -130,7 +131,6 @@ def build_pdf(candidate, b) -> bytes:
         ('SPAN', (0, 0), (1, 0)), ('BACKGROUND', (0, 0), (1, 0), YELLOW),
         ('SPAN', (0, 1), (1, 1)),
         ('SPAN', (0, 2), (1, 2)), ('BACKGROUND', (0, 2), (1, 2), BLUE),
-        ('BACKGROUND', (0, 3), (0, 3), RED),                       # Employee Code label
         ('GRID', (0, 2), (-1, -1), 0.6, RULE),
         ('BOX', (0, 0), (-1, 0), 0.6, RULE),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
