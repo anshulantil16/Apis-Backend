@@ -195,7 +195,7 @@ def _visible_candidate(user, pk):
 def _breakdown(c):
     return calculate(ctc_annual=c.ctc, cadre=c.cadre, grade=c.grade, category=c.category,
                      department=c.department, designation=c.designation,
-                     settings=CtcSettings.current())
+                     work_location=c.work_location, settings=CtcSettings.current())
 
 
 class CtcBreakdownView(PortalScopedAPIView):
@@ -237,7 +237,6 @@ SETTING_FIELDS = {
     'dFuel': ('d_fuel', 'Fuel & vehicle per month - cadre D'),
     'dDriver': ('d_driver', 'Driver per month - cadre D'),
     'dHealth': ('d_health', 'Health & wellness per month - cadre D'),
-    'wMinWage': ('w_min_wage', 'Minimum wage per month - cadre W'),
     'pfWageCeiling': ('pf_wage_ceiling', 'PF wage ceiling per month'),
     'esiBonusGrossLimit': ('esi_bonus_gross_limit', 'ESI & Bonus apply up to gross per month'),
 }

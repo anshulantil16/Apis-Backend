@@ -6,7 +6,7 @@ from openpyxl import Workbook, load_workbook
 
 from accounts.models import PortalSession, PortalUser
 
-from .calculator import calculate, vpp_percent
+from .calculator import calculate, state_for, vpp_percent
 from .columns import COLUMNS
 from .models import CtcCandidate, CtcSettings, CtcUpload
 
@@ -188,14 +188,18 @@ class Calculator(TestCase):
 
     def calc(self, **kw):
         base = dict(ctc_annual=1200000, cadre='M', grade='M1', category='Sales',
-                    department='General Trade', designation='Area Sales Manager', settings=self.s)
+                    department='General Trade', designation='Area Sales Manager',
+                    work_location='Delhi HO', settings=self.s)
         return calculate(**{**base, **kw})
 
     def test_components_add_up_to_the_ctc(self):
-        for ctc, cadre, grade, cat in [(1200000, 'M', 'M1', 'Sales'), (300000, 'O', 'O3', 'Plant'),
-                                       (3500000, 'C', 'C2', 'HO'), (180000, 'W', 'W2', 'Plant'),
-                                       (9000000, 'D', 'D1', 'HO')]:
-            b = self.calc(ctc_annual=ctc, cadre=cadre, grade=grade, category=cat)
+        for ctc, cadre, grade, cat, loc in [(1200000, 'M', 'M1', 'Sales', 'Delhi HO'),
+                                            (300000, 'O', 'O3', 'Plant', 'Delhi'),
+                                            (300000, 'O', 'O3', 'Plant', 'Roorkee'),
+                                            (3500000, 'C', 'C2', 'HO', 'Mumbai'),
+                                            (180000, 'W', 'W2', 'Plant', 'Rajasthan'),
+                                            (9000000, 'D', 'D1', 'HO', 'Delhi')]:
+            b = self.calc(ctc_annual=ctc, cadre=cadre, grade=grade, category=cat, work_location=loc)
             self.assertNotIn('error', b, (ctc, cadre))
             gross = sum(x['monthly'] for x in b['earnings']) + sum(x['monthly'] for x in b['reimbursements'])
             self.assertEqual(gross, b['grossSalary'])
@@ -207,7 +211,7 @@ class Calculator(TestCase):
         basic, hra = b['earnings'][0]['monthly'], b['earnings'][1]['monthly']
         self.assertAlmostEqual(basic, b['grossSalary'] / 2, delta=1)
         self.assertAlmostEqual(hra, basic / 2, delta=1)
-        w = self.calc(ctc_annual=180000, cadre='W', grade='W2', category='Plant')
+        w = self.calc(ctc_annual=180000, cadre='W', grade='W2', category='Plant', work_location='Rajasthan')
         self.assertAlmostEqual(w['earnings'][1]['monthly'], w['earnings'][0]['monthly'] * 0.2, delta=1)
 
     def test_vpp_and_gift_come_off_the_top(self):
@@ -229,7 +233,7 @@ class Calculator(TestCase):
         self.assertEqual(vpp_percent('Sales', 'C2', '', 'NSH')[0], 15)
 
     def test_esi_and_bonus_only_for_small_salaries(self):
-        small = self.calc(ctc_annual=240000, cadre='O', grade='O1', category='Plant')
+        small = self.calc(ctc_annual=240000, cadre='O', grade='O1', category='Plant', work_location='Rajasthan')
         self.assertLessEqual(small['grossSalary'], 21000)
         names = {x['label']: x['monthly'] for x in small['benefits']}
         self.assertGreater(names['Employer ESI Contribution'], 0)
@@ -248,6 +252,31 @@ class Calculator(TestCase):
         spl = next(x for x in b['earnings'] if x['label'].startswith('Special'))
         self.assertGreaterEqual(spl['monthly'], 0)
         self.assertTrue(any('reduced' in n for n in b['notes']))
+
+    def test_work_location_resolves_to_a_state(self):
+        for typed, state in [('Delhi HO', 'Delhi'), ('UTTAR PRADESH', 'Uttar Pradesh'),
+                             ('Roorkee Plant', 'Uttarakhand'), ('Mumbai', 'Maharashtra'),
+                             ('Andhra Pradesh', 'Andhra Pradesh'), ('Jammu & Kashmir', 'Jammu & Kashmir'),
+                             ('Daman (UT)', 'Daman (UT)'), ('Goa', 'Goa'), ('Atlantis', '')]:
+            self.assertEqual(state_for(typed), state, typed)
+
+    def test_basic_never_below_the_state_minimum_wage(self):
+        # Rs 3 lakh in Delhi: half of gross is well under Delhi's Rs 22,500, so
+        # Basic is lifted to it and HRA shrinks to fit.
+        b = self.calc(ctc_annual=300000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
+        basic, hra = b['earnings'][0], b['earnings'][1]
+        self.assertEqual(basic['monthly'], 22500)
+        self.assertIn('Minimum wage, Delhi', basic['note'])
+        self.assertIn('Reduced', hra['note'])
+        # Same CTC in Rajasthan (Rs 8,950): 50% of gross is higher, so that stands.
+        r = self.calc(ctc_annual=300000, cadre='O', grade='O1', category='Plant', work_location='Rajasthan')
+        self.assertIn('% of Gross Salary', r['earnings'][0]['note'])
+        self.assertGreater(r['earnings'][0]['monthly'], 8950)
+        unknown = self.calc(work_location='Atlantis')
+        self.assertTrue(any('No minimum wage found' in n for n in unknown['notes']))
+        # A CTC that can't cover the minimum wage at all is refused, not fudged.
+        low = self.calc(ctc_annual=240000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
+        self.assertIn('minimum wage', low['error'])
 
     def test_unworkable_input_is_an_error_not_a_number(self):
         self.assertIn('error', self.calc(cadre='Z'))

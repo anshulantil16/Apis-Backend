@@ -16,10 +16,11 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from .columns import CHOICES, COLUMNS
+from .rules import MIN_WAGES
 
 SHEET_NAME = 'Candidates'
 
-EXAMPLE = ['Rahul Sharma', 'Sales', 'General Trade', 'Area Sales Manager', 'M1', 'M', 'Delhi HO', 1200000]
+EXAMPLE = ['Rahul Sharma', 'Sales', 'General Trade', 'Area Sales Manager', 'M1', 'M', 'Delhi', 1200000]
 
 HEADER_FILL = PatternFill('solid', fgColor='F59E0B')     # APIS amber
 REQUIRED_FILL = PatternFill('solid', fgColor='D97706')
@@ -50,6 +51,20 @@ def build_template() -> bytes:
             col = get_column_letter(i)
             dv.add(f'{col}2:{col}2001')
             ws.add_data_validation(dv)
+
+    # Work Location: a dropdown of states, kept on a hidden sheet because the
+    # list is longer than Excel allows inline. A suggestion, not a rule — a
+    # city typed instead still uploads and is matched to its state.
+    lists = wb.create_sheet('Lists')
+    for r, state in enumerate(MIN_WAGES, start=1):
+        lists.cell(row=r, column=1, value=state)
+    lists.sheet_state = 'hidden'
+    loc_col = next(get_column_letter(i) for i, (_h, f, *_r) in enumerate(COLUMNS, start=1)
+                   if f == 'work_location')
+    loc = DataValidation(type='list', formula1=f'Lists!$A$1:$A${len(MIN_WAGES)}',
+                         allow_blank=True, showErrorMessage=False)
+    loc.add(f'{loc_col}2:{loc_col}2001')
+    ws.add_data_validation(loc)
 
     ex = wb.create_sheet('Example')
     ex.cell(row=1, column=1, value='How a filled-in row looks. This sheet is never uploaded — '

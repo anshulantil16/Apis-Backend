@@ -14,7 +14,9 @@ COLUMNS = [
      'Job title being offered, e.g. Area Sales Manager.'),
     ('Grade',          'grade',          10, True,  'e.g. M1, M3, O5, C2. Required.'),
     ('Cadre',          'cadre',          10, True,  'D, C, M, O or W. Required.'),
-    ('Work Location',  'work_location',  20, False, 'City or site, e.g. Delhi HO, Roorkee.'),
+    ('Work Location',  'work_location',  20, False,
+     'State, picked from the list - or a city such as Delhi HO, Roorkee, Mumbai.\n\n'
+     'Sets the minimum wage Basic is checked against.'),
     ('CTC',            'ctc',            16, True,
      'Total annual CTC in rupees, including Variable Pay and Gift. Required.\n\n'
      'e.g. 1200000 (commas and the ₹ sign are fine too).'),

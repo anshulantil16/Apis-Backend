@@ -68,6 +68,7 @@ class CtcCandidate(models.Model):
 
 class CtcSettings(models.Model):
     """The values P & C's workbook leaves open, editable by a super admin.
+    (Minimum wages are by state, in rules.MIN_WAGES.)
 
     A single row (pk=1). Everything starts at 0 except the two statutory
     limits, so nothing on a salary sheet is a guess: until someone sets LTA
@@ -88,7 +89,6 @@ class CtcSettings(models.Model):
     d_driver = models.PositiveIntegerField(default=0, help_text='Driver, per month, cadre D')
     d_health = models.PositiveIntegerField(default=0, help_text='Health & wellness, per month, cadre D')
 
-    w_min_wage = models.PositiveIntegerField(default=0, help_text='Minimum wage per month, cadre W')
     pf_wage_ceiling = models.PositiveIntegerField(default=15000, help_text='PF wage ceiling per month')
     esi_bonus_gross_limit = models.PositiveIntegerField(
         default=21000, help_text='ESI and Statutory Bonus apply up to this gross per month')

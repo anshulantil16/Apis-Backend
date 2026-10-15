@@ -6,8 +6,8 @@ plus the VPP and Mediclaim tables P & C supplied separately. All amounts are
 monthly rupees unless named otherwise.
 
 Values the workbook leaves open — LTA, Gratuity, the D cadre's "Actual"
-reimbursements, the W cadre's minimum wage — are not here: they are
-CtcSettings rows a super admin edits, and start at 0.
+reimbursements — are not here: they are CtcSettings rows a super admin
+edits, and start at 0.
 
 When P & C revises the structure, this is the file to change.
 """
@@ -22,7 +22,7 @@ CADRES = {
 
 CATEGORIES = ['Sales', 'HO', 'Plant']
 
-BASIC_PERCENT = 50                       # of Gross Salary; W: minimum wage if higher
+BASIC_PERCENT = 50                       # of Gross Salary, or the state minimum wage if higher
 HRA_PERCENT = {'D': 50, 'C': 50, 'M': 50, 'O': 50, 'W': 20}   # of Basic
 
 PF_PERCENT = 12                          # employer, of Basic up to the PF wage ceiling
@@ -82,4 +82,38 @@ VPP_SALES = [
 VPP_BY_GRADE = {
     'HO':    ({'C1', 'C2', 'M3', 'M4', 'M5'}, 8),
     'Plant': ({'M3', 'M4', 'M5'}, 8),
+}
+
+# Minimum wages per month, by state (P & C's table). Basic is never below
+# the minimum wage of the candidate's work location.
+MIN_WAGES = {
+    'Uttar Pradesh': 15500, 'Chhattisgarh': 12700, 'Maharashtra': 15500, 'Telangana': 15000,
+    'Karnataka': 18600, 'West Bengal': 13000, 'Odisha': 15000, 'Madhya Pradesh': 15500,
+    'Tamil Nadu': 15000, 'Goa': 17500, 'Kerala': 16200, 'Bihar': 14500, 'Delhi': 22500,
+    'Himachal Pradesh': 14000, 'Haryana': 18600, 'Andhra Pradesh': 18100, 'Punjab': 14000,
+    'Gujarat': 14500, 'Assam': 15500, 'Chandigarh': 15500, 'Rajasthan': 8950,
+    'Jammu & Kashmir': 12600, 'Jharkhand': 18100, 'Uttarakhand': 15000, 'Tripura': 10000,
+    'Daman (UT)': 13200,
+}
+
+# Cities and sites people type in Work Location, and the state they are in.
+LOCATION_ALIASES = {
+    'newdelhi': 'Delhi', 'delhiho': 'Delhi', 'ho': 'Delhi', 'headoffice': 'Delhi',
+    'noida': 'Uttar Pradesh', 'greaternoida': 'Uttar Pradesh', 'ghaziabad': 'Uttar Pradesh',
+    'lucknow': 'Uttar Pradesh', 'kanpur': 'Uttar Pradesh', 'prayagraj': 'Uttar Pradesh',
+    'pravagraj': 'Uttar Pradesh', 'allahabad': 'Uttar Pradesh', 'varanasi': 'Uttar Pradesh',
+    'up': 'Uttar Pradesh',
+    'roorkee': 'Uttarakhand', 'haridwar': 'Uttarakhand', 'dehradun': 'Uttarakhand',
+    'mumbai': 'Maharashtra', 'pune': 'Maharashtra', 'nagpur': 'Maharashtra',
+    'kolkata': 'West Bengal', 'chennai': 'Tamil Nadu', 'coimbatore': 'Tamil Nadu',
+    'hyderabad': 'Telangana', 'bangalore': 'Karnataka', 'bengaluru': 'Karnataka',
+    'gurgaon': 'Haryana', 'gurugram': 'Haryana', 'faridabad': 'Haryana',
+    'vizag': 'Andhra Pradesh', 'visakhapatnam': 'Andhra Pradesh', 'vijayawada': 'Andhra Pradesh',
+    'patna': 'Bihar', 'bhilai': 'Chhattisgarh', 'raipur': 'Chhattisgarh',
+    'jaipur': 'Rajasthan', 'ahmedabad': 'Gujarat', 'surat': 'Gujarat',
+    'kochi': 'Kerala', 'cochin': 'Kerala', 'bhubaneswar': 'Odisha', 'guwahati': 'Assam',
+    'ranchi': 'Jharkhand', 'jammu': 'Jammu & Kashmir', 'srinagar': 'Jammu & Kashmir',
+    'jk': 'Jammu & Kashmir', 'shimla': 'Himachal Pradesh', 'indore': 'Madhya Pradesh',
+    'bhopal': 'Madhya Pradesh', 'ludhiana': 'Punjab', 'amritsar': 'Punjab',
+    'panaji': 'Goa', 'agartala': 'Tripura', 'daman': 'Daman (UT)',
 }

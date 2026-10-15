@@ -81,7 +81,9 @@ def build_pdf(candidate, b) -> bytes:
         ('Candidate Name', candidate.candidate_name), ('Category', candidate.category or '-'),
         ('Department', candidate.department or '-'), ('Designation', candidate.designation or '-'),
         ('Cadre', f"{b['cadre']} - {b['cadreName']}"), ('Grade', b['grade'] or '-'),
-        ('Work Location', candidate.work_location or '-'), ('Total CTC (Per Annum)', rs(b['ctcAnnual'])),
+        ('Work Location', (candidate.work_location or '-') + (
+            f" ({b['state']}, min wage {rs(b['minWage'])}/month)" if b.get('state') else '')),
+        ('Total CTC (Per Annum)', rs(b['ctcAnnual'])),
     ]
     rows = [[Paragraph('Employee Details', cell_b), '', '', '']]
     for i in range(0, len(details), 2):
