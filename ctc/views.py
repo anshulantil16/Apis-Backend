@@ -36,7 +36,7 @@ from .template import build_template
 
 MAX_BYTES = 5 * 1024 * 1024          # a few thousand rows is well under this
 XLSX_MAGIC = b'PK\x03\x04'           # .xlsx is a zip
-FIELDS = [field for _h, field, *_ in COLUMNS]
+FIELDS = [field for _h, field, *_ in COLUMNS] + ['gross_earnings']
 
 
 def _candidate(c):
@@ -46,6 +46,7 @@ def _candidate(c):
             'candidateName': c.candidate_name, 'category': c.category, 'department': c.department,
             'designation': c.designation, 'grade': c.grade, 'cadre': c.cadre,
             'workLocation': c.work_location, 'numberOfChildren': c.number_of_children,
+            'grossEarnings': c.gross_earnings or {},
             'ctc': str(c.ctc) if c.ctc is not None else None}
 
 
@@ -198,6 +199,7 @@ def _breakdown(c):
     return calculate(ctc_annual=c.ctc, cadre=c.cadre, grade=c.grade, category=c.category,
                      department=c.department, designation=c.designation,
                      work_location=c.work_location, children=c.number_of_children,
+                     options=c.gross_earnings,
                      settings=CtcSettings.current())
 
 

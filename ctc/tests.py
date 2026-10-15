@@ -7,11 +7,12 @@ from openpyxl import Workbook, load_workbook
 from accounts.models import PortalSession, PortalUser
 
 from .calculator import calculate, state_for, vpp_percent
-from .columns import COLUMNS
+from .columns import COLUMNS, OPTION_COLUMNS
 from .models import CtcCandidate, CtcSettings, CtcUpload
 
 BASE = '/api/ctc'
 HEADINGS = [h for h, *_ in COLUMNS]
+OPTION_HEADINGS = [h for h, *_ in OPTION_COLUMNS]
 
 
 def _xlsx(rows, headings=HEADINGS, name='candidates.xlsx'):
@@ -60,11 +61,29 @@ class CtcUploads(TestCase):
         r = self.client.get(f'{BASE}/template/', **self._auth(self.alice))
         self.assertEqual(r.status_code, 200)
         ws = load_workbook(io.BytesIO(r.content)).worksheets[0]
-        self.assertEqual([c.value for c in ws[1]], HEADINGS)
+        self.assertEqual([c.value for c in ws[1]], HEADINGS + OPTION_HEADINGS)
         self.assertEqual(ws.max_row, 1, 'the upload sheet must hold nothing but headings')
         lists = [dv.formula1 for dv in ws.data_validations.dataValidation]
         self.assertIn('"Sales,HO,Plant"', lists)
         self.assertIn('"D,C,M,O,W"', lists)
+        # Gross Earnings: Yes/No, but only "N/A" (and greyed out) for O and W.
+        self.assertIn('IF(OR($G2="O",$G2="W"),Lists!$C$1,Lists!$B$1:$B$2)', lists)
+        self.assertTrue(ws.conditional_formatting)
+
+    def test_gross_earnings_choices_are_stored_and_ignored_for_o_and_w(self):
+        heads = HEADINGS + OPTION_HEADINGS
+        m = _row() + ['Yes', 'no', '', 'N', 'yes', 'No', '', 'Yes']
+        o = _row(candidate_name='Ravi', grade='O3', cadre='O') + ['Yes'] * 8
+        r = self._upload(self.alice, _xlsx([m, o], headings=heads))
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(CtcCandidate.objects.get(candidate_name='Rahul Sharma').gross_earnings,
+                         {'meal': True, 'telephone': False, 'books': False, 'uniform': True,
+                          'fuel': False, 'car': True})
+        self.assertEqual(CtcCandidate.objects.get(candidate_name='Ravi').gross_earnings, {})
+        bad = _row() + ['maybe']
+        r = self._upload(self.alice, _xlsx([bad], headings=heads))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('Meal Voucher Reimbursement "maybe" should be Yes or No', str(r.json()))
 
     def test_everything_needs_sign_in(self):
         for url in ('template/', 'uploads/', 'settings/', 'candidates/1/breakdown/', 'candidates/1/pdf/'):
@@ -300,6 +319,22 @@ class Calculator(TestCase):
         pf = next(x['monthly'] for x in b['benefits'] if x['label'] == 'Employer PF Contribution')
         self.assertLess(basic, 25000)
         self.assertEqual(pf, round(basic * 0.12))
+
+    def test_gross_earnings_answered_no_are_not_paid(self):
+        base = dict(ctc_annual=1500000, cadre='C', grade='C3', category='HO', work_location='Delhi')
+        full = self.calc(**base)
+        some = self.calc(**base, options={'telephone': False, 'uniform': False, 'car': True})
+        paid = {x['key']: x['monthly'] for x in some['reimbursements']}
+        self.assertEqual((paid['telephone'], paid['uniform'], paid['meal']), (0, 0, 9600))
+        self.assertTrue(some['carLease'])
+        self.assertFalse(full['carLease'])
+        spl = lambda b: next(x['monthly'] for x in b['earnings'] if x['label'].startswith('Special'))
+        self.assertGreater(spl(some), spl(full))               # the money moves into Gross Earnings
+        self.assertEqual(some['totalCtcAnnual'], 1500000)
+        # O and W have no Gross Earnings items, whatever is passed.
+        o = self.calc(ctc_annual=600000, cadre='O', grade='O3', category='Plant',
+                      work_location='Uttar Pradesh', options={'car': True})
+        self.assertFalse(o['carLease'])
 
     def test_full_slab_reimbursements_and_special_takes_the_balance(self):
         from .rules import REIMBURSEMENTS

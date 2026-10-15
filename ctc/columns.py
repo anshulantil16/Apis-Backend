@@ -30,6 +30,26 @@ COLUMNS = [
      'e.g. 1200000 (commas and the ₹ sign are fine too).'),
 ]
 
+# Gross Earnings: one Yes / No column per item, after CTC, in the order the
+# Annexure A lists them. Optional, so a sheet without them still uploads.
+# Cadres O and W get none of these, so their cells are greyed out on the
+# template and anything typed there is ignored.
+# (heading, key, what a blank cell means)
+OPTION_COLUMNS = [
+    ('Meal Voucher Reimbursement', 'meal', True),
+    ('Telephone-Handset / Accessories & Internet Reimbursement', 'telephone', True),
+    ('Health & Wellness Reimbursement', 'health', True),
+    ('Books, Periodicals & Professional Development Reimbursement', 'books', True),
+    ('Uniform & Attire Reimbursement', 'uniform', True),
+    ('Fuel & Vehicle Maintenance Reimbursement', 'fuel', True),
+    ('Driver/Chauffer Salary', 'driver', True),
+    ('Car Lease / Company Car Benefit', 'car', False),
+]
+OPTION_CADRES = {'D', 'C', 'M'}          # the cadres these apply to
+YES = {'yes', 'y', 'true', '1'}
+NO = {'no', 'n', 'false', '0'}
+NOT_ANSWERED = {'', 'na', 'n/a', '-', 'not applicable'}
+
 # Dropdowns on the template.
 CHOICES = {
     'category': ['Sales', 'HO', 'Plant'],

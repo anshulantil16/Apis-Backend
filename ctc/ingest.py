@@ -16,7 +16,8 @@ from decimal import Decimal, InvalidOperation
 from openpyxl import load_workbook
 
 from .calculator import normalise_cadre, normalise_category
-from .columns import COLUMNS, MAX_CTC, MAX_LENGTH
+from .columns import (COLUMNS, MAX_CTC, MAX_LENGTH, NO, NOT_ANSWERED, OPTION_CADRES,
+                      OPTION_COLUMNS, YES)
 from .template import SHEET_NAME
 
 MAX_ROWS = 2000
@@ -91,6 +92,11 @@ def parse(fileobj):
             field = wanted.get(_key(h))
             if field and field not in position:
                 position[field] = i
+        options = {}                                     # the optional Gross Earnings columns
+        for i, h in enumerate(header):
+            for heading, key, _blank in OPTION_COLUMNS:
+                if _key(h) == _key(heading) and key not in options:
+                    options[key] = i
         missing = [heading for heading, field, *_ in COLUMNS if field not in position]
         if missing:
             raise SheetError('These columns are missing from the first row: '
@@ -101,6 +107,8 @@ def parse(fileobj):
             values = values or ()
             raw = {field: (values[i] if i < len(values) else None) for field, i in position.items()}
             row = {field: _clean(v) for field, v in raw.items()}
+            picked = {key: _clean(values[i] if i < len(values) else None)
+                      for key, i in options.items()}
             if not any(row.values()):
                 continue                                  # blank line
             if len(rows) >= MAX_ROWS:
@@ -149,11 +157,21 @@ def parse(fileobj):
                     errors.append(f'Row {n}: Date of Joining "{doj_text}" is not a date '
                                   '(write it like 01-07-2026).')
             for field, value in row.items():
-                if field in ('ctc', 'date_of_joining', 'number_of_children'):
+                if field in ('ctc', 'date_of_joining', 'number_of_children', 'gross_earnings'):
                     continue
                 if len(value) > MAX_LENGTH[field]:
                     heading = next(h for h, f, *_ in COLUMNS if f == field)
                     errors.append(f'Row {n}: {heading} is longer than {MAX_LENGTH[field]} characters.')
+            row['gross_earnings'] = {}
+            if row['cadre'] in OPTION_CADRES:            # O and W: greyed out, ignored
+                for heading, key, _blank in OPTION_COLUMNS:
+                    answer = picked.get(key, '').lower()
+                    if answer in YES:
+                        row['gross_earnings'][key] = True
+                    elif answer in NO:
+                        row['gross_earnings'][key] = False
+                    elif answer not in NOT_ANSWERED:
+                        errors.append(f'Row {n}: {heading} "{picked[key]}" should be Yes or No.')
             rows.append({'row_number': n, **row})
         return rows, errors
     finally:

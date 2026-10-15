@@ -34,6 +34,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from . import rules
+from .columns import OPTION_CADRES
 
 
 def _r(x):
@@ -151,9 +152,11 @@ def _line(label, monthly, note=''):
 
 
 def calculate(*, ctc_annual, cadre, grade, category, department='', designation='',
-              work_location='', children=0, settings):
+              work_location='', children=0, options=None, settings):
     """The full break-up as plain data, or {'error': ...} if it can't be
-    worked out. `settings` is a CtcSettings."""
+    worked out. `settings` is a CtcSettings. `options` is the Gross Earnings
+    answered on the template, {key: True/False}: an item answered No is not
+    paid and its money stays in Special Allowance."""
     s = settings
     cadre = normalise_cadre(cadre)
     category = normalise_category(category)
@@ -192,11 +195,15 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     cea = rules.CEA_PER_CHILD[cadre] * counted
     lta = s.lta_for(cadre)
 
+    picked = (options or {}) if cadre in OPTION_CADRES else {}
+    car_lease = picked.get('car') is True               # as per the car lease policy
     reimb = []
     for key, label, amounts in rules.REIMBURSEMENTS:
         amount = amounts[cadre]
         if amount is None:                               # "Actual" -> settings
             amount = s.actual_for(key)
+        if picked.get(key) is False:                     # "No" on the template
+            amount = 0
         reimb.append([key, label, int(amount)])
 
     def settle():
@@ -331,5 +338,6 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         'fixedMonthly': fixed, 'fixedAnnual': fixed_annual,
         'otherPayments': other,
         'totalCtcMonthly': _r(total_annual / 12), 'totalCtcAnnual': total_annual,
+        'carLease': car_lease,
         'notes': notes,
     }

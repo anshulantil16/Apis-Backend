@@ -178,7 +178,10 @@ def build_pdf(candidate, b) -> bytes:
     for key, text in REIMBURSEMENT_ROWS:
         x = reimb.get(key, {'monthly': 0, 'annual': 0})
         row(text, x['monthly'], x['annual'], fill=ORANGE_SOFT)
-    row('Car Lease / Company Car Benefit', 0, 0)
+    if b.get('carLease'):                          # opted on the template; outside the CTC
+        data.append([Paragraph('Car Lease / Company Car Benefit', label), 'As per policy', 'As per policy'])
+    else:
+        row('Car Lease / Company Car Benefit', 0, 0)
     total('Gross Salary', b['grossSalary'], b['grossSalaryAnnual'], GREY)
 
     section('Annual Benefits')
