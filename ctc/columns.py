@@ -24,7 +24,7 @@ COLUMNS = [
      'Printed on the Annexure A.'),
     ('Work Location',  'work_location',  20, False,
      'State, picked from the list - or a city such as Delhi HO, Roorkee, Mumbai.\n\n'
-     'Sets the minimum wage Basic is checked against.'),
+     'Sets the minimum wage the Gross Salary is checked against.'),
     ('CTC',            'ctc',            16, True,
      'Total annual CTC in rupees, including Variable Pay and Gift. Required.\n\n'
      'e.g. 1200000 (commas and the ₹ sign are fine too).'),

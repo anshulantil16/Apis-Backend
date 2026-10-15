@@ -352,7 +352,7 @@ class Calculator(TestCase):
         self.assertEqual(b['notes'], [])
 
     def test_reimbursements_are_trimmed_not_overdrawn(self):
-        b = self.calc(ctc_annual=420000, category='HO')
+        b = self.calc(ctc_annual=420000, category='HO', children=2)   # CEA 6,000 can't fit in full
         spl = next(x for x in b['earnings'] if x['label'].startswith('Special'))
         self.assertGreaterEqual(spl['monthly'], 0)
         self.assertTrue(any('reduced' in n for n in b['notes']))
@@ -364,23 +364,22 @@ class Calculator(TestCase):
                              ('Daman (UT)', 'Daman (UT)'), ('Goa', 'Goa'), ('Atlantis', '')]:
             self.assertEqual(state_for(typed), state, typed)
 
-    def test_basic_never_below_the_state_minimum_wage(self):
-        # Rs 3.45 lakh in Delhi: half of gross is well under Delhi's Rs 22,500, so
-        # Basic is lifted to it and HRA shrinks to fit.
+    def test_gross_salary_never_below_the_state_minimum_wage(self):
+        # The minimum wage is on the gross salary; Basic stays 50% of Gross Earnings.
         b = self.calc(ctc_annual=345000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
-        basic, hra = b['earnings'][0], b['earnings'][1]
-        self.assertEqual(basic['monthly'], 22500)
-        self.assertIn('Minimum wage, Delhi', basic['note'])
-        self.assertIn('Reduced', hra['note'])
-        # Same CTC in Rajasthan (Rs 8,950): 50% of gross is higher, so that stands.
-        r = self.calc(ctc_annual=330000, cadre='O', grade='O1', category='Plant', work_location='Rajasthan')
-        self.assertIn('% of Gross Earnings', r['earnings'][0]['note'])
-        self.assertGreater(r['earnings'][0]['monthly'], 8950)
+        self.assertNotIn('error', b)
+        self.assertGreaterEqual(b['grossSalary'], 22500)
+        self.assertIn('50% of Gross Earnings', b['earnings'][0]['note'])
+        self.assertAlmostEqual(b['earnings'][0]['monthly'], b['grossEarnings'] / 2, delta=1)
         unknown = self.calc(work_location='Atlantis')
         self.assertTrue(any('No minimum wage found' in n for n in unknown['notes']))
-        # A CTC that can't cover the minimum wage at all is refused, not fudged.
-        low = self.calc(ctc_annual=240000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
-        self.assertIn('minimum wage', low['error'])
+        # Below it: refused, with the gross worked out and the lowest CTC that works.
+        low = self.calc(ctc_annual=288000, cadre='O', grade='O4', category='HO', work_location='Delhi')
+        self.assertIn("below Delhi's minimum wage of Rs 22,500", low['error'])
+        self.assertIn('lowest CTC that works', low['error'])
+        # The same CTC clears Rajasthan's Rs 8,950.
+        self.assertNotIn('error', self.calc(ctc_annual=288000, cadre='O', grade='O4', category='HO',
+                                            work_location='Rajasthan'))
 
     def test_cea_is_3000_per_child_for_up_to_two(self):
         cea = lambda **kw: next(x for x in self.calc(**kw)['earnings'] if x['label'].startswith('Child'))

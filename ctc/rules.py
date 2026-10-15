@@ -22,7 +22,7 @@ CADRES = {
 
 CATEGORIES = ['Sales', 'HO', 'Plant']
 
-BASIC_PERCENT = 50                       # of Gross Salary, or the state minimum wage if higher
+BASIC_PERCENT = 50                       # of Gross Earnings
 HRA_PERCENT = {'D': 50, 'C': 50, 'M': 50, 'O': 50, 'W': 20}   # of Basic
 
 PF_PERCENT = 12                          # employer, of Basic up to the PF wage ceiling
@@ -84,8 +84,8 @@ VPP_SALES = [
 # Everyone outside Sales (HO and Plant), whatever their grade.
 VPP_NON_SALES = 8
 
-# Minimum wages per month, by state (P & C's table). Basic is never below
-# the minimum wage of the candidate's work location.
+# Minimum wages per month, by state (P & C's table). The total Gross Salary
+# is never below the minimum wage of the candidate's work location.
 MIN_WAGES = {
     'Uttar Pradesh': 15500, 'Chhattisgarh': 12700, 'Maharashtra': 15500, 'Telangana': 15000,
     'Karnataka': 18600, 'West Bengal': 13000, 'Odisha': 15000, 'Madhya Pradesh': 15500,
