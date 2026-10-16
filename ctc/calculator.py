@@ -24,7 +24,7 @@ only to cadres D, C and M with a CTC above Rs 12 lakh. Those picked Yes are
 paid in preference order out of the Special Allowance left, each only if
 it fits in full; Old Regime items are left out under the New Regime.
 The CTC per month must be at least the work location's state minimum wage
-(rules.MIN_WAGES); one below it is refused.
+(rules.MIN_WAGES); one below it is raised to it, with a note saying so.
 
 Every component is a whole rupee a month, and annual = monthly x 12 - except
 that the few rupees monthly rounding leaves over go into the yearly Special
@@ -241,6 +241,22 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     if not category:
         notes.append('Category (Sales / HO / Plant) is missing, so no VPP was applied.')
 
+    # -- the state minimum wage, on the CTC per month -----------------------
+    # A CTC below it is raised to it (P & C), and the break-up says so.
+    state = state_for(work_location)
+    min_wage = rules.MIN_WAGES.get(state, 0)
+    entered_annual, adjusted = ctc_annual, None
+    if ctc_annual / 12 < min_wage:
+        ctc_annual = min_wage * 12
+        adjusted = {'enteredAnnual': entered_annual, 'correctedAnnual': ctc_annual, 'state': state,
+                    'minWage': min_wage}
+        notes.insert(0, f'You had put a CTC below the minimum wage, so it was automatically corrected '
+                        f'to the minimum wage of {state}: Rs {_inr(min_wage)} a month '
+                        f'(Rs {_inr(ctc_annual)} a year) instead of Rs {_inr(entered_annual)} a year.')
+    if not state:
+        notes.append(f'No minimum wage found for work location "{work_location or "-"}", '
+                     'so the CTC was not checked against one.')
+
     # -- off the top: VPP and Gift ------------------------------------------
     pct, vpp_rule = vpp_percent(category, grade, department, designation, date_of_joining)
     if not pct and vpp_rule:
@@ -256,16 +272,6 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         med = 0
         notes.append(f'No mediclaim rate for grade "{grade or "-"}", so it was taken as 0.')
 
-    state = state_for(work_location)
-    min_wage = rules.MIN_WAGES.get(state, 0)
-    ctc_m = _r(float(ctc_annual) / 12)
-    if ctc_m < min_wage:                                 # P & C: checked on the CTC per month
-        return {'error': f"Below {state}'s minimum wage: the CTC is Rs {_inr(ctc_m)} a month, under "
-                         f"{state}'s minimum wage of Rs {_inr(min_wage)} a month. Raise the CTC to at "
-                         f'least Rs {_inr(min_wage * 12)} a year.'}
-    if not state:
-        notes.append(f'No minimum wage found for work location "{work_location or "-"}", '
-                     'so Basic was not checked against one.')
 
     counted = min(max(int(children or 0), 0), rules.CEA_MAX_CHILDREN)
     cea = rules.CEA_PER_CHILD[cadre] * counted
@@ -379,7 +385,7 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     return {
         'cadre': cadre, 'cadreName': rules.CADRES[cadre], 'grade': grade, 'category': category,
         'state': state, 'minWage': min_wage,
-        'ctcAnnual': ctc_annual, 'vppPercent': pct,
+        'ctcAnnual': ctc_annual, 'ctcAdjusted': adjusted, 'vppPercent': pct,
         'earnings': earnings, 'grossEarnings': gross_earnings, 'grossEarningsAnnual': gross_earnings_annual,
         'reimbursements': reimbursements, 'grossSalary': gross, 'grossSalaryAnnual': gross_salary_annual,
         'benefits': benefits, 'benefitsTotal': benefits_total, 'benefitsTotalAnnual': benefits_annual,

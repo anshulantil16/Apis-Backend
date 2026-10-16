@@ -453,10 +453,14 @@ class Calculator(TestCase):
         ok = self.calc(ctc_annual=288000, cadre='O', grade='O4', category='HO', work_location='Delhi')
         self.assertNotIn('error', ok)
         self.assertEqual(ok['totalCtcAnnual'], 288000)
-        # ... and Rs 22,000 doesn't.
+        self.assertIsNone(ok['ctcAdjusted'])
+        # ... and Rs 22,000 is raised to Delhi's Rs 22,500, with a warning.
         low = self.calc(ctc_annual=264000, cadre='O', grade='O4', category='HO', work_location='Delhi')
-        self.assertIn("Below Delhi's minimum wage", low['error'])
-        self.assertIn('Rs 2,70,000 a year', low['error'])
+        self.assertNotIn('error', low)
+        self.assertEqual(low['totalCtcAnnual'], 270000)
+        self.assertEqual(low['ctcAdjusted'], {'enteredAnnual': 264000, 'correctedAnnual': 270000,
+                                              'state': 'Delhi', 'minWage': 22500})
+        self.assertIn('automatically corrected to the minimum wage of Delhi', low['notes'][0])
 
     def test_cea_is_3000_per_child_for_up_to_two(self):
         cea = lambda **kw: next(x for x in self.calc(**kw)['earnings'] if x['label'].startswith('Child'))
@@ -469,4 +473,4 @@ class Calculator(TestCase):
 
     def test_unworkable_input_is_an_error_not_a_number(self):
         self.assertIn('error', self.calc(cadre='Z'))
-        self.assertIn('error', self.calc(ctc_annual=10000))
+        self.assertIn('error', self.calc(ctc_annual=10000, work_location='Atlantis'))   # no minimum wage to raise to

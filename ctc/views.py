@@ -27,7 +27,8 @@ from rest_framework.response import Response
 from accounts.auth import PortalScopedAPIView, require_superadmin, require_user
 from accounts.moderation import log_activity
 
-from .calculator import calculate
+from . import rules
+from .calculator import calculate, state_for
 from .columns import COLUMNS
 from .ingest import SheetError, parse
 from .models import CtcCandidate, CtcSettings, CtcUpload
@@ -39,6 +40,15 @@ XLSX_MAGIC = b'PK\x03\x04'           # .xlsx is a zip
 FIELDS = [field for _h, field, *_ in COLUMNS] + ['gross_earnings']
 
 
+def _corrected_ctc(c):
+    """The annual CTC the break-up uses when the one entered is below the
+    work location's minimum wage (the calculator raises it), else None."""
+    min_wage = rules.MIN_WAGES.get(state_for(c.work_location), 0)
+    if c.ctc is not None and c.ctc / 12 < min_wage:
+        return str(min_wage * 12)
+    return None
+
+
 def _candidate(c):
     return {'id': c.id, 'rowNumber': c.row_number,
             'employeeCode': c.employee_code,
@@ -47,7 +57,8 @@ def _candidate(c):
             'designation': c.designation, 'grade': c.grade, 'cadre': c.cadre,
             'workLocation': c.work_location, 'numberOfChildren': c.number_of_children,
             'grossEarnings': c.gross_earnings or {}, 'taxRegime': c.tax_regime,
-            'ctc': str(c.ctc) if c.ctc is not None else None}
+            'ctc': str(c.ctc) if c.ctc is not None else None,
+            'ctcCorrected': _corrected_ctc(c)}
 
 
 def _upload(u, viewer):
