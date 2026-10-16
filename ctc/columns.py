@@ -8,8 +8,8 @@ COLUMNS = [
     ('Category',       'category',       12, True,
      'Sales, HO or Plant. Required.\n\nDecides which Variable Pay table applies.'),
     ('Department',     'department',     24, False,
-     'e.g. General Trade, Alternate Channels, Finance.\n\nFor Sales, used with the '
-     'designation to find the Variable Pay %.'),
+     'Sales: pick GENERAL TRADE, ALTERNATE CHANNELS or BOTH from the list - with the '
+     'Grade it sets the Variable Pay %.\n\nHO and Plant: type the department, e.g. Finance.'),
     ('Designation',    'designation',    30, False,
      'Job title being offered, e.g. Area Sales Manager.'),
     ('Grade',          'grade',          10, True,  'e.g. M1, M3, O5, C2. Required.'),
@@ -35,6 +35,9 @@ COLUMNS = [
 OPTIONAL_FIELDS = {'tax_regime'}
 
 TAX_REGIMES = ['Old Regime', 'New Regime', 'Both Regime']
+
+# The Department choices for a Sales row (P & C's VPP table).
+SALES_DEPARTMENTS = ['GENERAL TRADE', 'ALTERNATE CHANNELS', 'BOTH']
 
 # Gross Earnings: one Yes / No column per item, after CTC, in the Reference
 # Master's preference order. Optional, so a sheet without them still uploads.

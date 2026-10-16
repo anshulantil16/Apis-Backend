@@ -16,12 +16,12 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from .columns import CHOICES, COLUMNS, OPTION_COLUMNS, TAX_REGIMES
+from .columns import CHOICES, COLUMNS, OPTION_COLUMNS, SALES_DEPARTMENTS, TAX_REGIMES
 from .rules import MIN_WAGES, REIMBURSEMENT_MIN_CTC, REIMBURSEMENTS
 
 SHEET_NAME = 'Candidates'
 
-EXAMPLE = ['Rahul Sharma', 'Sales', 'General Trade', 'Area Sales Manager', 'M1', 'M', 2,
+EXAMPLE = ['Rahul Sharma', 'Sales', 'GENERAL TRADE', 'Area Sales Manager', 'M1', 'M', 2,
            'Delhi', 1500000, 'New Regime', 'Yes', 'Yes', 'Yes', 'No', 'No', 'Yes', 'No', 'No',
            'No']
 
@@ -69,6 +69,18 @@ def _option_columns(ws, lists):
     lists['B1'], lists['B2'] = 'Yes', 'No'          # Lists!C1 stays empty: the disabled list
     for r, name in enumerate(TAX_REGIMES, start=1):
         lists.cell(row=r, column=4, value=name)
+    for r, name in enumerate(SALES_DEPARTMENTS, start=1):
+        lists.cell(row=r, column=5, value=name)
+
+    # Department: on a Sales row, a dropdown of the three sales departments;
+    # otherwise an empty list, so HO and Plant type their own. (Not enforced
+    # here - the upload checks a Sales row's department.)
+    dept, category = _col('department'), _col('category')
+    dd = DataValidation(type='list',
+                        formula1=f'IF({own(category)}="Sales",Lists!$E$1:$E${len(SALES_DEPARTMENTS)},Lists!$C$1)',
+                        allow_blank=True, showErrorMessage=False)
+    dd.add(f'{dept}2:{dept}2001')
+    ws.add_data_validation(dd)
 
     a, b = get_column_letter(first), get_column_letter(last)
     off = f'OR({own(cadre)}="O",{own(cadre)}="W",{small})'

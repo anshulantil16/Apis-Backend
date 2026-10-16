@@ -89,7 +89,13 @@ _DEPT_ALIASES = {
     'generaltrade': 'General Trade', 'gt': 'General Trade',
     'alternatechannels': 'Alternate Channels', 'alternatechannel': 'Alternate Channels',
     'ac': 'Alternate Channels',
+    'both': 'Both',
 }
+
+
+def sales_department(text):
+    """'General Trade', 'Alternate Channels', 'Both' - or '' - from what was typed."""
+    return _sales_department(text)
 
 
 def _sales_department(text):
@@ -126,28 +132,34 @@ def _grade_rank(grade):
 
 
 def _sales_by_grade(g, department, designation):
-    """P & C's grade table, for Sales designations the policy doesn't name."""
+    """P & C's Sales VPP table: by grade and department. None when the
+    grade isn't in the table. A table row for BOTH fits either department;
+    a Sales row marked BOTH takes the higher rate where its grade has two."""
     rows = [r for r in rules.VPP_SALES if r[0] == g]
     if not rows:
-        return 0, (f'No Sales VPP: the designation is not one the Variable Pay Policy names '
-                   f'(Business Head, ZSM / RSM / KAM, ASM) and grade {g or "-"} is not in the grade table.')
+        return None
     if len(rows) > 1:
         dept = _sales_department(department)
+        if dept == 'Both':
+            best = max(rows, key=lambda r: r[3])
+            return best[3], f'Sales · grade {g} · Both departments (higher rate)'
         by_dept = [r for r in rows if r[1] is None or r[1] == dept] if dept else []
         by_desig = [r for r in rows if _norm(r[2]) == _norm(designation)]
         rows = by_dept if len(by_dept) == 1 else by_desig
         if len(rows) != 1:
             options = ' or '.join(f'{r[1]} ({r[3]}%)' for r in rules.VPP_SALES if r[0] == g)
-            return 0, f'Sales grade {g} has two VPP rates - set Department to {options} to pick one.'
+            return 0, (f'Sales grade {g} has two VPP rates - set Department to {options} '
+                       f'(it is "{department or "-"}").')
     r_grade, r_dept, _desig, pct = rows[0]
-    return pct, f'Sales · grade {r_grade}' + (f' · {r_dept}' if r_dept else '')
+    return pct, f'Sales · grade {r_grade} · ' + (r_dept or 'Both departments')
 
 
 def vpp_percent(category, grade, department, designation, date_of_joining=None):
     """(percent, description) under the Variable Pay Policy. With a percent,
     the description names the rule that gave it; with 0, it says why.
 
-    Sales: grade M5 and above (M5, M6, C1-C5, D) 15%. Below that, by
+    Sales: P & C's table by grade and department (General Trade, Alternate
+    Channels, Both) first. A grade not in it: M5 and above 15%, else by
     designation - Business Head / OT Head 15%, ZSM / RSM / KAM 12%,
     ASM 10% (not for an ASM who joined before 01-06-2024). A designation the
     policy doesn't name falls back to P & C's grade table.
@@ -162,6 +174,15 @@ def vpp_percent(category, grade, department, designation, date_of_joining=None):
         return 0, f'No VPP: the Variable Pay Policy covers managerial roles and above, not grade {g}.'
     words = _words(designation)
     if category == 'Sales':
+        is_asm = any(f' {p} ' in words for p in dict(
+            (role, phrases) for _pct, role, phrases in rules.VPP_SALES_BY_DESIGNATION)['ASM'])
+        if is_asm and date_of_joining and \
+                (date_of_joining.year, date_of_joining.month, date_of_joining.day) < rules.VPP_ASM_JOINED_FROM:
+            return 0, ('No VPP: ASMs who joined before 01-06-2024 are excluded '
+                       '(Variable Pay Policy, FY 24-25).')
+        by_table = _sales_by_grade(g, department, designation)
+        if by_table is not None:
+            return by_table
         if rank is not None and rank >= _grade_rank(rules.VPP_SALES_SENIOR_FROM_GRADE):
             return rules.VPP_SALES_SENIOR, f'Sales · grade {rules.VPP_SALES_SENIOR_FROM_GRADE} and above'
         for pct, role, phrases in rules.VPP_SALES_BY_DESIGNATION:
@@ -172,7 +193,8 @@ def vpp_percent(category, grade, department, designation, date_of_joining=None):
                     return 0, ('No VPP: ASMs who joined before 01-06-2024 are excluded '
                                '(Variable Pay Policy, FY 24-25).')
                 return pct, f'Sales · {role}'
-        return _sales_by_grade(g, department, designation)
+        return 0, (f'No Sales VPP: grade {g or "-"} is not in the VPP table and the designation is '
+                   'not one the Variable Pay Policy names (Business Head, ZSM / RSM / KAM, ASM).')
     name = 'Corporate' if category == 'HO' else 'Factory'
     excluded = next((p for p in rules.VPP_NON_SALES_EXCLUDED if f' {p} ' in words), None)
     if excluded:

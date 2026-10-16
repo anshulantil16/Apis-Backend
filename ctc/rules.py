@@ -101,8 +101,9 @@ VPP_NON_SALES = 8
 VPP_NON_SALES_FROM_GRADE = 'M3'
 VPP_NON_SALES_EXCLUDED = ['deputy manager', 'assistant manager']
 
-# Sales designations the policy doesn't name: P & C's grade table.
-# Grade; department (None = either) settles grades with two rates.
+# Sales: P & C's VPP table, by grade and department - used first.
+# Department None = BOTH (either). Designation settles a grade with two rates
+# when the department doesn't.
 VPP_SALES = [
     # grade, department,            designation,                        %
     ('C2', 'General Trade',       'NSH',                               15),

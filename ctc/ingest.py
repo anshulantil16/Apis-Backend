@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 
 from openpyxl import load_workbook
 
-from .calculator import normalise_cadre, normalise_category
+from .calculator import normalise_cadre, normalise_category, sales_department
 from .rules import REIMBURSEMENT_MIN_CTC
 from .columns import (COLUMNS, MAX_CTC, MAX_LENGTH, NO, NOT_ANSWERED, OPTION_CADRES,
                       OPTION_COLUMNS, OPTIONAL_FIELDS, TAX_REGIMES, YES)
@@ -111,6 +111,13 @@ def parse(fileobj):
                     row['category'] = category
                 else:
                     errors.append(f'Row {n}: Category "{row["category"]}" should be Sales, HO or Plant.')
+            if row['category'] == 'Sales':
+                dept = sales_department(row['department'])
+                if dept:
+                    row['department'] = dept
+                else:
+                    errors.append(f'Row {n}: Department "{row["department"]}" - for Sales pick GENERAL TRADE, '
+                                  'ALTERNATE CHANNELS or BOTH (it sets the Variable Pay %).')
             if row['tax_regime'].strip().lower() in NOT_ANSWERED:
                 row['tax_regime'] = ''                     # 'N/A', '-' ... from an older template
             if row['tax_regime']:
