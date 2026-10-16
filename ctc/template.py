@@ -47,7 +47,7 @@ def _option_columns(ws, lists):
         cell.comment = Comment(
             'Gross Earnings - Yes or No.\n\nBlank means '
             + ('Yes: paid at the full cadre slab.' if blank_yes else 'No.')
-            + ' No means it is not paid and the amount stays in Special Allowance.'
+            + ' Yes pays it at the full cadre slab, out of Special Allowance.'
             + '\n\nOnly for cadres D, C and M - greyed out for O and W.', 'APIS Intranet')
         ws.column_dimensions[get_column_letter(i)].width = OPTION_WIDTH
     ws.row_dimensions[1].height = 48

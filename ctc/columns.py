@@ -43,15 +43,15 @@ TAX_REGIMES = ['Old Regime', 'New Regime', 'Both Regime']
 # Annexure A lists them. Optional, so a sheet without them still uploads.
 # Cadres O and W get none of these, so their cells are greyed out on the
 # template and anything typed there is ignored.
-# (heading, key, what a blank cell means)
+# (heading, key, what a blank cell means) - blank is No: only what is picked is paid
 OPTION_COLUMNS = [
-    ('Meal Voucher Reimbursement', 'meal', True),
-    ('Telephone-Handset / Accessories & Internet Reimbursement', 'telephone', True),
-    ('Health & Wellness Reimbursement', 'health', True),
-    ('Books, Periodicals & Professional Development Reimbursement', 'books', True),
-    ('Uniform & Attire Reimbursement', 'uniform', True),
-    ('Fuel & Vehicle Maintenance Reimbursement', 'fuel', True),
-    ('Driver/Chauffer Salary', 'driver', True),
+    ('Meal Voucher Reimbursement', 'meal', False),
+    ('Telephone-Handset / Accessories & Internet Reimbursement', 'telephone', False),
+    ('Health & Wellness Reimbursement', 'health', False),
+    ('Books, Periodicals & Professional Development Reimbursement', 'books', False),
+    ('Uniform & Attire Reimbursement', 'uniform', False),
+    ('Fuel & Vehicle Maintenance Reimbursement', 'fuel', False),
+    ('Driver/Chauffer Salary', 'driver', False),
     ('Car Lease / Company Car Benefit', 'car', False),
 ]
 OPTION_CADRES = {'D', 'C', 'M'}          # the cadres these apply to

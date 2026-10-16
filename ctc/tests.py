@@ -270,12 +270,23 @@ class Calculator(TestCase):
             self.assertEqual(sum(x['annual'] for x in b['earnings']), b['grossEarningsAnnual'])
             self.assertEqual(b['fixedAnnual'] + sum(x['annual'] for x in b['otherPayments']), ctc)
 
-    def test_basic_is_half_of_gross_salary_and_hra_half_of_basic(self):
-        b = self.calc()
-        basic, hra = b['earnings'][0]['monthly'], b['earnings'][1]['monthly']
-        self.assertAlmostEqual(basic, b['grossSalary'] / 2, delta=1)
-        self.assertEqual(b['earnings'][0]['note'], '50% of Gross Salary')
-        self.assertAlmostEqual(hra, basic / 2, delta=1)
+    def test_matches_p_and_c_sheet_for_14_lakh(self):
+        # P & C's worked example: C1, Rs 14,00,000, two children, nothing picked.
+        b = self.calc(ctc_annual=1400000, cadre='C', grade='C1', category='Plant', children=2,
+                      work_location='Uttarakhand')
+        e = {x['label'].split(' (')[0]: x['monthly'] for x in b['earnings']}
+        ben = {x['label']: x['monthly'] for x in b['benefits']}
+        self.assertEqual(b['otherPayments'][0]['monthly'], 9333)              # VPP
+        self.assertEqual(b['otherPayments'][1]['monthly'], 1250)              # Gift
+        self.assertEqual(ben['Mediclaim Charges'], 900)
+        self.assertEqual(ben['Employer PF Contribution'], 3000)
+        self.assertEqual(b['grossSalary'], 102183)
+        self.assertEqual(e['Basic Salary'], 58333)                            # 50% of CTC
+        self.assertEqual(e['House Rent Allowance'], 29167)                    # 50% of Basic
+        self.assertEqual(e['Child Education Allowance'], 6000)
+        self.assertEqual(e['Special Allowance'], 8683)
+        self.assertEqual(b['grossEarnings'], 102183)
+        self.assertEqual(b['totalCtcAnnual'], 1400000)
         w = self.calc(ctc_annual=180000, cadre='W', grade='W2', category='Plant', work_location='Rajasthan')
         self.assertAlmostEqual(w['earnings'][1]['monthly'], w['earnings'][0]['monthly'] * 0.2, delta=1)
 
@@ -312,40 +323,40 @@ class Calculator(TestCase):
         for cat, grade in (('HO', 'O5'), ('HO', 'C2'), ('Plant', 'C2'), ('Plant', 'W1')):
             self.assertEqual(vpp_percent(cat, grade, 'IT', 'Analyst')[0], 8, (cat, grade))
 
-    def test_esi_and_bonus_only_for_small_salaries(self):
-        small = self.calc(ctc_annual=240000, cadre='O', grade='O1', category='Plant', work_location='Rajasthan')
+    def test_esi_instead_of_mediclaim_up_to_21000(self):
+        small = self.calc(ctc_annual=288000, cadre='O', grade='O5', category='HO', work_location='Delhi')
         self.assertLessEqual(small['grossSalary'], 21000)
-        names = {x['label']: x['monthly'] for x in small['benefits']}
-        self.assertGreater(names['Employer ESI Contribution'], 0)
-        self.assertGreater(names['Statutory Bonus'], 0)
-        big = {x['label']: x['monthly'] for x in self.calc()['benefits']}
-        self.assertEqual((big['Employer ESI Contribution'], big['Statutory Bonus']), (0, 0))
+        ben = {x['label']: x['monthly'] for x in small['benefits']}
+        self.assertEqual(ben['Employer ESI Contribution'], round(small['grossSalary'] * 0.0325))
+        self.assertEqual(ben['Mediclaim Charges'], 0)
+        big = self.calc(ctc_annual=330000, cadre='O', grade='O3', category='Plant', work_location='Delhi')
+        self.assertGreater(big['grossSalary'], 21000)
+        ben = {x['label']: x['monthly'] for x in big['benefits']}
+        self.assertEqual((ben['Employer ESI Contribution'], ben['Mediclaim Charges']), (0, 450))
+        self.assertEqual(ben['Statutory Bonus'], 0)
 
-    def test_pf_is_capped_and_mediclaim_follows_grade(self):
-        b = {x['label']: x['monthly'] for x in self.calc(ctc_annual=3500000, cadre='C', grade='C2',
-                                                          category='HO')['benefits']}
-        self.assertEqual(b['Employer PF Contribution'], 3000)     # Basic > 25,000 -> capped
-        self.assertEqual(b['Mediclaim Charges'], 950)
-
-    def test_pf_is_12_percent_of_basic_below_25000(self):
-        b = self.calc(ctc_annual=420000, cadre='O', grade='O3', category='Plant',
-                      work_location='Uttar Pradesh')
-        basic = next(x['monthly'] for x in b['earnings'] if x['label'].startswith('Basic'))
-        pf = next(x['monthly'] for x in b['benefits'] if x['label'] == 'Employer PF Contribution')
-        self.assertLess(basic, 25000)
-        self.assertEqual(pf, round(basic * 0.12))
+    def test_pf_is_12_percent_of_gross_less_hra_below_25000_else_3000(self):
+        small = self.calc(ctc_annual=288000, cadre='O', grade='O5', category='HO', work_location='Delhi')
+        hra = small['earnings'][1]['monthly']
+        pf = small['benefits'][0]['monthly']
+        self.assertLess(small['grossSalary'], 25000)
+        self.assertEqual(pf, round((small['grossSalary'] - hra) * 0.12))
+        big = self.calc(ctc_annual=3500000, cadre='C', grade='C2', category='HO')
+        self.assertEqual(big['benefits'][0]['monthly'], 3000)
+        self.assertEqual(big['benefits'][2]['monthly'], 950)                  # mediclaim by grade
 
     def test_gross_earnings_answered_no_are_not_paid(self):
         base = dict(ctc_annual=3500000, cadre='C', grade='C2', category='HO', work_location='Delhi')
         full = self.calc(**base)
-        some = self.calc(**base, options={'telephone': False, 'uniform': False, 'car': True})
+        some = self.calc(**base, options={'meal': True, 'telephone': False, 'car': True})
         paid = {x['key']: x['monthly'] for x in some['reimbursements']}
         self.assertEqual((paid['telephone'], paid['uniform'], paid['meal']), (0, 0, 9600))
         self.assertTrue(some['carLease'])
         self.assertFalse(full['carLease'])
         spl = lambda b: next(x['monthly'] for x in b['earnings'] if x['label'].startswith('Special'))
-        # Every rupee not picked goes to Special; Basic, HRA and PF don't move.
-        self.assertEqual(spl(some) - spl(full), 10000 + 10000)
+        # Only what is picked is paid, out of Special; Basic, HRA and PF don't move.
+        self.assertEqual(sum(x['monthly'] for x in full['reimbursements']), 0)
+        self.assertEqual(spl(full) - spl(some), 9600)
         self.assertEqual(some['earnings'][:2], full['earnings'][:2])
         self.assertEqual(some['benefits'], full['benefits'])
         self.assertEqual(some['totalCtcAnnual'], 3500000)
@@ -356,8 +367,8 @@ class Calculator(TestCase):
 
     def test_full_slab_reimbursements_and_special_takes_the_balance(self):
         from .rules import REIMBURSEMENTS
-        b = self.calc(ctc_annual=3500000, cadre='C', grade='C2', category='HO', children=2,
-                      work_location='Delhi')
+        b = self.calc(ctc_annual=4500000, cadre='C', grade='C2', category='HO', children=2,
+                      work_location='Delhi', options={k: True for k, _l, _a in REIMBURSEMENTS})
         paid = {x['key']: x['monthly'] for x in b['reimbursements']}
         self.assertEqual(paid, {k: amounts['C'] for k, _l, amounts in REIMBURSEMENTS})
         spl = next(x for x in b['earnings'] if x['label'].startswith('Special'))['monthly']
@@ -367,7 +378,7 @@ class Calculator(TestCase):
         self.assertEqual(b['notes'], [])
 
     def test_reimbursements_are_trimmed_not_overdrawn(self):
-        b = self.calc(ctc_annual=420000, category='HO', children=2)   # CEA 6,000 can't fit in full
+        b = self.calc(ctc_annual=420000, category='HO', children=2, options={'meal': True})
         spl = next(x for x in b['earnings'] if x['label'].startswith('Special'))
         self.assertGreaterEqual(spl['monthly'], 0)
         self.assertTrue(any('reduced' in n for n in b['notes']))
@@ -382,8 +393,8 @@ class Calculator(TestCase):
     def test_ctc_per_month_never_below_the_state_minimum_wage(self):
         b = self.calc(ctc_annual=345000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
         self.assertNotIn('error', b)
-        self.assertIn('50% of Gross Salary', b['earnings'][0]['note'])
-        self.assertAlmostEqual(b['earnings'][0]['monthly'], b['grossSalary'] / 2, delta=1)
+        self.assertEqual(b['earnings'][0]['note'], '50% of CTC')
+        self.assertEqual(b['earnings'][0]['monthly'], round(345000 / 12 / 2))
         unknown = self.calc(work_location='Atlantis')
         self.assertTrue(any('No minimum wage found' in n for n in unknown['notes']))
         # Checked on the CTC per month: Rs 24,000 clears Delhi's Rs 22,500 ...

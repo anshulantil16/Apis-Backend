@@ -1,28 +1,29 @@
-"""Work out a candidate's compensation break-up from their total CTC.
+"""Work out a candidate's compensation break-up from their total CTC,
+the way P & C's sheet does it (monthly figures):
 
-    Total CTC (per annum, as uploaded)
-      - Variable / Performance Pay      VPP % of total CTC (rules.VPP_*)
-      - Gift Reimbursement              Rs 1,250 a month for D, C, M (none for O, W)
-      = Fixed CTC, per month (F)
-
-    F = Gross Salary + employer PF + ESI + Mediclaim + Statutory Bonus + Gratuity
-    Gross Salary   = Gross Earnings + the reimbursements picked (full slab)
-    Gross Earnings = Basic + HRA + CEA + LTA + Special Allowance
-    Basic             = 50% of Gross Salary
+    CTC               = annual CTC / 12
+    Gross Salary      = CTC - VPP - Gift - (Mediclaim or ESI) - Employer PF
+                            (- Gratuity, if a rate is set)
+    Basic             = 50% of CTC
     HRA               = 50% of Basic          (W: 20%)
     CEA               = Rs 3,000 per child, up to 2 children (D, C, M)
     LTA               = per cadre (settings)
-    Special Allowance = Gross Salary - every other component (the balance)
+    Reimbursements    = the ones picked Yes on the template, at the full slab
+    Special Allowance = Gross Salary - Basic - HRA - CEA - LTA - reimbursements
 
-Reimbursements picked on the template are paid at their full slab; only
-when what is left after Basic, HRA, CEA and LTA can't hold them all are
-they reduced, from the end of the preference order, and Special is then 0. Basic depends on Gross, and Gross on PF and Bonus,
-which depend on Basic - so they are solved together; the loop settles in a
-handful of passes.
+    Gross Salary up to Rs 21,000: employer ESI (3.25% of Gross Salary) is
+        taken instead of Mediclaim; above it, Mediclaim by grade.
+    Gross Salary under Rs 25,000: Employer PF = 12% of (Gross Salary - HRA);
+        from Rs 25,000: Rs 3,000.
+
+Gross Salary depends on ESI and PF, which depend on Gross Salary, so each
+of the four cases (ESI or Mediclaim, PF on wages or capped) is solved and
+the one that agrees with its own result is used.
+
+If the reimbursements picked don't fit, they are reduced from the end of
+the preference order, then CEA, HRA and LTA, and Special is 0.
 The CTC per month must be at least the work location's state minimum wage
 (rules.MIN_WAGES); one below it is refused.
-ESI and Statutory Bonus apply only when Gross Salary is within the limit
-(Rs 21,000 a month by default).
 
 Every component is a whole rupee a month, and annual = monthly x 12 - except
 that the few rupees monthly rounding leaves over go into the yearly Special
@@ -131,21 +132,29 @@ def vpp_percent(category, grade, department, designation):
     return 0, ''
 
 
-def _solve(F, med, s, small):
-    """Monthly gross salary for one branch: small=True applies ESI and Bonus.
-    Basic is a share of gross earnings, i.e. gross less reimbursements."""
-    gross = F - med
-    for _ in range(60):
-        basic = gross * rules.BASIC_PERCENT / 100
-        pf = min(basic, s.pf_wage_ceiling) * rules.PF_PERCENT / 100
-        grat = basic * float(s.gratuity_percent) / 100
-        bonus = basic * rules.BONUS_PERCENT / 100 if small else 0
-        # ESI is a share of gross itself: gross + esi + the rest = F
-        new = (F - med - pf - grat - bonus) / (1 + (rules.ESI_PERCENT / 100 if small else 0))
-        if abs(new - gross) < 0.001:
-            return new
-        gross = new
-    return gross
+def _solve(base, med, hra, s):
+    """(gross, esi, mediclaim, pf) for base = everything left after VPP,
+    Gift and Gratuity. Tries the four cases and keeps the consistent one."""
+    esi_rate = rules.ESI_PERCENT / 100
+    pf_rate = rules.PF_PERCENT / 100
+    esi_limit, pf_limit = s.esi_bonus_gross_limit, s.pf_wage_ceiling
+    pf_cap = pf_limit * pf_rate
+    cases = [
+        # (ESI?, PF on wages?, gross)
+        (False, False, base - med - pf_cap),
+        (False, True, (base - med + pf_rate * hra) / (1 + pf_rate)),
+        (True, True, (base + pf_rate * hra) / (1 + esi_rate + pf_rate)),
+        (True, False, (base - pf_cap) / (1 + esi_rate)),
+    ]
+    for esi_on, pf_on, g in cases:
+        if (g <= esi_limit) == esi_on and (g < pf_limit) == pf_on:
+            break
+    else:                       # on a boundary, rounding can leave no exact fit
+        esi_on, pf_on, g = cases[1]
+    pf = _r(max(g - hra, 0) * pf_rate) if pf_on else _r(pf_cap)
+    esi = _r(g * esi_rate) if esi_on else 0
+    med = 0 if esi_on else med
+    return base - esi - med - pf, esi, med, pf
 
 
 def _line(label, monthly, note=''):
@@ -218,51 +227,25 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         amount = amounts[cadre]
         if amount is None:                               # "Actual" -> settings
             amount = s.actual_for(key)
-        paid = 0 if picked.get(key) is False else int(amount)   # "No" on the template
-        reimb.append([key, label, paid, int(amount)])
+        reimb.append([key, label, int(amount) if picked.get(key) is True else 0])
 
-    def settle():
-        """Gross salary, Basic, HRA and the employer items."""
-        gross = _solve(F, med, s, small=False)
-        small = gross <= s.esi_bonus_gross_limit
-        if small:
-            gross = _solve(F, med, s, small=True)
-        half = gross * rules.BASIC_PERCENT / 100
-        basic = _r(half)
-        pf = _r(min(basic, s.pf_wage_ceiling) * rules.PF_PERCENT / 100)
-        grat = _r(basic * float(s.gratuity_percent) / 100)
-        bonus = _r(basic * rules.BONUS_PERCENT / 100) if small else 0
-        esi = _r(gross * rules.ESI_PERCENT / 100) if small else 0
-        gross = F - pf - esi - med - bonus - grat    # exact, so the fixed part adds up
-        hra = _r(basic * rules.HRA_PERCENT[cadre] / 100)
-        return dict(gross=gross, basic=basic, hra=hra, pf=pf, grat=grat, bonus=bonus,
-                    esi=esi, small=small)
+    basic = _r(float(ctc_annual) / 12 * rules.BASIC_PERCENT / 100)
+    hra = full_hra = _r(basic * rules.HRA_PERCENT[cadre] / 100)
+    grat = _r(basic * float(s.gratuity_percent) / 100)
+    gross, esi, med, pf = _solve(F - grat, med, full_hra, s)
+    bonus = 0
 
-    # -- Special Allowance is the balance; trim reimbursements only if short --
-    x = settle()
-
+    # -- Special Allowance is the balance; trim what was picked only if short --
     def balance():
-        return x['gross'] - x['basic'] - x['hra'] - cea - lta - sum(p for _k, _l, p, _e in reimb)
+        return gross - basic - hra - cea - lta - sum(a for _k, _l, a in reimb)
 
     reduced = []
     for item in reversed(reimb):
-        for _ in range(200):
-            short = -balance()
-            if short <= 0 or not item[2]:
-                break
-            item[2] -= min(item[2], short)          # Basic doesn't move: rupee for rupee
-            x = settle()
-            if item[1] not in reduced:
-                reduced.append(item[1])
         if balance() >= 0:
             break
-    # From here Basic and the employer items are fixed; what is left to give
-    # way is CEA, then HRA, then LTA - each a straight rupee-for-rupee cut.
-    hra = full_hra = x['hra']
-
-    def balance():                                      # noqa: F811 - HRA can now shrink
-        return x['gross'] - x['basic'] - hra - cea - lta - sum(p for _k, _l, p, _e in reimb)
-
+        if item[2]:
+            item[2] -= min(item[2], -balance())
+            reduced.append(item[1])
     if balance() < 0 and cea:
         cea -= min(cea, -balance())
         reduced.append('Child Education Allowance')
@@ -273,20 +256,18 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         lta -= min(lta, -balance())
         reduced.append('Leave Travel Allowance')
     if reduced:
-        notes.append('After Basic (50% of Gross Salary), HRA and CEA there was not room for '
-                     'everything picked, so these were reduced: '
-                     + ', '.join(reduced) + '.')
-    gross, basic = x['gross'], x['basic']
-    pf, grat, bonus, esi, small = x['pf'], x['grat'], x['bonus'], x['esi'], x['small']
+        notes.append(f'After Basic ({rules.BASIC_PERCENT}% of CTC) there was not room for everything, '
+                     'so these were reduced: ' + ', '.join(reduced) + '.')
     if balance() < 0:
-        return {'error': 'CTC is too low for this cadre: Basic alone exceeds the gross salary.'}
+        return {'error': f'CTC is too low for this cadre: Basic ({rules.BASIC_PERCENT}% of CTC, '
+                         f'Rs {_inr(basic)}) is more than the Gross Salary of Rs {_inr(gross)}.'}
     spl = balance()
     hra_note = (f'{rules.HRA_PERCENT[cadre]}% of Basic' if hra == full_hra
                 else f'Reduced from {rules.HRA_PERCENT[cadre]}% of Basic to fit')
 
     earnings = [
         _line('Basic Salary (Inclusive of DA/VDA)', basic,
-              f'{rules.BASIC_PERCENT}% of Gross Salary'),
+              f'{rules.BASIC_PERCENT}% of CTC'),
         _line('House Rent Allowance (HRA)', hra, hra_note),
         _line('Child Education Allowance (CEA)', cea,
               f'Rs {rules.CEA_PER_CHILD[cadre]:,} x {counted} child{"ren" if counted != 1 else ""}'
@@ -297,16 +278,17 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     gross_earnings = sum(r['monthly'] for r in earnings)
     # Every reimbursement, zeros included and keyed, so the Annexure A PDF can
     # print its fixed rows; the screen shows only the ones that apply.
-    reimbursements = [{**_line(label, amount), 'key': key} for key, label, amount, _e in reimb]
+    reimbursements = [{**_line(label, amount), 'key': key} for key, label, amount in reimb]
     benefits = [
         _line('Employer PF Contribution', pf,
-              f'{rules.PF_PERCENT}% of Basic' if basic <= s.pf_wage_ceiling else
-              f'Capped at Rs {_r(s.pf_wage_ceiling * rules.PF_PERCENT / 100):,} '
-              f'(Basic above Rs {s.pf_wage_ceiling:,})'),
+              f'{rules.PF_PERCENT}% of (Gross Salary - HRA)' if gross < s.pf_wage_ceiling else
+              f'Rs {_inr(pf)} (Gross Salary Rs {_inr(s.pf_wage_ceiling)} or more)'),
         _line('Employer ESI Contribution', esi,
-              f'{rules.ESI_PERCENT}% of Gross Salary' if small else 'Not applicable'),
-        _line('Mediclaim Charges', med, f'Grade {grade}' if grade else ''),
-        _line('Statutory Bonus', bonus, f'{rules.BONUS_PERCENT}% of Basic' if small else 'Not applicable'),
+              f'{rules.ESI_PERCENT}% of Gross Salary (up to Rs {_inr(s.esi_bonus_gross_limit)})'
+              if esi else 'Not applicable'),
+        _line('Mediclaim Charges', med,
+              'ESI applies instead' if esi else (f'Grade {grade}' if grade else '')),
+        _line('Statutory Bonus', bonus, 'Not applicable'),
         _line('Gratuity', grat, f'{s.gratuity_percent}% of Basic' if grat else ''),
     ]
     benefits_total = sum(r['monthly'] for r in benefits)
