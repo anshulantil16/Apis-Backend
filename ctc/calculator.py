@@ -19,9 +19,8 @@ when what is left after Basic, HRA, CEA and LTA can't hold them all are
 they reduced, from the end of the preference order, and Special is then 0. Basic depends on Gross, and Gross on PF and Bonus,
 which depend on Basic - so they are solved together; the loop settles in a
 handful of passes.
-Gross Salary must be at least the work location's state minimum wage
-(rules.MIN_WAGES); a CTC that can't reach it is refused, with the lowest
-CTC that would.
+The CTC per month must be at least the work location's state minimum wage
+(rules.MIN_WAGES); one below it is refused.
 ESI and Statutory Bonus apply only when Gross Salary is within the limit
 (Rs 21,000 a month by default).
 
@@ -163,23 +162,8 @@ def _inr(n):
     return head + tail
 
 
-def _minimum_ctc(kw):
-    """The lowest annual CTC (to the nearest Rs 1,000) that gives a valid
-    break-up for these inputs, for the "too low" message."""
-    lo, hi = 0, 2_000_000
-    if 'error' in calculate(ctc_annual=hi, _search=False, **kw):
-        return None
-    while hi - lo > 1000:
-        mid = (lo + hi) // 2
-        if 'error' in calculate(ctc_annual=mid, _search=False, **kw):
-            lo = mid
-        else:
-            hi = mid
-    return -(-hi // 1000) * 1000
-
-
 def calculate(*, ctc_annual, cadre, grade, category, department='', designation='',
-              work_location='', children=0, options=None, settings, _search=True):
+              work_location='', children=0, options=None, settings):
     """The full break-up as plain data, or {'error': ...} if it can't be
     worked out. `settings` is a CtcSettings. `options` is the Gross Earnings
     answered on the template, {key: True/False}: an item answered No is not
@@ -214,6 +198,11 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
 
     state = state_for(work_location)
     min_wage = rules.MIN_WAGES.get(state, 0)
+    ctc_m = _r(float(ctc_annual) / 12)
+    if ctc_m < min_wage:                                 # P & C: checked on the CTC per month
+        return {'error': f"Below {state}'s minimum wage: the CTC is Rs {_inr(ctc_m)} a month, under "
+                         f"{state}'s minimum wage of Rs {_inr(min_wage)} a month. Raise the CTC to at "
+                         f'least Rs {_inr(min_wage * 12)} a year.'}
     if not state:
         notes.append(f'No minimum wage found for work location "{work_location or "-"}", '
                      'so Basic was not checked against one.')
@@ -289,23 +278,6 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
                      + ', '.join(reduced) + '.')
     gross, basic = x['gross'], x['basic']
     pf, grat, bonus, esi, small = x['pf'], x['grat'], x['bonus'], x['esi'], x['small']
-    # The minimum wage is on the total gross salary per month.
-    if gross < min_wage:
-        ctc_m = _r(float(ctc_annual) / 12)
-        taken = [(f'VPP {pct}%', _r(vpp_annual / 12)), ('Gift', gift_m), ('Employer PF', pf),
-                 ('Employer ESI', esi), ('Statutory Bonus', bonus), ('Mediclaim', med),
-                 ('Gratuity', grat)]
-        taken = ', '.join(f'{label} Rs {_inr(amt)}' for label, amt in taken if amt)
-        need = _minimum_ctc(dict(cadre=cadre, grade=grade, category=category,
-                                 department=department, designation=designation,
-                                 work_location=work_location, children=children,
-                                 options=options, settings=s)) if _search else None
-        return {'error': f"Below {state}'s minimum wage. The minimum wage of Rs {_inr(min_wage)} a month "
-                         f'is checked against the Gross Salary, not the CTC. This CTC is '
-                         f'Rs {_inr(ctc_m)} a month, but {taken} are part of the CTC and not paid '
-                         f'as monthly salary, which leaves a Gross Salary of Rs {_inr(gross)} - '
-                         f'Rs {_inr(min_wage - gross)} short.'
-                         + (f' Raise the CTC to at least about Rs {_inr(need)} a year.' if need else '')}
     if balance() < 0:
         return {'error': 'CTC is too low for this cadre: Basic alone exceeds the gross salary.'}
     spl = balance()

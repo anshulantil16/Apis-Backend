@@ -365,22 +365,21 @@ class Calculator(TestCase):
                              ('Daman (UT)', 'Daman (UT)'), ('Goa', 'Goa'), ('Atlantis', '')]:
             self.assertEqual(state_for(typed), state, typed)
 
-    def test_gross_salary_never_below_the_state_minimum_wage(self):
-        # The minimum wage is on the gross salary; Basic stays 50% of Gross Earnings.
+    def test_ctc_per_month_never_below_the_state_minimum_wage(self):
         b = self.calc(ctc_annual=345000, cadre='O', grade='O1', category='Plant', work_location='Delhi')
         self.assertNotIn('error', b)
-        self.assertGreaterEqual(b['grossSalary'], 22500)
         self.assertIn('50% of Gross Salary', b['earnings'][0]['note'])
         self.assertAlmostEqual(b['earnings'][0]['monthly'], b['grossSalary'] / 2, delta=1)
         unknown = self.calc(work_location='Atlantis')
         self.assertTrue(any('No minimum wage found' in n for n in unknown['notes']))
-        # Below it: refused, with the gross worked out and the lowest CTC that works.
-        low = self.calc(ctc_annual=288000, cadre='O', grade='O4', category='HO', work_location='Delhi')
+        # Checked on the CTC per month: Rs 24,000 clears Delhi's Rs 22,500 ...
+        ok = self.calc(ctc_annual=288000, cadre='O', grade='O4', category='HO', work_location='Delhi')
+        self.assertNotIn('error', ok)
+        self.assertEqual(ok['totalCtcAnnual'], 288000)
+        # ... and Rs 22,000 doesn't.
+        low = self.calc(ctc_annual=264000, cadre='O', grade='O4', category='HO', work_location='Delhi')
         self.assertIn("Below Delhi's minimum wage", low['error'])
-        self.assertIn('Raise the CTC to at least', low['error'])
-        # The same CTC clears Rajasthan's Rs 8,950.
-        self.assertNotIn('error', self.calc(ctc_annual=288000, cadre='O', grade='O4', category='HO',
-                                            work_location='Rajasthan'))
+        self.assertIn('Rs 2,70,000 a year', low['error'])
 
     def test_cea_is_3000_per_child_for_up_to_two(self):
         cea = lambda **kw: next(x for x in self.calc(**kw)['earnings'] if x['label'].startswith('Child'))

@@ -84,8 +84,8 @@ VPP_SALES = [
 # Everyone outside Sales (HO and Plant), whatever their grade.
 VPP_NON_SALES = 8
 
-# Minimum wages per month, by state (P & C's table). The total Gross Salary
-# is never below the minimum wage of the candidate's work location.
+# Minimum wages per month, by state (P & C's table). The CTC per month is
+# never below the minimum wage of the candidate's work location.
 MIN_WAGES = {
     'Uttar Pradesh': 15500, 'Chhattisgarh': 12700, 'Maharashtra': 15500, 'Telangana': 15000,
     'Karnataka': 18600, 'West Bengal': 13000, 'Odisha': 15000, 'Madhya Pradesh': 15500,
