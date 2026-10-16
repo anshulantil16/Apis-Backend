@@ -43,7 +43,11 @@ def _option_columns(ws, lists):
     Gross Earnings cells are greyed out and offer only "N/A"; the Tax Regime
     likewise for a CTC of Rs 12 lakh or less."""
     cadre, ctc, regime = _col('cadre'), _col('ctc'), _col('tax_regime')
-    small = f'N(${ctc}2)<={REIMBURSEMENT_MIN_CTC}'
+    # Each row reads its own Cadre and CTC through INDEX(column, ROW()) rather
+    # than $I2: Excel rewrites a plain reference when cells are cut and pasted
+    # or dragged, which left rows checking a neighbour's CTC.
+    own = lambda col: f'INDEX(${col}:${col},ROW())'
+    small = f'N({own(ctc)})<={REIMBURSEMENT_MIN_CTC}'
     regimes = {k: r for k, _l, _a, r in REIMBURSEMENTS}
     first = len(COLUMNS) + 1
     last = len(COLUMNS) + len(OPTION_COLUMNS)
@@ -65,7 +69,7 @@ def _option_columns(ws, lists):
         lists.cell(row=r, column=4, value=name)
 
     a, b = get_column_letter(first), get_column_letter(last)
-    off = f'OR(${cadre}2="O",${cadre}2="W",{small})'
+    off = f'OR({own(cadre)}="O",{own(cadre)}="W",{small})'
     dv = DataValidation(type='list', formula1=f'IF({off},Lists!$C$1,Lists!$B$1:$B$2)',
                         allow_blank=True, showErrorMessage=True,
                         errorTitle='Gross Earnings',

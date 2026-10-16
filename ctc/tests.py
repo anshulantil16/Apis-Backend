@@ -67,9 +67,10 @@ class CtcUploads(TestCase):
         lists = [dv.formula1 for dv in ws.data_validations.dataValidation]
         self.assertIn('"Sales,HO,Plant"', lists)
         self.assertIn('"D,C,M,O,W"', lists)
-        self.assertIn('IF(N($I2)<=1200000,Lists!$C$1,Lists!$D$1:$D$3)', lists)   # Tax Regime
+        self.assertIn('IF(N(INDEX($I:$I,ROW()))<=1200000,Lists!$C$1,Lists!$D$1:$D$3)', lists)   # Tax Regime
         # Gross Earnings: Yes/No, but only "N/A" (and greyed out) for O and W.
-        self.assertIn('IF(OR($F2="O",$F2="W",N($I2)<=1200000),Lists!$C$1,Lists!$B$1:$B$2)', lists)
+        self.assertIn('IF(OR(INDEX($F:$F,ROW())="O",INDEX($F:$F,ROW())="W",N(INDEX($I:$I,ROW()))<=1200000),'
+                      'Lists!$C$1,Lists!$B$1:$B$2)', lists)
         self.assertTrue(ws.conditional_formatting)
 
     def test_gross_earnings_choices_are_stored_and_ignored_for_o_w_and_up_to_12_lakh(self):
