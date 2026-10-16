@@ -113,15 +113,11 @@ def build_pdf(candidate, b) -> bytes:
         [Paragraph('Employee Details', bar), ''],
     ]
     details = [
-        ('Employee Code', getattr(candidate, 'employee_code', '')),
         ('Employee Name (Candidate Name)', candidate.candidate_name),
         ('Department', candidate.department),
-        ('Function', ''),
         ('Designation', candidate.designation),
         ('Cadre', b['cadre']),
         ('Grade', b['grade']),
-        ('Date of Joining', candidate.date_of_joining.strftime('%d-%m-%Y')
-         if getattr(candidate, 'date_of_joining', None) else ''),
         ('Work Location', candidate.work_location),
         ('Tax Regime', getattr(candidate, 'tax_regime', '')),
     ]
