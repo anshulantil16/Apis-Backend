@@ -42,22 +42,31 @@ CEA_MAX_CHILDREN = 2
 # are dropped from the END of this list first — the workbook says each "can
 # be swapped either as Spl Allowance or Reimbursement".
 # None = "Actual" in the workbook → the D-cadre amount comes from settings.
+# P & C's Reference Master - Salary Fixation Model 2026 (monthly), in its
+# preference order. Only what is picked Yes on the template is paid, and an
+# item is paid only if it fits in full in the Special Allowance still left.
+# (key, label, {cadre: monthly}, regime) - 'old': Old Regime only.
 REIMBURSEMENTS = [
+    ('lta',       'Leave Travel Allowance (LTA)',
+     {'D': 25000, 'C': 15000, 'M': 5000, 'O': 0, 'W': 0}, 'both'),
     ('meal',      'Meal Voucher Reimbursement',
-     {'D': 9600, 'C': 9600, 'M': 5200, 'O': 0, 'W': 0}),
+     {'D': 10400, 'C': 9600, 'M': 5200, 'O': 0, 'W': 0}, 'both'),
     ('telephone', 'Telephone-Handset / Accessories & Internet Reimbursement',
-     {'D': 20000, 'C': 10000, 'M': 5000, 'O': 0, 'W': 0}),
+     {'D': 10000, 'C': 5000, 'M': 2500, 'O': 0, 'W': 0}, 'both'),
     ('fuel',      'Fuel & Vehicle Maintenance Reimbursement',
-     {'D': None, 'C': 5000, 'M': 5000, 'O': 0, 'W': 0}),
+     {'D': 5000, 'C': 5000, 'M': 5000, 'O': 0, 'W': 0}, 'both'),
     ('driver',    'Driver / Chauffeur Salary',
-     {'D': None, 'C': 3000, 'M': 3000, 'O': 0, 'W': 0}),
+     {'D': 3000, 'C': 3000, 'M': 3000, 'O': 0, 'W': 0}, 'both'),
     ('health',    'Health & Wellness Reimbursement',
-     {'D': None, 'C': 6000, 'M': 3000, 'O': 0, 'W': 0}),
+     {'D': 6000, 'C': 3000, 'M': 1500, 'O': 0, 'W': 0}, 'both'),
     ('books',     'Books, Periodicals & Professional Development Reimbursement',
-     {'D': 10000, 'C': 5000, 'M': 2500, 'O': 0, 'W': 0}),
+     {'D': 10000, 'C': 5000, 'M': 2500, 'O': 0, 'W': 0}, 'old'),
     ('uniform',   'Uniform & Attire Reimbursement',
-     {'D': 20000, 'C': 10000, 'M': 5000, 'O': 0, 'W': 0}),
+     {'D': 10000, 'C': 5000, 'M': 2500, 'O': 0, 'W': 0}, 'old'),
 ]
+
+# Reimbursements, LTA and the tax regime apply only above this annual CTC.
+REIMBURSEMENT_MIN_CTC = 1_200_000
 
 # Employer mediclaim charge by grade (monthly).
 MEDICLAIM = {

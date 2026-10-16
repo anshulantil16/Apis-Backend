@@ -67,22 +67,25 @@ class CtcUploads(TestCase):
         lists = [dv.formula1 for dv in ws.data_validations.dataValidation]
         self.assertIn('"Sales,HO,Plant"', lists)
         self.assertIn('"D,C,M,O,W"', lists)
-        self.assertIn('"Old Regime,New Regime,Both Regime"', lists)
+        self.assertIn('IF(N($K2)<=1200000,Lists!$C$1,Lists!$D$1:$D$3)', lists)   # Tax Regime
         # Gross Earnings: Yes/No, but only "N/A" (and greyed out) for O and W.
-        self.assertIn('IF(OR($G2="O",$G2="W"),Lists!$C$1,Lists!$B$1:$B$2)', lists)
+        self.assertIn('IF(OR($G2="O",$G2="W",N($K2)<=1200000),Lists!$C$1,Lists!$B$1:$B$2)', lists)
         self.assertTrue(ws.conditional_formatting)
 
-    def test_gross_earnings_choices_are_stored_and_ignored_for_o_and_w(self):
+    def test_gross_earnings_choices_are_stored_and_ignored_for_o_w_and_up_to_12_lakh(self):
         heads = HEADINGS + OPTION_HEADINGS
-        m = _row() + ['Yes', 'no', '', 'N', 'yes', 'No', '', 'Yes']
-        o = _row(candidate_name='Ravi', grade='O3', cadre='O') + ['Yes'] * 8
-        r = self._upload(self.alice, _xlsx([m, o], headings=heads))
+        # lta, meal, telephone, fuel, driver, health, books, uniform, car
+        m = _row(ctc=1500000) + ['Yes', 'no', '', 'N', 'yes', 'No', '', 'Yes', 'Yes']
+        o = _row(candidate_name='Ravi', grade='O3', cadre='O', ctc=1500000) + ['Yes'] * 9
+        small = _row(candidate_name='Sita', ctc=1200000) + ['Yes'] * 9
+        r = self._upload(self.alice, _xlsx([m, o, small], headings=heads))
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(CtcCandidate.objects.get(candidate_name='Rahul Sharma').gross_earnings,
-                         {'meal': True, 'telephone': False, 'books': False, 'uniform': True,
-                          'fuel': False, 'car': True})
+                         {'lta': True, 'meal': False, 'fuel': False, 'driver': True,
+                          'health': False, 'uniform': True, 'car': True})
         self.assertEqual(CtcCandidate.objects.get(candidate_name='Ravi').gross_earnings, {})
-        bad = _row() + ['maybe']
+        self.assertEqual(CtcCandidate.objects.get(candidate_name='Sita').gross_earnings, {})
+        bad = _row(ctc=1500000) + ['Yes', 'maybe']
         r = self._upload(self.alice, _xlsx([bad], headings=heads))
         self.assertEqual(r.status_code, 400)
         self.assertIn('Meal Voucher Reimbursement "maybe" should be Yes or No', str(r.json()))
@@ -109,11 +112,13 @@ class CtcUploads(TestCase):
         self.assertEqual(priya.row_number, 4)
 
     def test_tax_regime_is_read_and_optional(self):
-        rows = [_row(tax_regime='old'), _row(candidate_name='B', tax_regime='BOTH REGIME'),
-                _row(candidate_name='C', tax_regime='')]
+        rows = [_row(tax_regime='old', ctc=1500000),
+                _row(candidate_name='B', tax_regime='BOTH REGIME', ctc=1500000),
+                _row(candidate_name='C', tax_regime='', ctc=1500000),
+                _row(candidate_name='D', tax_regime='New Regime', ctc=1200000)]   # up to 12 lakh: ignored
         self.assertEqual(self._upload(self.alice, _xlsx(rows)).status_code, 201)
         self.assertEqual([c.tax_regime for c in CtcCandidate.objects.order_by('row_number')],
-                         ['Old Regime', 'Both Regime', ''])
+                         ['Old Regime', 'Both Regime', '', ''])
         r = self._upload(self.alice, _xlsx([_row(tax_regime='flat tax')]))
         self.assertIn('Tax Regime "flat tax"', str(r.json()))
         # An older template without the column still uploads.
@@ -227,21 +232,23 @@ class CtcUploads(TestCase):
     def test_only_a_superadmin_edits_settings_and_they_feed_the_breakdown(self):
         url = f'{BASE}/settings/'
         self.assertFalse(self.client.get(url, **self._auth(self.alice)).json()['canEdit'])
-        r = self.client.put(url, {'ltaM': 2000}, content_type='application/json', **self._auth(self.alice))
+        r = self.client.put(url, {'gratuityPercent': 4}, content_type='application/json',
+                            **self._auth(self.alice))
         self.assertEqual(r.status_code, 403)
-        r = self.client.put(url, {'ltaM': '2000', 'gratuityPercent': '4.81'},
+        r = self.client.put(url, {'gratuityPercent': '4.81'},
                             content_type='application/json', **self._auth(self.admin))
         self.assertEqual(r.status_code, 200, r.content)
-        s = CtcSettings.current()
-        self.assertEqual((s.lta_m, str(s.gratuity_percent)), (2000, '4.81'))
-        bad = self.client.put(url, {'ltaM': 'lots'}, content_type='application/json', **self._auth(self.admin))
+        self.assertEqual(str(CtcSettings.current().gratuity_percent), '4.81')
+        bad = self.client.put(url, {'gratuityPercent': 'lots'}, content_type='application/json',
+                              **self._auth(self.admin))
         self.assertEqual(bad.status_code, 400)
 
         self._upload(self.alice, _xlsx([ROW]))
         b = self.client.get(f'{BASE}/candidates/{CtcCandidate.objects.get().id}/breakdown/',
                             **self._auth(self.alice)).json()['breakdown']
-        lta = next(x for x in b['earnings'] if x['label'].startswith('Leave Travel'))
-        self.assertEqual(lta['monthly'], 2000)
+        grat = next(x for x in b['benefits'] if x['label'] == 'Gratuity')
+        basic = b['earnings'][0]['monthly']
+        self.assertEqual(grat['monthly'], round(basic * 0.0481))
 
 
 class Calculator(TestCase):
@@ -367,15 +374,39 @@ class Calculator(TestCase):
 
     def test_full_slab_reimbursements_and_special_takes_the_balance(self):
         from .rules import REIMBURSEMENTS
-        b = self.calc(ctc_annual=4500000, cadre='C', grade='C2', category='HO', children=2,
-                      work_location='Delhi', options={k: True for k, _l, _a in REIMBURSEMENTS})
+        everything = {k: True for k, *_ in REIMBURSEMENTS}
+        b = self.calc(ctc_annual=6000000, cadre='C', grade='C2', category='HO', children=2,
+                      work_location='Delhi', options=everything)
         paid = {x['key']: x['monthly'] for x in b['reimbursements']}
-        self.assertEqual(paid, {k: amounts['C'] for k, _l, amounts in REIMBURSEMENTS})
+        lta = next(x for x in b['earnings'] if x['label'].startswith('Leave Travel'))['monthly']
+        self.assertEqual({**paid, 'lta': lta}, {k: a['C'] for k, _l, a, _r in REIMBURSEMENTS})
         spl = next(x for x in b['earnings'] if x['label'].startswith('Special'))['monthly']
         self.assertGreater(spl, 0)
         others = sum(x['monthly'] for x in b['earnings'] if not x['label'].startswith('Special'))
         self.assertEqual(spl, b['grossSalary'] - others - sum(paid.values()))
         self.assertEqual(b['notes'], [])
+
+    def test_only_what_fits_in_special_is_paid_in_preference_order(self):
+        from .rules import REIMBURSEMENTS
+        everything = {k: True for k, *_ in REIMBURSEMENTS}
+        base = dict(ctc_annual=1400000, cadre='C', grade='C1', category='Plant', children=2,
+                    work_location='Uttarakhand')
+        b = self.calc(**base, options=everything)
+        # Special before is 8,683: LTA 15,000 and Meal 9,600 don't fit; Telephone 5,000
+        # does (3,683 left), Fuel 5,000 doesn't, Driver 3,000 does (683 left), the rest don't.
+        paid = {x['key']: x['monthly'] for x in b['reimbursements'] if x['monthly']}
+        self.assertEqual(paid, {'telephone': 5000, 'driver': 3000})
+        self.assertEqual(b['earnings'][4]['monthly'], 683)
+        self.assertTrue(any('Not enough Special Allowance' in n for n in b['notes']))
+        # New Regime: Books and Uniform are never given, even when they'd fit.
+        rich = dict(base, ctc_annual=6000000)
+        new = self.calc(**rich, options=everything, tax_regime='New Regime')
+        paid = {x['key']: x['monthly'] for x in new['reimbursements']}
+        self.assertEqual((paid['books'], paid['uniform']), (0, 0))
+        self.assertTrue(any('Old Regime' in n for n in new['notes']))
+        # Up to Rs 12 lakh: none at all.
+        small = self.calc(**dict(base, ctc_annual=1200000), options=everything)
+        self.assertEqual(sum(x['monthly'] for x in small['reimbursements']), 0)
 
     def test_reimbursements_are_trimmed_not_overdrawn(self):
         b = self.calc(ctc_annual=420000, category='HO', children=2, options={'meal': True})

@@ -199,7 +199,7 @@ def _breakdown(c):
     return calculate(ctc_annual=c.ctc, cadre=c.cadre, grade=c.grade, category=c.category,
                      department=c.department, designation=c.designation,
                      work_location=c.work_location, children=c.number_of_children,
-                     options=c.gross_earnings,
+                     options=c.gross_earnings, tax_regime=c.tax_regime,
                      settings=CtcSettings.current())
 
 
@@ -233,15 +233,7 @@ class CtcPdfView(PortalScopedAPIView):
 
 SETTING_FIELDS = {
     # api key: (model field, label)
-    'ltaD': ('lta_d', 'LTA per month - cadre D'),
-    'ltaC': ('lta_c', 'LTA per month - cadre C'),
-    'ltaM': ('lta_m', 'LTA per month - cadre M'),
-    'ltaO': ('lta_o', 'LTA per month - cadre O'),
-    'ltaW': ('lta_w', 'LTA per month - cadre W'),
     'gratuityPercent': ('gratuity_percent', 'Gratuity, % of Basic'),
-    'dFuel': ('d_fuel', 'Fuel & vehicle per month - cadre D'),
-    'dDriver': ('d_driver', 'Driver per month - cadre D'),
-    'dHealth': ('d_health', 'Health & wellness per month - cadre D'),
     'pfWageCeiling': ('pf_wage_ceiling', 'PF wage ceiling per month'),
     'esiBonusGrossLimit': ('esi_bonus_gross_limit', 'ESI & Bonus apply up to gross per month'),
 }

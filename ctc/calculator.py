@@ -7,8 +7,7 @@ the way P & C's sheet does it (monthly figures):
     Basic             = 50% of CTC
     HRA               = 50% of Basic          (W: 20%)
     CEA               = Rs 3,000 per child, up to 2 children (D, C, M)
-    LTA               = per cadre (settings)
-    Reimbursements    = the ones picked Yes on the template, at the full slab
+    LTA, reimbursements = picked Yes, at the cadre slab, if they fit
     Special Allowance = Gross Salary - Basic - HRA - CEA - LTA - reimbursements
 
     Gross Salary up to Rs 21,000: employer ESI (3.25% of Gross Salary) is
@@ -20,8 +19,10 @@ Gross Salary depends on ESI and PF, which depend on Gross Salary, so each
 of the four cases (ESI or Mediclaim, PF on wages or capped) is solved and
 the one that agrees with its own result is used.
 
-If the reimbursements picked don't fit, they are reduced from the end of
-the preference order, then CEA, HRA and LTA, and Special is 0.
+LTA and reimbursements (rules.REIMBURSEMENTS, the Reference Master) apply
+only to cadres D, C and M with a CTC above Rs 12 lakh. Those picked Yes are
+paid in preference order out of the Special Allowance left, each only if
+it fits in full; Old Regime items are left out under the New Regime.
 The CTC per month must be at least the work location's state minimum wage
 (rules.MIN_WAGES); one below it is refused.
 
@@ -172,7 +173,7 @@ def _inr(n):
 
 
 def calculate(*, ctc_annual, cadre, grade, category, department='', designation='',
-              work_location='', children=0, options=None, settings):
+              work_location='', children=0, options=None, tax_regime='', settings):
     """The full break-up as plain data, or {'error': ...} if it can't be
     worked out. `settings` is a CtcSettings. `options` is the Gross Earnings
     answered on the template, {key: True/False}: an item answered No is not
@@ -218,43 +219,23 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
 
     counted = min(max(int(children or 0), 0), rules.CEA_MAX_CHILDREN)
     cea = rules.CEA_PER_CHILD[cadre] * counted
-    lta = s.lta_for(cadre)
-
-    picked = (options or {}) if cadre in OPTION_CADRES else {}
-    car_lease = picked.get('car') is True               # as per the car lease policy
-    reimb = []
-    for key, label, amounts in rules.REIMBURSEMENTS:
-        amount = amounts[cadre]
-        if amount is None:                               # "Actual" -> settings
-            amount = s.actual_for(key)
-        reimb.append([key, label, int(amount) if picked.get(key) is True else 0])
-
     basic = _r(float(ctc_annual) / 12 * rules.BASIC_PERCENT / 100)
     hra = full_hra = _r(basic * rules.HRA_PERCENT[cadre] / 100)
     grat = _r(basic * float(s.gratuity_percent) / 100)
     gross, esi, med, pf = _solve(F - grat, med, full_hra, s)
     bonus = 0
 
-    # -- Special Allowance is the balance; trim what was picked only if short --
+    # -- Special Allowance: what Gross leaves after Basic, HRA and CEA ------
     def balance():
-        return gross - basic - hra - cea - lta - sum(a for _k, _l, a in reimb)
+        return gross - basic - hra - cea
 
     reduced = []
-    for item in reversed(reimb):
-        if balance() >= 0:
-            break
-        if item[2]:
-            item[2] -= min(item[2], -balance())
-            reduced.append(item[1])
     if balance() < 0 and cea:
         cea -= min(cea, -balance())
         reduced.append('Child Education Allowance')
     if balance() < 0 and hra:
         hra -= min(hra, -balance())
         reduced.append('House Rent Allowance')
-    if balance() < 0 and lta:
-        lta -= min(lta, -balance())
-        reduced.append('Leave Travel Allowance')
     if reduced:
         notes.append(f'After Basic ({rules.BASIC_PERCENT}% of CTC) there was not room for everything, '
                      'so these were reduced: ' + ', '.join(reduced) + '.')
@@ -262,6 +243,34 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         return {'error': f'CTC is too low for this cadre: Basic ({rules.BASIC_PERCENT}% of CTC, '
                          f'Rs {_inr(basic)}) is more than the Gross Salary of Rs {_inr(gross)}.'}
     spl = balance()
+
+    # -- LTA and reimbursements: picked, in preference order, out of Special,
+    #    each only if it fits in full ---------------------------------------
+    eligible = cadre in OPTION_CADRES and ctc_annual > rules.REIMBURSEMENT_MIN_CTC
+    picked = (options or {}) if eligible else {}
+    if options and any(options.values()) and not eligible:
+        notes.append('LTA and reimbursements apply only to cadres D, C and M with a CTC above '
+                     f'Rs {_inr(rules.REIMBURSEMENT_MIN_CTC)}.')
+    car_lease = picked.get('car') is True               # as per the car lease policy
+    new_regime = _norm(tax_regime) == 'newregime'
+    paid, no_room, old_only = {}, [], []
+    for key, label, amounts, regime in rules.REIMBURSEMENTS:
+        amount = amounts[cadre] if picked.get(key) is True else 0
+        if amount and regime == 'old' and new_regime:
+            old_only.append(label)
+            amount = 0
+        if amount > spl:
+            no_room.append(f'{label} (Rs {_inr(amount)})')
+            amount = 0
+        paid[key] = amount
+        spl -= amount
+    if old_only:
+        notes.append('New Regime, so these Old Regime items were not given: ' + ', '.join(old_only) + '.')
+    if no_room:
+        notes.append('Not enough Special Allowance left, so these were not given: '
+                     + ', '.join(no_room) + '.')
+    lta = paid.pop('lta')
+    reimb = [(key, label, paid[key]) for key, label, _a, _r in rules.REIMBURSEMENTS if key in paid]
     hra_note = (f'{rules.HRA_PERCENT[cadre]}% of Basic' if hra == full_hra
                 else f'Reduced from {rules.HRA_PERCENT[cadre]}% of Basic to fit')
 
@@ -272,8 +281,8 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         _line('Child Education Allowance (CEA)', cea,
               f'Rs {rules.CEA_PER_CHILD[cadre]:,} x {counted} child{"ren" if counted != 1 else ""}'
               if cea else ''),
-        _line('Leave Travel Allowance (LTA)', lta, 'As per cadre' if lta else ''),
-        _line('Special Allowance (Flexi Pay)', spl, 'Gross Salary less all other components'),
+        _line('Leave Travel Allowance (LTA)', lta, 'Cadre slab' if lta else ''),
+        _line('Special Allowance (Flexi Pay)', spl, 'Gross less Basic, HRA, CEA, LTA and reimbursements'),
     ]
     gross_earnings = sum(r['monthly'] for r in earnings)
     # Every reimbursement, zeros included and keyed, so the Annexure A PDF can

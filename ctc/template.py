@@ -16,13 +16,14 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from .columns import CHOICES, COLUMNS, OPTION_COLUMNS
-from .rules import MIN_WAGES
+from .columns import CHOICES, COLUMNS, OPTION_COLUMNS, TAX_REGIMES
+from .rules import MIN_WAGES, REIMBURSEMENT_MIN_CTC, REIMBURSEMENTS
 
 SHEET_NAME = 'Candidates'
 
 EXAMPLE = ['SL00225', 'Rahul Sharma', 'Sales', 'General Trade', 'Area Sales Manager', 'M1', 'M', 2,
-           '01-07-2026', 'Delhi', 1200000, 'New Regime', 'Yes', 'Yes', 'Yes', 'No', 'Yes', 'Yes', 'No', 'No']
+           '01-07-2026', 'Delhi', 1500000, 'New Regime', 'Yes', 'Yes', 'Yes', 'No', 'No', 'Yes', 'No', 'No',
+           'No']
 
 HEADER_FILL = PatternFill('solid', fgColor='F59E0B')     # APIS amber
 REQUIRED_FILL = PatternFill('solid', fgColor='D97706')
@@ -32,35 +33,56 @@ DISABLED_FILL = PatternFill('solid', fgColor='D9D9D9', bgColor='D9D9D9')
 OPTION_WIDTH = 22
 
 
+def _col(field):
+    return next(get_column_letter(i) for i, (_h, f, *_r) in enumerate(COLUMNS, start=1) if f == field)
+
+
 def _option_columns(ws, lists):
-    """The Gross Earnings Yes / No columns after CTC. On a row whose Cadre
-    is O or W they are greyed out and the dropdown offers only "N/A"."""
-    cadre = next(get_column_letter(i) for i, (_h, f, *_r) in enumerate(COLUMNS, start=1)
-                 if f == 'cadre')
+    """The Gross Earnings Yes / No columns after CTC, and the Tax Regime.
+    On a row whose Cadre is O or W, or whose CTC is Rs 12 lakh or less, the
+    Gross Earnings cells are greyed out and offer only "N/A"; the Tax Regime
+    likewise for a CTC of Rs 12 lakh or less."""
+    cadre, ctc, regime = _col('cadre'), _col('ctc'), _col('tax_regime')
+    small = f'N(${ctc}2)<={REIMBURSEMENT_MIN_CTC}'
+    regimes = {k: r for k, _l, _a, r in REIMBURSEMENTS}
     first = len(COLUMNS) + 1
     last = len(COLUMNS) + len(OPTION_COLUMNS)
-    for i, (heading, _key, blank_yes) in enumerate(OPTION_COLUMNS, start=first):
+    for i, (heading, key, _blank) in enumerate(OPTION_COLUMNS, start=first):
         cell = ws.cell(row=1, column=i, value=heading)
         cell.font = HEADER_FONT
         cell.fill = OPTION_FILL
         cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         cell.comment = Comment(
-            'Gross Earnings - Yes or No.\n\nBlank means '
-            + ('Yes: paid at the full cadre slab.' if blank_yes else 'No.')
-            + ' Yes pays it at the full cadre slab, out of Special Allowance.'
-            + '\n\nOnly for cadres D, C and M - greyed out for O and W.', 'APIS Intranet')
+            'Gross Earnings - Yes or No. Blank means No.\n\nYes pays it at the cadre slab out of the '
+            'Special Allowance left, in preference order - only if it fits in full.'
+            + ('\n\nOld Regime only.' if regimes.get(key) == 'old' else '')
+            + '\n\nOnly for cadres D, C and M with a CTC above Rs 12 lakh - greyed out otherwise.',
+            'APIS Intranet')
         ws.column_dimensions[get_column_letter(i)].width = OPTION_WIDTH
     ws.row_dimensions[1].height = 48
     lists['B1'], lists['B2'], lists['C1'] = 'Yes', 'No', 'N/A'
+    for r, name in enumerate(TAX_REGIMES, start=1):
+        lists.cell(row=r, column=4, value=name)
+
     a, b = get_column_letter(first), get_column_letter(last)
-    off = f'OR(${cadre}2="O",${cadre}2="W")'
+    off = f'OR(${cadre}2="O",${cadre}2="W",{small})'
     dv = DataValidation(type='list', formula1=f'IF({off},Lists!$C$1,Lists!$B$1:$B$2)',
                         allow_blank=True, showErrorMessage=True,
                         errorTitle='Gross Earnings',
-                        error='Pick Yes or No. Cadres O and W get none of these - leave it blank.')
+                        error='Pick Yes or No. Only for cadres D, C and M with a CTC above '
+                              'Rs 12 lakh - otherwise leave it blank.')
     dv.add(f'{a}2:{b}2001')
     ws.add_data_validation(dv)
     ws.conditional_formatting.add(f'{a}2:{b}2001', FormulaRule(formula=[off], fill=DISABLED_FILL))
+
+    rv = DataValidation(type='list',
+                        formula1=f'IF({small},Lists!$C$1,Lists!$D$1:$D${len(TAX_REGIMES)})',
+                        allow_blank=True, showErrorMessage=True, errorTitle='Tax Regime',
+                        error='Pick Old Regime, New Regime or Both Regime. Only for a CTC above '
+                              'Rs 12 lakh - otherwise leave it blank.')
+    rv.add(f'{regime}2:{regime}2001')
+    ws.add_data_validation(rv)
+    ws.conditional_formatting.add(f'{regime}2:{regime}2001', FormulaRule(formula=[small], fill=DISABLED_FILL))
 
 
 def build_template() -> bytes:

@@ -16,6 +16,7 @@ from decimal import Decimal, InvalidOperation
 from openpyxl import load_workbook
 
 from .calculator import normalise_cadre, normalise_category
+from .rules import REIMBURSEMENT_MIN_CTC
 from .columns import (COLUMNS, MAX_CTC, MAX_LENGTH, NO, NOT_ANSWERED, OPTION_CADRES,
                       OPTION_COLUMNS, OPTIONAL_FIELDS, TAX_REGIMES, YES)
 from .template import SHEET_NAME
@@ -188,6 +189,8 @@ def parse(fileobj):
                         row['gross_earnings'][key] = False
                     elif answer not in NOT_ANSWERED:
                         errors.append(f'Row {n}: {heading} "{picked[key]}" should be Yes or No.')
+            if row['ctc'] is not None and row['ctc'] <= REIMBURSEMENT_MIN_CTC:
+                row['tax_regime'], row['gross_earnings'] = '', {}   # greyed out: ignored
             rows.append({'row_number': n, **row})
         return rows, errors
     finally:
