@@ -68,7 +68,7 @@ class CtcUploads(TestCase):
         self.assertIn('"Sales,HO,Plant"', lists)
         self.assertIn('"D,C,M,O,W"', lists)
         self.assertIn('IF(N(INDEX($I:$I,ROW()))<=1200000,Lists!$C$1,Lists!$D$1:$D$3)', lists)   # Tax Regime
-        # Gross Earnings: Yes/No, but only "N/A" (and greyed out) for O and W.
+        # Gross Earnings: Yes/No, but an empty list (and greyed out) for O and W.
         self.assertIn('IF(OR(INDEX($F:$F,ROW())="O",INDEX($F:$F,ROW())="W",N(INDEX($I:$I,ROW()))<=1200000),'
                       'Lists!$C$1,Lists!$B$1:$B$2)', lists)
         self.assertTrue(ws.conditional_formatting)
@@ -119,6 +119,8 @@ class CtcUploads(TestCase):
         self.assertEqual(self._upload(self.alice, _xlsx(rows)).status_code, 201)
         self.assertEqual([c.tax_regime for c in CtcCandidate.objects.order_by('row_number')],
                          ['Old Regime', 'Both Regime', '', ''])
+        # 'N/A' (from an older template) is read as blank, not an error.
+        self.assertEqual(self._upload(self.alice, _xlsx([_row(tax_regime='N/A', ctc=1500000)])).status_code, 201)
         r = self._upload(self.alice, _xlsx([_row(tax_regime='flat tax')]))
         self.assertIn('Tax Regime "flat tax"', str(r.json()))
         # An older template without the column still uploads.

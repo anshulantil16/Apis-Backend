@@ -40,8 +40,9 @@ def _col(field):
 def _option_columns(ws, lists):
     """The Gross Earnings Yes / No columns after CTC, and the Tax Regime.
     On a row whose Cadre is O or W, or whose CTC is Rs 12 lakh or less, the
-    Gross Earnings cells are greyed out and offer only "N/A"; the Tax Regime
-    likewise for a CTC of Rs 12 lakh or less."""
+    Gross Earnings cells are greyed out and their dropdown is empty - there
+    is nothing to pick, and anything typed is refused; the Tax Regime likewise
+    for a CTC of Rs 12 lakh or less."""
     cadre, ctc, regime = _col('cadre'), _col('ctc'), _col('tax_regime')
     # Each row reads its own Cadre and CTC through INDEX(column, ROW()) rather
     # than $I2: Excel rewrites a plain reference when cells are cut and pasted
@@ -65,7 +66,7 @@ def _option_columns(ws, lists):
             'APIS Intranet')
         ws.column_dimensions[get_column_letter(i)].width = OPTION_WIDTH
     ws.row_dimensions[1].height = 48
-    lists['B1'], lists['B2'], lists['C1'] = 'Yes', 'No', 'N/A'
+    lists['B1'], lists['B2'] = 'Yes', 'No'          # Lists!C1 stays empty: the disabled list
     for r, name in enumerate(TAX_REGIMES, start=1):
         lists.cell(row=r, column=4, value=name)
 

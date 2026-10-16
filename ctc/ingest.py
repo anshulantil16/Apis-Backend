@@ -111,6 +111,8 @@ def parse(fileobj):
                     row['category'] = category
                 else:
                     errors.append(f'Row {n}: Category "{row["category"]}" should be Sales, HO or Plant.')
+            if row['tax_regime'].strip().lower() in NOT_ANSWERED:
+                row['tax_regime'] = ''                     # 'N/A', '-' ... from an older template
             if row['tax_regime']:
                 regime = _regime(row['tax_regime'])
                 if regime:
