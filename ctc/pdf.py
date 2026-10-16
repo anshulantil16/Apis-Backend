@@ -171,14 +171,16 @@ def build_pdf(candidate, b) -> bytes:
     earning('Special Allowance (Flexi Pay)', 'Special Allowance')
     total('GROSS EARNINGS', b['grossEarnings'], b['grossEarningsAnnual'], GREY)
 
-    reimb = {x.get('key'): x for x in b['reimbursements']}
-    for key, text in REIMBURSEMENT_ROWS:
-        x = reimb.get(key, {'monthly': 0, 'annual': 0})
-        row(text, x['monthly'], x['annual'], fill=ORANGE_SOFT)
-    if b.get('carLease'):                          # opted on the template; outside the CTC
-        data.append([Paragraph('Car Lease / Company Car Benefit', label), 'As per policy', 'As per policy'])
-    else:
-        row('Car Lease / Company Car Benefit', 0, 0)
+    # Cadres O and W get no reimbursements, so their sheet leaves the rows out.
+    if b['cadre'] not in ('O', 'W'):
+        reimb = {x.get('key'): x for x in b['reimbursements']}
+        for key, text in REIMBURSEMENT_ROWS:
+            x = reimb.get(key, {'monthly': 0, 'annual': 0})
+            row(text, x['monthly'], x['annual'], fill=ORANGE_SOFT)
+        if b.get('carLease'):                      # opted on the template; outside the CTC
+            data.append([Paragraph('Car Lease / Company Car Benefit', label), 'As per policy', 'As per policy'])
+        else:
+            row('Car Lease / Company Car Benefit', 0, 0)
     total('Gross Salary', b['grossSalary'], b['grossSalaryAnnual'], GREY)
 
     section('Annual Benefits')
