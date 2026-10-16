@@ -28,7 +28,16 @@ COLUMNS = [
     ('CTC',            'ctc',            16, True,
      'Total annual CTC in rupees, including Variable Pay and Gift. Required.\n\n'
      'e.g. 1200000 (commas and the ₹ sign are fine too).'),
+    ('Tax Regime',     'tax_regime',     16, False,
+     'Old Regime, New Regime or Both Regime, picked from the list.\n\n'
+     'Printed on the Annexure A.'),
 ]
+
+# Columns a sheet may leave out altogether (added after the template first
+# went out, so an older filled-in template still uploads).
+OPTIONAL_FIELDS = {'tax_regime'}
+
+TAX_REGIMES = ['Old Regime', 'New Regime', 'Both Regime']
 
 # Gross Earnings: one Yes / No column per item, after CTC, in the order the
 # Annexure A lists them. Optional, so a sheet without them still uploads.
@@ -54,11 +63,12 @@ NOT_ANSWERED = {'', 'na', 'n/a', '-', 'not applicable'}
 CHOICES = {
     'category': ['Sales', 'HO', 'Plant'],
     'cadre': ['D', 'C', 'M', 'O', 'W'],
+    'tax_regime': TAX_REGIMES,
 }
 
 MAX_LENGTH = {
     'employee_code': 40, 'candidate_name': 200, 'category': 20, 'department': 120, 'designation': 120,
-    'grade': 40, 'cadre': 60, 'work_location': 120,
+    'grade': 40, 'cadre': 60, 'work_location': 120, 'tax_regime': 20,
 }
 
 # Largest annual CTC accepted — guards against a value typed in paise or

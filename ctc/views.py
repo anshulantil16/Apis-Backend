@@ -46,7 +46,7 @@ def _candidate(c):
             'candidateName': c.candidate_name, 'category': c.category, 'department': c.department,
             'designation': c.designation, 'grade': c.grade, 'cadre': c.cadre,
             'workLocation': c.work_location, 'numberOfChildren': c.number_of_children,
-            'grossEarnings': c.gross_earnings or {},
+            'grossEarnings': c.gross_earnings or {}, 'taxRegime': c.tax_regime,
             'ctc': str(c.ctc) if c.ctc is not None else None}
 
 

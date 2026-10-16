@@ -123,6 +123,7 @@ def build_pdf(candidate, b) -> bytes:
         ('Date of Joining', candidate.date_of_joining.strftime('%d-%m-%Y')
          if getattr(candidate, 'date_of_joining', None) else ''),
         ('Work Location', candidate.work_location),
+        ('Tax Regime', getattr(candidate, 'tax_regime', '')),
     ]
     for k, v in details:
         rows.append([Paragraph(k, label), Paragraph(str(v or ''), value)])

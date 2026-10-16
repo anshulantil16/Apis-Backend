@@ -17,7 +17,7 @@ from openpyxl import load_workbook
 
 from .calculator import normalise_cadre, normalise_category
 from .columns import (COLUMNS, MAX_CTC, MAX_LENGTH, NO, NOT_ANSWERED, OPTION_CADRES,
-                      OPTION_COLUMNS, YES)
+                      OPTION_COLUMNS, OPTIONAL_FIELDS, TAX_REGIMES, YES)
 from .template import SHEET_NAME
 
 MAX_ROWS = 2000
@@ -72,6 +72,12 @@ def _date(raw):
     return None
 
 
+def _regime(text):
+    """"old", "Old Regime", "NEW" ... -> the template's spelling, or ''."""
+    k = _key(text).replace('regime', '').replace('regim', '')
+    return next((r for r in TAX_REGIMES if _key(r).replace('regime', '') == k), '')
+
+
 def parse(fileobj):
     """(rows, errors). Each row is {'row_number': n, <field>: value, ...}."""
     try:
@@ -97,7 +103,8 @@ def parse(fileobj):
             for heading, key, _blank in OPTION_COLUMNS:
                 if _key(h) == _key(heading) and key not in options:
                     options[key] = i
-        missing = [heading for heading, field, *_ in COLUMNS if field not in position]
+        missing = [heading for heading, field, *_ in COLUMNS
+                   if field not in position and field not in OPTIONAL_FIELDS]
         if missing:
             raise SheetError('These columns are missing from the first row: '
                              + ', '.join(missing) + '. Please use the downloaded template.')
@@ -107,6 +114,8 @@ def parse(fileobj):
             values = values or ()
             raw = {field: (values[i] if i < len(values) else None) for field, i in position.items()}
             row = {field: _clean(v) for field, v in raw.items()}
+            for field in OPTIONAL_FIELDS:
+                row.setdefault(field, '')
             picked = {key: _clean(values[i] if i < len(values) else None)
                       for key, i in options.items()}
             if not any(row.values()):
@@ -122,6 +131,13 @@ def parse(fileobj):
                     row['category'] = category
                 else:
                     errors.append(f'Row {n}: Category "{row["category"]}" should be Sales, HO or Plant.')
+            if row['tax_regime']:
+                regime = _regime(row['tax_regime'])
+                if regime:
+                    row['tax_regime'] = regime
+                else:
+                    errors.append(f'Row {n}: Tax Regime "{row["tax_regime"]}" should be '
+                                  'Old Regime, New Regime or Both Regime.')
             if row['cadre']:
                 cadre = normalise_cadre(row['cadre'])
                 if cadre:

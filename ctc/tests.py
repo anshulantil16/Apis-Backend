@@ -30,7 +30,8 @@ def _xlsx(rows, headings=HEADINGS, name='candidates.xlsx'):
 FIELDS = [f for _h, f, *_ in COLUMNS]
 BASE_ROW = dict(employee_code='SL00225', candidate_name='Rahul Sharma', category='Sales',
                 department='General Trade', designation='Area Sales Manager', grade='M1', cadre='M',
-                number_of_children=2, date_of_joining='01-07-2026', work_location='Delhi HO', ctc=1200000)
+                number_of_children=2, date_of_joining='01-07-2026', work_location='Delhi HO', ctc=1200000,
+                tax_regime='New Regime')
 
 
 def _row(**over):
@@ -66,6 +67,7 @@ class CtcUploads(TestCase):
         lists = [dv.formula1 for dv in ws.data_validations.dataValidation]
         self.assertIn('"Sales,HO,Plant"', lists)
         self.assertIn('"D,C,M,O,W"', lists)
+        self.assertIn('"Old Regime,New Regime,Both Regime"', lists)
         # Gross Earnings: Yes/No, but only "N/A" (and greyed out) for O and W.
         self.assertIn('IF(OR($G2="O",$G2="W"),Lists!$C$1,Lists!$B$1:$B$2)', lists)
         self.assertTrue(ws.conditional_formatting)
@@ -105,6 +107,18 @@ class CtcUploads(TestCase):
         self.assertEqual((priya.category, priya.grade, priya.cadre), ('HO', 'M3', 'M'))
         self.assertEqual(str(priya.ctc), '1250000.00')
         self.assertEqual(priya.row_number, 4)
+
+    def test_tax_regime_is_read_and_optional(self):
+        rows = [_row(tax_regime='old'), _row(candidate_name='B', tax_regime='BOTH REGIME'),
+                _row(candidate_name='C', tax_regime='')]
+        self.assertEqual(self._upload(self.alice, _xlsx(rows)).status_code, 201)
+        self.assertEqual([c.tax_regime for c in CtcCandidate.objects.order_by('row_number')],
+                         ['Old Regime', 'Both Regime', ''])
+        r = self._upload(self.alice, _xlsx([_row(tax_regime='flat tax')]))
+        self.assertIn('Tax Regime "flat tax"', str(r.json()))
+        # An older template without the column still uploads.
+        old = [h for h in HEADINGS if h != 'Tax Regime']
+        self.assertEqual(self._upload(self.alice, _xlsx([ROW[:-1]], headings=old)).status_code, 201)
 
     def test_a_real_excel_date_is_read(self):
         from datetime import datetime
