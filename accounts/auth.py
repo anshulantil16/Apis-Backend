@@ -70,6 +70,25 @@ def require_superadmin(request):
     return user, None
 
 
+def require_app(request, app_key):
+    """(user, None) for someone granted a given tool, or (None, 401/403).
+
+    The Admin Console matrix decides who may open what. Until this existed
+    the matrix only decided which TILES were drawn -- the API behind a tool
+    answered any signed-in employee, so the grant was a courtesy rather than
+    a control. Anything holding salaries or personal records should call
+    this rather than require_user.
+    """
+    user, err = require_user(request)
+    if err:
+        return None, err
+    if not user.can_open(app_key):
+        return None, Response(
+            {'error': 'You do not have access to this tool. Ask an administrator to grant it.'},
+            status=403)
+    return user, None
+
+
 def require_tree_editor(request):
     """(user, None) for someone allowed to edit APIS Tree cards, or (None, 401/403).
 

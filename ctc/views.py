@@ -10,9 +10,11 @@
     GET    /api/ctc/candidates/<id>/pdf/         the same, as the Annexure A PDF
     GET    /api/ctc/settings/        the editable values; PUT (super admin) to change
 
-Everything needs a signed-in session. A person sees the uploads they made;
-a super admin sees everyone's. Candidate names and the grades they are
-offered are not for the whole company.
+Everything needs the CTC Calculator granted from Admin Console -- being
+signed in is not enough. A person sees the uploads they made; a super admin
+sees everyone's. Candidate names and the grades they are offered are not for
+the whole company, which is exactly why the grant is checked here and not
+only in the screen that draws the tile.
 """
 import os
 import re
@@ -24,7 +26,8 @@ from rest_framework import status as http
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
-from accounts.auth import PortalScopedAPIView, require_superadmin, require_user
+from accounts.auth import PortalScopedAPIView, require_app, require_superadmin
+from accounts.models import AppKey
 from accounts.moderation import log_activity
 
 from . import rules
@@ -73,7 +76,7 @@ def _upload(u, viewer):
 
 class CtcTemplateView(PortalScopedAPIView):
     def get(self, request):
-        _user, err = require_user(request)
+        _user, err = require_app(request, AppKey.CTC)
         if err:
             return err
         r = HttpResponse(
@@ -87,7 +90,7 @@ class CtcUploadListView(PortalScopedAPIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def get(self, request):
-        user, err = require_user(request)
+        user, err = require_app(request, AppKey.CTC)
         if err:
             return err
         rows = CtcUpload.objects.prefetch_related('candidates')
@@ -96,7 +99,7 @@ class CtcUploadListView(PortalScopedAPIView):
         return Response([_upload(u, user) for u in rows])
 
     def post(self, request):
-        user, err = require_user(request)
+        user, err = require_app(request, AppKey.CTC)
         if err:
             return err
 
@@ -147,7 +150,7 @@ class CtcUploadListView(PortalScopedAPIView):
 
 class CtcUploadDetailView(PortalScopedAPIView):
     def delete(self, request, pk):
-        user, err = require_user(request)
+        user, err = require_app(request, AppKey.CTC)
         if err:
             return err
         u = CtcUpload.objects.filter(pk=pk).first()
@@ -174,7 +177,7 @@ class CtcResetView(PortalScopedAPIView):
     """
 
     def post(self, request):
-        user, err = require_user(request)
+        user, err = require_app(request, AppKey.CTC)
         if err:
             return err
         if str(request.data.get('confirm') or '').strip().upper() != 'RESET':
@@ -217,7 +220,7 @@ def _breakdown(c):
 
 class CtcBreakdownView(PortalScopedAPIView):
     def get(self, request, pk):
-        user, err = require_user(request)
+        user, err = require_app(request, AppKey.CTC)
         if err:
             return err
         c = _visible_candidate(user, pk)
@@ -228,7 +231,7 @@ class CtcBreakdownView(PortalScopedAPIView):
 
 class CtcPdfView(PortalScopedAPIView):
     def get(self, request, pk):
-        user, err = require_user(request)
+        user, err = require_app(request, AppKey.CTC)
         if err:
             return err
         c = _visible_candidate(user, pk)
@@ -264,7 +267,7 @@ def _settings(s, viewer):
 
 class CtcSettingsView(PortalScopedAPIView):
     def get(self, request):
-        user, err = require_user(request)
+        user, err = require_app(request, AppKey.CTC)
         if err:
             return err
         return Response(_settings(CtcSettings.current(), user))

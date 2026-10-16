@@ -50,6 +50,7 @@ class AppKey(models.TextChoices):
     APIS_TREE      = 'apis-tree',      'APIS Tree'
     POLICIES       = 'policies',       'Policies'
     APIS_WALL      = 'apis-wall',      'APIS Wall'
+    CTC            = 'ctc-calculator', 'CTC Calculator'
 
 
 # What a brand-new employee can open before anyone grants them more. The
