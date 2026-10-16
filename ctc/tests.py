@@ -500,3 +500,28 @@ class Calculator(TestCase):
     def test_unworkable_input_is_an_error_not_a_number(self):
         self.assertIn('error', self.calc(cadre='Z'))
         self.assertIn('error', self.calc(ctc_annual=10000, work_location='Atlantis'))   # no minimum wage to raise to
+
+    def test_capped_pf_does_not_claim_a_gross_the_candidate_does_not_have(self):
+        # Right at the PF limit the capped PF is paid on a gross BELOW the
+        # ceiling (here Rs 24,150 against Rs 25,000). The note used to read
+        # "Gross Salary Rs 25,000 or more", which was simply untrue on the
+        # Annexure A the candidate is given.
+        b = self.calc(ctc_annual=381000, cadre='D', grade='C1', category='HO',
+                      work_location='Delhi')
+        pf = next(x for x in b['benefits'] if x['label'] == 'Employer PF Contribution')
+        self.assertLess(b['grossSalary'], self.s.pf_wage_ceiling)
+        self.assertEqual(pf['monthly'], 3000)
+        self.assertNotIn('or more', pf['note'])
+        self.assertIn('PF wage ceiling', pf['note'])
+
+    def test_the_limit_note_follows_the_ceiling_in_settings(self):
+        # The capped PF is 12% of the ceiling, not a fixed Rs 3,000 -- a super
+        # admin can change the ceiling, and the note has to say the real figure.
+        self.s.pf_wage_ceiling = 30000
+        b = self.calc(ctc_annual=452000, cadre='D', grade='C1', category='HO',
+                      work_location='Delhi')
+        pf = next(x for x in b['benefits'] if x['label'] == 'Employer PF Contribution')
+        self.assertEqual(pf['monthly'], 3600)
+        note = next((n for n in b['notes'] if 'right at the' in n), '')
+        self.assertIn('Rs 3,600', note)
+        self.assertNotIn('Rs 3,000', note)

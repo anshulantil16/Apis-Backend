@@ -282,12 +282,15 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     hra = full_hra = _r(basic * rules.HRA_PERCENT[cadre] / 100)
     grat = _r(basic * float(s.gratuity_percent) / 100)
     gross, esi, med, pf, on_a_limit = _solve(F - grat, med, full_hra, s)
+    # PF at the ceiling: 12% of it, not a fixed Rs 3,000 -- the ceiling is a
+    # setting a super admin can change, and the note has to follow it.
+    pf_at_ceiling = _r(s.pf_wage_ceiling * rules.PF_PERCENT / 100)
     bonus = 0
     if on_a_limit:
         notes.append(f'Gross Salary sits right at the Rs {_inr(s.esi_bonus_gross_limit)} ESI or '
                      f'Rs {_inr(s.pf_wage_ceiling)} PF limit, where the rules jump: ESI was applied if '
-                     'the salary with Mediclaim is within its limit, and PF is Rs 3,000 if the salary '
-                     'reaches its limit.')
+                     'the salary with Mediclaim is within its limit, and PF is '
+                     f'Rs {_inr(pf_at_ceiling)} if the salary reaches its limit.')
 
     # -- Special Allowance: what Gross leaves after Basic, HRA and CEA ------
     def balance():
@@ -358,8 +361,8 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     reimbursements = [{**_line(label, amount), 'key': key} for key, label, amount in reimb]
     benefits = [
         _line('Employer PF Contribution', pf,
-              f'Rs {_inr(pf)} (Gross Salary Rs {_inr(s.pf_wage_ceiling)} or more)'
-              if pf == _r(s.pf_wage_ceiling * rules.PF_PERCENT / 100)
+              f'{rules.PF_PERCENT}% of the Rs {_inr(s.pf_wage_ceiling)} PF wage ceiling'
+              if pf == pf_at_ceiling
               else f'{rules.PF_PERCENT}% of (Gross Salary - HRA)'),
         _line('Employer ESI Contribution', esi,
               f'{rules.ESI_PERCENT}% of Gross Salary (up to Rs {_inr(s.esi_bonus_gross_limit)})'
