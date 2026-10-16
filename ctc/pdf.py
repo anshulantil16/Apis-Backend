@@ -24,6 +24,8 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .rules import REIMBURSEMENT_MIN_CTC
+
 LOGO_PATH = os.path.join(os.path.dirname(__file__), 'assets', 'apis_logo.png')
 
 # From the sheet's fills.
@@ -171,8 +173,9 @@ def build_pdf(candidate, b) -> bytes:
     earning('Special Allowance (Flexi Pay)', 'Special Allowance')
     total('GROSS EARNINGS', b['grossEarnings'], b['grossEarningsAnnual'], GREY)
 
-    # Cadres O and W get no reimbursements, so their sheet leaves the rows out.
-    if b['cadre'] not in ('O', 'W'):
+    # Cadres O and W, and any CTC up to Rs 12 lakh, get no reimbursements, so
+    # their sheet leaves the rows out.
+    if b['cadre'] not in ('O', 'W') and b['ctcAnnual'] > REIMBURSEMENT_MIN_CTC:
         reimb = {x.get('key'): x for x in b['reimbursements']}
         for key, text in REIMBURSEMENT_ROWS:
             x = reimb.get(key, {'monthly': 0, 'annual': 0})
