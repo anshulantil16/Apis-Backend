@@ -10,13 +10,14 @@ and the view decides: any problem and nothing is stored, so a half-imported
 sheet never has to be untangled.
 """
 import re
-from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from openpyxl import load_workbook
 
-from .calculator import normalise_cadre, normalise_category
-from .columns import COLUMNS, MAX_CTC, MAX_LENGTH
+from .calculator import normalise_cadre, normalise_category, sales_department
+from .rules import REIMBURSEMENT_MIN_CTC
+from .columns import (COLUMNS, MAX_CTC, MAX_LENGTH, NO, NOT_ANSWERED, OPTION_CADRES,
+                      OPTION_COLUMNS, OPTIONAL_FIELDS, TAX_REGIMES, YES)
 from .template import SHEET_NAME
 
 MAX_ROWS = 2000
@@ -51,24 +52,10 @@ def _amount(text):
     return value if value.is_finite() else None
 
 
-DATE_FORMATS = ('%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y', '%Y-%m-%d', '%d-%b-%Y', '%d %b %Y',
-                '%d-%B-%Y', '%d %B %Y', '%d-%m-%y', '%d/%m/%y')
-
-
-def _date(raw):
-    """A date from a cell: a real Excel date, or text written day-month-year
-    (01-07-2026, 01/07/2026, 1 Jul 2026) or ISO. None if it isn't one."""
-    if isinstance(raw, datetime):
-        return raw.date()
-    if isinstance(raw, date):
-        return raw
-    text = _clean(raw)
-    for fmt in DATE_FORMATS:
-        try:
-            return datetime.strptime(text, fmt).date()
-        except ValueError:
-            continue
-    return None
+def _regime(text):
+    """"old", "Old Regime", "NEW" ... -> the template's spelling, or ''."""
+    k = _key(text).replace('regime', '').replace('regim', '')
+    return next((r for r in TAX_REGIMES if _key(r).replace('regime', '') == k), '')
 
 
 def parse(fileobj):
@@ -91,7 +78,13 @@ def parse(fileobj):
             field = wanted.get(_key(h))
             if field and field not in position:
                 position[field] = i
-        missing = [heading for heading, field, *_ in COLUMNS if field not in position]
+        options = {}                                     # the optional Gross Earnings columns
+        for i, h in enumerate(header):
+            for heading, key, _blank in OPTION_COLUMNS:
+                if _key(h) == _key(heading) and key not in options:
+                    options[key] = i
+        missing = [heading for heading, field, *_ in COLUMNS
+                   if field not in position and field not in OPTIONAL_FIELDS]
         if missing:
             raise SheetError('These columns are missing from the first row: '
                              + ', '.join(missing) + '. Please use the downloaded template.')
@@ -101,6 +94,10 @@ def parse(fileobj):
             values = values or ()
             raw = {field: (values[i] if i < len(values) else None) for field, i in position.items()}
             row = {field: _clean(v) for field, v in raw.items()}
+            for field in OPTIONAL_FIELDS:
+                row.setdefault(field, '')
+            picked = {key: _clean(values[i] if i < len(values) else None)
+                      for key, i in options.items()}
             if not any(row.values()):
                 continue                                  # blank line
             if len(rows) >= MAX_ROWS:
@@ -114,6 +111,22 @@ def parse(fileobj):
                     row['category'] = category
                 else:
                     errors.append(f'Row {n}: Category "{row["category"]}" should be Sales, HO or Plant.')
+            if row['category'] == 'Sales':
+                dept = sales_department(row['department'])
+                if dept:
+                    row['department'] = dept
+                else:
+                    errors.append(f'Row {n}: Department "{row["department"]}" - for Sales pick GENERAL TRADE, '
+                                  'ALTERNATE CHANNELS or BOTH (it sets the Variable Pay %).')
+            if row['tax_regime'].strip().lower() in NOT_ANSWERED:
+                row['tax_regime'] = ''                     # 'N/A', '-' ... from an older template
+            if row['tax_regime']:
+                regime = _regime(row['tax_regime'])
+                if regime:
+                    row['tax_regime'] = regime
+                else:
+                    errors.append(f'Row {n}: Tax Regime "{row["tax_regime"]}" should be '
+                                  'Old Regime, New Regime or Both Regime.')
             if row['cadre']:
                 cadre = normalise_cadre(row['cadre'])
                 if cadre:
@@ -142,18 +155,24 @@ def parse(fileobj):
                 else:
                     errors.append(f'Row {n}: Number of Children "{kids_text}" should be a whole number '
                                   'such as 0, 1 or 2.')
-            doj_text, row['date_of_joining'] = row['date_of_joining'], None
-            if doj_text:
-                row['date_of_joining'] = _date(raw['date_of_joining'])
-                if row['date_of_joining'] is None:
-                    errors.append(f'Row {n}: Date of Joining "{doj_text}" is not a date '
-                                  '(write it like 01-07-2026).')
             for field, value in row.items():
-                if field in ('ctc', 'date_of_joining', 'number_of_children'):
+                if field in ('ctc', 'number_of_children', 'gross_earnings'):
                     continue
                 if len(value) > MAX_LENGTH[field]:
                     heading = next(h for h, f, *_ in COLUMNS if f == field)
                     errors.append(f'Row {n}: {heading} is longer than {MAX_LENGTH[field]} characters.')
+            row['gross_earnings'] = {}
+            if row['cadre'] in OPTION_CADRES:            # O and W: greyed out, ignored
+                for heading, key, _blank in OPTION_COLUMNS:
+                    answer = picked.get(key, '').lower()
+                    if answer in YES:
+                        row['gross_earnings'][key] = True
+                    elif answer in NO:
+                        row['gross_earnings'][key] = False
+                    elif answer not in NOT_ANSWERED:
+                        errors.append(f'Row {n}: {heading} "{picked[key]}" should be Yes or No.')
+            if row['ctc'] is not None and row['ctc'] <= REIMBURSEMENT_MIN_CTC:
+                row['tax_regime'], row['gross_earnings'] = '', {}   # greyed out: ignored
             rows.append({'row_number': n, **row})
         return rows, errors
     finally:

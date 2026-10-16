@@ -27,7 +27,8 @@ from rest_framework.response import Response
 from accounts.auth import PortalScopedAPIView, require_superadmin, require_user
 from accounts.moderation import log_activity
 
-from .calculator import calculate
+from . import rules
+from .calculator import calculate, state_for
 from .columns import COLUMNS
 from .ingest import SheetError, parse
 from .models import CtcCandidate, CtcSettings, CtcUpload
@@ -36,7 +37,16 @@ from .template import build_template
 
 MAX_BYTES = 5 * 1024 * 1024          # a few thousand rows is well under this
 XLSX_MAGIC = b'PK\x03\x04'           # .xlsx is a zip
-FIELDS = [field for _h, field, *_ in COLUMNS]
+FIELDS = [field for _h, field, *_ in COLUMNS] + ['gross_earnings']
+
+
+def _corrected_ctc(c):
+    """The annual CTC the break-up uses when the one entered is below the
+    work location's minimum wage (the calculator raises it), else None."""
+    min_wage = rules.MIN_WAGES.get(state_for(c.work_location), 0)
+    if c.ctc is not None and c.ctc / 12 < min_wage:
+        return str(min_wage * 12)
+    return None
 
 
 def _candidate(c):
@@ -46,7 +56,9 @@ def _candidate(c):
             'candidateName': c.candidate_name, 'category': c.category, 'department': c.department,
             'designation': c.designation, 'grade': c.grade, 'cadre': c.cadre,
             'workLocation': c.work_location, 'numberOfChildren': c.number_of_children,
-            'ctc': str(c.ctc) if c.ctc is not None else None}
+            'grossEarnings': c.gross_earnings or {}, 'taxRegime': c.tax_regime,
+            'ctc': str(c.ctc) if c.ctc is not None else None,
+            'ctcCorrected': _corrected_ctc(c)}
 
 
 def _upload(u, viewer):
@@ -198,6 +210,8 @@ def _breakdown(c):
     return calculate(ctc_annual=c.ctc, cadre=c.cadre, grade=c.grade, category=c.category,
                      department=c.department, designation=c.designation,
                      work_location=c.work_location, children=c.number_of_children,
+                     options=c.gross_earnings, tax_regime=c.tax_regime,
+                     date_of_joining=c.date_of_joining,
                      settings=CtcSettings.current())
 
 
@@ -231,15 +245,7 @@ class CtcPdfView(PortalScopedAPIView):
 
 SETTING_FIELDS = {
     # api key: (model field, label)
-    'ltaD': ('lta_d', 'LTA per month - cadre D'),
-    'ltaC': ('lta_c', 'LTA per month - cadre C'),
-    'ltaM': ('lta_m', 'LTA per month - cadre M'),
-    'ltaO': ('lta_o', 'LTA per month - cadre O'),
-    'ltaW': ('lta_w', 'LTA per month - cadre W'),
     'gratuityPercent': ('gratuity_percent', 'Gratuity, % of Basic'),
-    'dFuel': ('d_fuel', 'Fuel & vehicle per month - cadre D'),
-    'dDriver': ('d_driver', 'Driver per month - cadre D'),
-    'dHealth': ('d_health', 'Health & wellness per month - cadre D'),
     'pfWageCeiling': ('pf_wage_ceiling', 'PF wage ceiling per month'),
     'esiBonusGrossLimit': ('esi_bonus_gross_limit', 'ESI & Bonus apply up to gross per month'),
 }

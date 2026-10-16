@@ -1,22 +1,31 @@
-"""Work out a candidate's compensation break-up from their total CTC.
+"""Work out a candidate's compensation break-up from their total CTC,
+the way P & C's sheet does it (monthly figures):
 
-    Total CTC (per annum, as uploaded)
-      - Variable / Performance Pay      VPP % of total CTC (rules.VPP_*)
-      - Gift Reimbursement              Rs 1,250 a month for D, C, M (none for O, W)
-      = Fixed CTC, per month (F)
-
-    F = Gross Salary + employer PF + ESI + Mediclaim + Statutory Bonus + Gratuity
-    Basic             = 50% of Gross Salary, or the work location's state
-                        minimum wage if that is higher
+    CTC               = annual CTC / 12
+    Gross Salary      = CTC - VPP - Gift - (Mediclaim or ESI) - Employer PF
+                            (- Gratuity, if a rate is set)
+    Basic             = 50% of CTC
     HRA               = 50% of Basic          (W: 20%)
     CEA               = Rs 3,000 per child, up to 2 children (D, C, M)
-    LTA and the cadre's reimbursements are fixed amounts
-    Special Allowance = Gross Salary - everything else in it (the balance)
+    LTA, reimbursements = picked Yes, at the cadre slab, if they fit
+    Special Allowance = Gross Salary - Basic - HRA - CEA - LTA - reimbursements
 
-Basic depends on Gross, and Gross on PF and Bonus, which depend on Basic -
-so the two are solved together; the loop settles in a handful of passes.
-ESI and Statutory Bonus apply only when Gross Salary is within the limit
-(Rs 21,000 a month by default).
+    Gross Salary up to Rs 21,000: employer ESI (3.25% of Gross Salary) is
+        taken instead of Mediclaim; above it, Mediclaim by grade.
+    Gross Salary under Rs 25,000: Employer PF = 12% of (Gross Salary - HRA);
+        from Rs 25,000: Rs 3,000.
+
+Gross Salary depends on ESI and PF, which depend on Gross Salary, so each
+of the four cases (ESI or Mediclaim, PF on wages or capped) is solved and
+the one that agrees with its own result is used.
+
+LTA and reimbursements (rules.REIMBURSEMENTS, the Reference Master) apply
+only to cadres D, C and M with a CTC above Rs 12 lakh. Those picked Yes are
+paid in preference order out of the Special Allowance left, each only if
+it fits in full; Old Regime only items (Books, Uniform) are given only under
+the Old Regime.
+The CTC per month must be at least the work location's state minimum wage
+(rules.MIN_WAGES); one below it is raised to it, with a note saying so.
 
 Every component is a whole rupee a month, and annual = monthly x 12 - except
 that the few rupees monthly rounding leaves over go into the yearly Special
@@ -29,6 +38,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from . import rules
+from .columns import OPTION_CADRES
 
 
 def _r(x):
@@ -80,7 +90,13 @@ _DEPT_ALIASES = {
     'generaltrade': 'General Trade', 'gt': 'General Trade',
     'alternatechannels': 'Alternate Channels', 'alternatechannel': 'Alternate Channels',
     'ac': 'Alternate Channels',
+    'both': 'Both',
 }
+
+
+def sales_department(text):
+    """'General Trade', 'Alternate Channels', 'Both' - or '' - from what was typed."""
+    return _sales_department(text)
 
 
 def _sales_department(text):
@@ -93,64 +109,129 @@ def _sales_department(text):
     return ''
 
 
-def vpp_percent(category, grade, department, designation):
-    """(percent, description). With a percent, the description names the
-    rule that gave it; with 0, it says why there is none.
+_WORD_FIXES = {'asst': 'assistant', 'dy': 'deputy', 'sr': 'senior', 'mgr': 'manager'}
 
-    Sales VPP is set by grade. Where one grade has two rates (M1, M3: 10% in
-    General Trade, 12% in Alternate Channels) the Department picks between
-    them, and failing that the Designation. Designation never has to match
-    word for word when the grade alone decides."""
+
+def _words(text):
+    """' deputy manager finance ' from "Dy. Manager (Finance)" - lower case,
+    punctuation to spaces, common short forms spelt out, padded so a phrase
+    can be found as whole words with `' x y ' in`."""
+    words = re.sub(r'[^a-z0-9]+', ' ', (text or '').lower()).split()
+    return ' ' + ' '.join(_WORD_FIXES.get(w, w) for w in words) + ' '
+
+
+_CADRE_RANK = {'W': 0, 'O': 1, 'M': 2, 'C': 3, 'D': 4}
+
+
+def _grade_rank(grade):
+    """(cadre rank, number) so grades compare: W1 < O5 < M1 < M6 < C1 < C5 < D1."""
     g = (grade or '').strip().upper()
+    if not g or g[0] not in _CADRE_RANK:
+        return None
+    digits = re.sub(r'\D', '', g)
+    return _CADRE_RANK[g[0]], int(digits) if digits else 0
+
+
+def vpp_percent(category, grade, department, designation, date_of_joining=None):
+    """(percent, description). With a percent, the description names the
+    rule that gave it; with 0, it says why.
+
+    Sales: grade M5 and above (M5, M6, C1-C5, D) 15%, any department. Below
+    M5, P & C's table (rules.VPP_SALES) by grade and department; a BOTH row
+    fits either department. A department that matches no row for the grade
+    takes the grade's rate (the higher of two) - never 0 for a grade in it.
+    HO (Corporate) and Plant (Factory): 8% from grade M3 up, except Deputy
+    and Assistant Managers. Managerial roles and above only (cadres D, C, M).
+    `date_of_joining` is accepted for callers but no rule uses it now."""
+    g = (grade or '').strip().upper()
+    rank = _grade_rank(g)
+    if category not in ('Sales', 'HO', 'Plant'):
+        return 0, ''
     if category == 'Sales':
-        rows = [r for r in rules.VPP_SALES if r[0] == g]
-        if not rows:
-            listed = ', '.join(sorted({r[0] for r in rules.VPP_SALES}))
-            return 0, f'No Sales VPP for grade {g or "-"} (the VPP table covers {listed}).'
-        if len(rows) > 1:
-            dept = _sales_department(department)
-            by_dept = [r for r in rows if r[1] is None or r[1] == dept] if dept else []
-            by_desig = [r for r in rows if _norm(r[2]) == _norm(designation)]
-            rows = by_dept if len(by_dept) == 1 else by_desig
-            if len(rows) != 1:
-                options = ' or '.join(f'{r[1]} ({r[3]}%)' for r in rules.VPP_SALES if r[0] == g)
-                return 0, (f'Sales grade {g} has two VPP rates - set Department to {options} '
-                           'to pick one.')
-        r_grade, r_dept, r_desig, pct = rows[0]
-        return pct, f'Sales · {r_grade}' + (f' · {r_dept}' if r_dept else '')
-    grades, pct = rules.VPP_BY_GRADE.get(category, (set(), 0))
-    if g in grades:
-        return pct, f'{category} · {g}'
-    if category in rules.VPP_BY_GRADE:
-        return 0, (f'No VPP for {category} grade {g or "-"} '
-                   f'(the VPP table covers {", ".join(sorted(grades))}).')
-    return 0, ''
+        if rank is not None and rank >= _grade_rank(rules.VPP_SALES_SENIOR_FROM_GRADE):
+            return rules.VPP_SALES_SENIOR, f'Sales · grade {rules.VPP_SALES_SENIOR_FROM_GRADE} and above'
+        dept = _sales_department(department)
+        for r_grade, r_dept, pct in rules.VPP_SALES:
+            if r_grade == g and (r_dept == 'Both' or r_dept == dept):
+                return pct, f'Sales · grade {g} · {r_dept}'
+        # The department doesn't match a row for this grade (or is BOTH where
+        # the grade has two): the grade's rate from the table - the higher one
+        # if it has two - rather than none.
+        rates = [p for r_g, _d, p in rules.VPP_SALES if r_g == g]
+        if rates:
+            return max(rates), f'Sales · grade {g} (table rate for the grade)'
+        return 0, f'No Sales VPP: grade {g or "-"} is not in the Sales VPP table.'
+    if rank is not None and rank[0] < _CADRE_RANK['M']:
+        return 0, f'No VPP: the Variable Pay Policy covers managerial roles and above, not grade {g}.'
+    words = _words(designation)
+    name = 'Corporate' if category == 'HO' else 'Factory'
+    excluded = next((p for p in rules.VPP_NON_SALES_EXCLUDED if f' {p} ' in words), None)
+    if excluded:
+        return 0, f'No VPP: {excluded.title()}s are excluded for {name} (Variable Pay Policy).'
+    if rank is None or rank < _grade_rank(rules.VPP_NON_SALES_FROM_GRADE):
+        return 0, f'No VPP: for {name} the Variable Pay Policy starts at grade M3, and this is {g or "-"}.'
+    return rules.VPP_NON_SALES, f'{name} · M3 and above'
 
 
-def _solve(F, med, min_wage, s, small):
-    """Monthly gross for one branch: small=True applies ESI and Bonus."""
-    gross = F - med
-    for _ in range(60):
-        basic = max(gross * rules.BASIC_PERCENT / 100, min_wage)
-        pf = min(basic, s.pf_wage_ceiling) * rules.PF_PERCENT / 100
-        grat = basic * float(s.gratuity_percent) / 100
-        bonus = basic * rules.BONUS_PERCENT / 100 if small else 0
-        # ESI is a share of gross itself: gross + esi + the rest = F
-        new = (F - med - pf - grat - bonus) / (1 + (rules.ESI_PERCENT / 100 if small else 0))
-        if abs(new - gross) < 0.001:
-            return new
-        gross = new
-    return gross
+def _solve(base, med, hra, s):
+    """(gross, esi, mediclaim, pf, on_a_limit) for base = everything left
+    after VPP, Gift and Gratuity. Tries the four cases and keeps the one
+    that agrees with itself.
+
+    Just at the two limits none does - the rules jump there: switching from
+    Mediclaim to ESI can lift Gross back over Rs 21,000, and switching PF from
+    12% of (Gross - HRA) to Rs 3,000 can drop it back under Rs 25,000. In that
+    narrow band: ESI applies if the salary with Mediclaim is within the ESI
+    limit, and PF is Rs 3,000 if the salary with PF on wages reaches the PF
+    limit (on_a_limit is then True)."""
+    esi_rate = rules.ESI_PERCENT / 100
+    pf_rate = rules.PF_PERCENT / 100
+    esi_limit, pf_limit = s.esi_bonus_gross_limit, s.pf_wage_ceiling
+    pf_cap = pf_limit * pf_rate
+
+    def gross_for(esi_on, pf_on):
+        less = 0 if esi_on else med
+        if pf_on:
+            return (base - less + pf_rate * hra) / (1 + pf_rate + (esi_rate if esi_on else 0))
+        return (base - less - pf_cap) / (1 + (esi_rate if esi_on else 0))
+
+    on_a_limit = False
+    for esi_on, pf_on in ((False, False), (False, True), (True, True), (True, False)):
+        g = gross_for(esi_on, pf_on)
+        if (g <= esi_limit) == esi_on and (g < pf_limit) == pf_on:
+            break
+    else:
+        on_a_limit = True
+        esi_on = gross_for(False, True) <= esi_limit
+        pf_on = gross_for(esi_on, True) < pf_limit
+        g = gross_for(esi_on, pf_on)
+    pf = _r(max(g - hra, 0) * pf_rate) if pf_on else _r(pf_cap)
+    esi = _r(g * esi_rate) if esi_on else 0
+    med = 0 if esi_on else med
+    return base - esi - med - pf, esi, med, pf, on_a_limit
 
 
 def _line(label, monthly, note=''):
     return {'label': label, 'monthly': monthly, 'annual': monthly * 12, 'note': note}
 
 
+def _inr(n):
+    """Indian digit grouping: 3,36,000."""
+    head, tail = str(int(n)), ''
+    if len(head) > 3:
+        head, tail = head[:-3], ',' + head[-3:]
+        while len(head) > 2:
+            head, tail = head[:-2], ',' + head[-2:] + tail
+    return head + tail
+
+
 def calculate(*, ctc_annual, cadre, grade, category, department='', designation='',
-              work_location='', children=0, settings):
+              work_location='', children=0, options=None, tax_regime='',
+              date_of_joining=None, settings):
     """The full break-up as plain data, or {'error': ...} if it can't be
-    worked out. `settings` is a CtcSettings."""
+    worked out. `settings` is a CtcSettings. `options` is the Gross Earnings
+    answered on the template, {key: True/False}: an item answered No is not
+    paid and its money stays in Special Allowance."""
     s = settings
     cadre = normalise_cadre(cadre)
     category = normalise_category(category)
@@ -164,8 +245,24 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     if not category:
         notes.append('Category (Sales / HO / Plant) is missing, so no VPP was applied.')
 
+    # -- the state minimum wage, on the CTC per month -----------------------
+    # A CTC below it is raised to it (P & C), and the break-up says so.
+    state = state_for(work_location)
+    min_wage = rules.MIN_WAGES.get(state, 0)
+    entered_annual, adjusted = ctc_annual, None
+    if ctc_annual / 12 < min_wage:
+        ctc_annual = min_wage * 12
+        adjusted = {'enteredAnnual': entered_annual, 'correctedAnnual': ctc_annual, 'state': state,
+                    'minWage': min_wage}
+        notes.insert(0, f'You had put a CTC below the minimum wage, so it was automatically corrected '
+                        f'to the minimum wage of {state}: Rs {_inr(min_wage)} a month '
+                        f'(Rs {_inr(ctc_annual)} a year) instead of Rs {_inr(entered_annual)} a year.')
+    if not state:
+        notes.append(f'No minimum wage found for work location "{work_location or "-"}", '
+                     'so the CTC was not checked against one.')
+
     # -- off the top: VPP and Gift ------------------------------------------
-    pct, vpp_rule = vpp_percent(category, grade, department, designation)
+    pct, vpp_rule = vpp_percent(category, grade, department, designation, date_of_joining)
     if not pct and vpp_rule:
         notes.append(vpp_rule)
     vpp_annual = _r(ctc_annual * pct / 100)
@@ -179,83 +276,84 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         med = 0
         notes.append(f'No mediclaim rate for grade "{grade or "-"}", so it was taken as 0.')
 
-    state = state_for(work_location)
-    min_wage = rules.MIN_WAGES.get(state, 0)
-    if not state:
-        notes.append(f'No minimum wage found for work location "{work_location or "-"}", '
-                     'so Basic was not checked against one.')
-
-    # -- Gross, Basic and the employer items, solved together ---------------
-    gross = _solve(F, med, min_wage, s, small=False)
-    small = gross <= s.esi_bonus_gross_limit
-    if small:
-        gross = _solve(F, med, min_wage, s, small=True)
-
-    half = gross * rules.BASIC_PERCENT / 100
-    on_min_wage = min_wage > half
-    basic = _r(max(half, min_wage))
-    pf = _r(min(basic, s.pf_wage_ceiling) * rules.PF_PERCENT / 100)
-    grat = _r(basic * float(s.gratuity_percent) / 100)
-    bonus = _r(basic * rules.BONUS_PERCENT / 100) if small else 0
-    esi = _r(gross * rules.ESI_PERCENT / 100) if small else 0
-    gross = F - pf - esi - med - bonus - grat        # exact, so the fixed part adds up
-
-    hra = _r(basic * rules.HRA_PERCENT[cadre] / 100)
     counted = min(max(int(children or 0), 0), rules.CEA_MAX_CHILDREN)
     cea = rules.CEA_PER_CHILD[cadre] * counted
-    lta = s.lta_for(cadre)
+    basic = _r(float(ctc_annual) / 12 * rules.BASIC_PERCENT / 100)
+    hra = full_hra = _r(basic * rules.HRA_PERCENT[cadre] / 100)
+    grat = _r(basic * float(s.gratuity_percent) / 100)
+    gross, esi, med, pf, on_a_limit = _solve(F - grat, med, full_hra, s)
+    # PF at the ceiling: 12% of it, not a fixed Rs 3,000 -- the ceiling is a
+    # setting a super admin can change, and the note has to follow it.
+    pf_at_ceiling = _r(s.pf_wage_ceiling * rules.PF_PERCENT / 100)
+    bonus = 0
+    if on_a_limit:
+        notes.append(f'Gross Salary sits right at the Rs {_inr(s.esi_bonus_gross_limit)} ESI or '
+                     f'Rs {_inr(s.pf_wage_ceiling)} PF limit, where the rules jump: ESI was applied if '
+                     'the salary with Mediclaim is within its limit, and PF is '
+                     f'Rs {_inr(pf_at_ceiling)} if the salary reaches its limit.')
 
-    reimb = []
-    for key, label, amounts in rules.REIMBURSEMENTS:
-        amount = amounts[cadre]
-        if amount is None:                               # "Actual" -> settings
-            amount = s.actual_for(key)
-        reimb.append([key, label, int(amount)])
-
-    # -- Special Allowance is the balance; trim reimbursements if short -----
+    # -- Special Allowance: what Gross leaves after Basic, HRA and CEA ------
     def balance():
-        return gross - basic - hra - cea - lta - sum(a for _k, _l, a in reimb)
+        return gross - basic - hra - cea
 
     reduced = []
-    for item in reversed(reimb):
-        if balance() >= 0:
-            break
-        if item[2]:
-            item[2] -= min(item[2], -balance())
-            reduced.append(item[1])
     if balance() < 0 and cea:
         cea -= min(cea, -balance())
         reduced.append('Child Education Allowance')
-    # Basic on a state minimum wage can leave no room for HRA at its usual
-    # share; the minimum wage is the legal floor, so HRA (then LTA) gives way.
-    full_hra = hra
     if balance() < 0 and hra:
         hra -= min(hra, -balance())
         reduced.append('House Rent Allowance')
-    if balance() < 0 and lta:
-        lta -= min(lta, -balance())
-        reduced.append('Leave Travel Allowance')
     if reduced:
-        notes.append('CTC is too low for the full cadre entitlement, so these were reduced: '
-                     + ', '.join(reduced) + '.')
+        notes.append(f'After Basic ({rules.BASIC_PERCENT}% of CTC) there was not room for everything, '
+                     'so these were reduced: ' + ', '.join(reduced) + '.')
     if balance() < 0:
-        if on_min_wage:
-            return {'error': f'CTC is too low: the gross salary is below the {state} minimum wage '
-                             f'of Rs {min_wage:,} a month for Basic alone.'}
-        return {'error': 'CTC is too low for this cadre: Basic alone exceeds the gross salary.'}
+        return {'error': f'CTC is too low for this cadre: Basic ({rules.BASIC_PERCENT}% of CTC, '
+                         f'Rs {_inr(basic)}) is more than the Gross Salary of Rs {_inr(gross)}.'}
     spl = balance()
+
+    # -- LTA and reimbursements: picked, in preference order, out of Special,
+    #    each only if it fits in full ---------------------------------------
+    eligible = cadre in OPTION_CADRES and ctc_annual > rules.REIMBURSEMENT_MIN_CTC
+    picked = (options or {}) if eligible else {}
+    if options and any(options.values()) and not eligible:
+        notes.append('LTA and reimbursements apply only to cadres D, C and M with a CTC above '
+                     f'Rs {_inr(rules.REIMBURSEMENT_MIN_CTC)}.')
+    car_lease = picked.get('car') is True               # as per the car lease policy
+    # Old Regime gets the Old Regime items and the Both Regime ones; New
+    # Regime and Both Regime get only the Both Regime ones.
+    old_regime = _norm(tax_regime) == 'oldregime'
+    paid, no_room, old_only = {}, [], []
+    for key, label, amounts, regime in rules.REIMBURSEMENTS:
+        amount = amounts[cadre] if picked.get(key) is True else 0
+        if amount and regime == 'old' and not old_regime:
+            old_only.append(label)
+            amount = 0
+        if amount > spl:
+            no_room.append(f'{label} (Rs {_inr(amount)})')
+            amount = 0
+        paid[key] = amount
+        spl -= amount
+    if old_only:
+        notes.append(f'{tax_regime or "No tax regime given"}, so these Old Regime only items were not '
+                     'given: ' + ', '.join(old_only) + '.')
+    if no_room:
+        notes.append('Not enough Special Allowance left, so these were not given: '
+                     + ', '.join(no_room) + '.')
+    lta = paid.pop('lta')
+    reimb = [(key, label, paid[key]) for key, label, _amounts, _regime in rules.REIMBURSEMENTS
+             if key in paid]
     hra_note = (f'{rules.HRA_PERCENT[cadre]}% of Basic' if hra == full_hra
                 else f'Reduced from {rules.HRA_PERCENT[cadre]}% of Basic to fit')
 
     earnings = [
         _line('Basic Salary (Inclusive of DA/VDA)', basic,
-              f'Minimum wage, {state}' if on_min_wage else f'{rules.BASIC_PERCENT}% of Gross Salary'),
+              f'{rules.BASIC_PERCENT}% of CTC'),
         _line('House Rent Allowance (HRA)', hra, hra_note),
         _line('Child Education Allowance (CEA)', cea,
               f'Rs {rules.CEA_PER_CHILD[cadre]:,} x {counted} child{"ren" if counted != 1 else ""}'
               if cea else ''),
-        _line('Leave Travel Allowance (LTA)', lta, 'As per cadre' if lta else ''),
-        _line('Special Allowance (Flexi Pay)', spl, 'Balance of Gross Salary'),
+        _line('Leave Travel Allowance (LTA)', lta, 'Cadre slab' if lta else ''),
+        _line('Special Allowance (Flexi Pay)', spl, 'Gross less Basic, HRA, CEA, LTA and reimbursements'),
     ]
     gross_earnings = sum(r['monthly'] for r in earnings)
     # Every reimbursement, zeros included and keyed, so the Annexure A PDF can
@@ -263,11 +361,15 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     reimbursements = [{**_line(label, amount), 'key': key} for key, label, amount in reimb]
     benefits = [
         _line('Employer PF Contribution', pf,
-              f'{rules.PF_PERCENT}% of Basic (wages capped at Rs {s.pf_wage_ceiling:,})'),
+              f'{rules.PF_PERCENT}% of the Rs {_inr(s.pf_wage_ceiling)} PF wage ceiling'
+              if pf == pf_at_ceiling
+              else f'{rules.PF_PERCENT}% of (Gross Salary - HRA)'),
         _line('Employer ESI Contribution', esi,
-              f'{rules.ESI_PERCENT}% of Gross Salary' if small else 'Not applicable'),
-        _line('Mediclaim Charges', med, f'Grade {grade}' if grade else ''),
-        _line('Statutory Bonus', bonus, f'{rules.BONUS_PERCENT}% of Basic' if small else 'Not applicable'),
+              f'{rules.ESI_PERCENT}% of Gross Salary (up to Rs {_inr(s.esi_bonus_gross_limit)})'
+              if esi else 'Not applicable'),
+        _line('Mediclaim Charges', med,
+              'ESI applies instead' if esi else (f'Grade {grade}' if grade else '')),
+        _line('Statutory Bonus', bonus, 'Not applicable'),
         _line('Gratuity', grat, f'{s.gratuity_percent}% of Basic' if grat else ''),
     ]
     benefits_total = sum(r['monthly'] for r in benefits)
@@ -296,12 +398,13 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     return {
         'cadre': cadre, 'cadreName': rules.CADRES[cadre], 'grade': grade, 'category': category,
         'state': state, 'minWage': min_wage,
-        'ctcAnnual': ctc_annual, 'vppPercent': pct,
+        'ctcAnnual': ctc_annual, 'ctcAdjusted': adjusted, 'vppPercent': pct,
         'earnings': earnings, 'grossEarnings': gross_earnings, 'grossEarningsAnnual': gross_earnings_annual,
         'reimbursements': reimbursements, 'grossSalary': gross, 'grossSalaryAnnual': gross_salary_annual,
         'benefits': benefits, 'benefitsTotal': benefits_total, 'benefitsTotalAnnual': benefits_annual,
         'fixedMonthly': fixed, 'fixedAnnual': fixed_annual,
         'otherPayments': other,
         'totalCtcMonthly': _r(total_annual / 12), 'totalCtcAnnual': total_annual,
+        'carLease': car_lease,
         'notes': notes,
     }

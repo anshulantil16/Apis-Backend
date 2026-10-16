@@ -59,6 +59,12 @@ class CtcCandidate(models.Model):
     work_location  = models.CharField(max_length=120, blank=True)
     # Annual CTC in rupees, as offered.
     ctc            = models.DecimalField(max_digits=12, decimal_places=2)
+    # Old Regime / New Regime / Both Regime (columns.TAX_REGIMES), or blank.
+    tax_regime     = models.CharField(max_length=20, blank=True)
+    # The Gross Earnings items answered on the template, {key: True/False}
+    # (columns.OPTION_COLUMNS); a missing key takes that column's default.
+    # Always empty for cadres O and W.
+    gross_earnings = models.JSONField(default=dict, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -93,7 +99,8 @@ class CtcSettings(models.Model):
     d_driver = models.PositiveIntegerField(default=0, help_text='Driver, per month, cadre D')
     d_health = models.PositiveIntegerField(default=0, help_text='Health & wellness, per month, cadre D')
 
-    pf_wage_ceiling = models.PositiveIntegerField(default=15000, help_text='PF wage ceiling per month')
+    pf_wage_ceiling = models.PositiveIntegerField(
+        default=25000, help_text='PF wage ceiling per month (12% of Basic up to this; Rs 3,000 at 25,000)')
     esi_bonus_gross_limit = models.PositiveIntegerField(
         default=21000, help_text='ESI and Statutory Bonus apply up to this gross per month')
 

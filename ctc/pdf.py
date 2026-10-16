@@ -24,6 +24,8 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .rules import REIMBURSEMENT_MIN_CTC
+
 LOGO_PATH = os.path.join(os.path.dirname(__file__), 'assets', 'apis_logo.png')
 
 # From the sheet's fills.
@@ -113,16 +115,13 @@ def build_pdf(candidate, b) -> bytes:
         [Paragraph('Employee Details', bar), ''],
     ]
     details = [
-        ('Employee Code', getattr(candidate, 'employee_code', '')),
         ('Employee Name (Candidate Name)', candidate.candidate_name),
         ('Department', candidate.department),
-        ('Function', ''),
         ('Designation', candidate.designation),
         ('Cadre', b['cadre']),
         ('Grade', b['grade']),
-        ('Date of Joining', candidate.date_of_joining.strftime('%d-%m-%Y')
-         if getattr(candidate, 'date_of_joining', None) else ''),
         ('Work Location', candidate.work_location),
+        ('Tax Regime', getattr(candidate, 'tax_regime', '')),
     ]
     for k, v in details:
         rows.append([Paragraph(k, label), Paragraph(str(v or ''), value)])
@@ -174,11 +173,17 @@ def build_pdf(candidate, b) -> bytes:
     earning('Special Allowance (Flexi Pay)', 'Special Allowance')
     total('GROSS EARNINGS', b['grossEarnings'], b['grossEarningsAnnual'], GREY)
 
-    reimb = {x.get('key'): x for x in b['reimbursements']}
-    for key, text in REIMBURSEMENT_ROWS:
-        x = reimb.get(key, {'monthly': 0, 'annual': 0})
-        row(text, x['monthly'], x['annual'], fill=ORANGE_SOFT)
-    row('Car Lease / Company Car Benefit', 0, 0)
+    # Cadres O and W, and any CTC up to Rs 12 lakh, get no reimbursements, so
+    # their sheet leaves the rows out.
+    if b['cadre'] not in ('O', 'W') and b['ctcAnnual'] > REIMBURSEMENT_MIN_CTC:
+        reimb = {x.get('key'): x for x in b['reimbursements']}
+        for key, text in REIMBURSEMENT_ROWS:
+            x = reimb.get(key, {'monthly': 0, 'annual': 0})
+            row(text, x['monthly'], x['annual'], fill=ORANGE_SOFT)
+        if b.get('carLease'):                      # opted on the template; outside the CTC
+            data.append([Paragraph('Car Lease / Company Car Benefit', label), 'As per policy', 'As per policy'])
+        else:
+            row('Car Lease / Company Car Benefit', 0, 0)
     total('Gross Salary', b['grossSalary'], b['grossSalaryAnnual'], GREY)
 
     section('Annual Benefits')
@@ -187,7 +192,7 @@ def build_pdf(candidate, b) -> bytes:
     def benefit(text, key):
         row(text, ben[key]['monthly'], ben[key]['annual'], bold=False)
 
-    benefit('Employer PF Contribution (12% of Basic / PF Ceiling Wages)', 'Employer PF Contribution')
+    benefit('Employer PF Contribution (12% of Gross less HRA / max Rs 3,000)', 'Employer PF Contribution')
     benefit('Employer ESI Contribution (3.25% of Gross Salary)', 'Employer ESI Contribution')
     benefit('Mediclaim Charges ( As per Grade &amp; Applicable Policy)', 'Mediclaim Charges')
     benefit('Statutory Bonus (8.33% of Basic &amp; VDA)', 'Statutory Bonus')

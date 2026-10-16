@@ -22,10 +22,11 @@ CADRES = {
 
 CATEGORIES = ['Sales', 'HO', 'Plant']
 
-BASIC_PERCENT = 50                       # of Gross Salary, or the state minimum wage if higher
+BASIC_PERCENT = 50                       # of Gross Earnings
 HRA_PERCENT = {'D': 50, 'C': 50, 'M': 50, 'O': 50, 'W': 20}   # of Basic
 
 PF_PERCENT = 12                          # employer, of Basic up to the PF wage ceiling
+                                         # (Rs 25,000 -> PF never above Rs 3,000)
 ESI_PERCENT = 3.25                       # employer, of gross salary — small salaries only
 BONUS_PERCENT = 8.33                     # statutory, of Basic — small salaries only
 
@@ -41,22 +42,31 @@ CEA_MAX_CHILDREN = 2
 # are dropped from the END of this list first — the workbook says each "can
 # be swapped either as Spl Allowance or Reimbursement".
 # None = "Actual" in the workbook → the D-cadre amount comes from settings.
+# P & C's Reference Master - Salary Fixation Model 2026 (monthly), in its
+# preference order. Only what is picked Yes on the template is paid, and an
+# item is paid only if it fits in full in the Special Allowance still left.
+# (key, label, {cadre: monthly}, regime) - 'old': Old Regime only.
 REIMBURSEMENTS = [
+    ('lta',       'Leave Travel Allowance (LTA)',
+     {'D': 25000, 'C': 15000, 'M': 5000, 'O': 0, 'W': 0}, 'both'),
     ('meal',      'Meal Voucher Reimbursement',
-     {'D': 9600, 'C': 9600, 'M': 5200, 'O': 0, 'W': 0}),
+     {'D': 10400, 'C': 9600, 'M': 5200, 'O': 0, 'W': 0}, 'both'),
     ('telephone', 'Telephone-Handset / Accessories & Internet Reimbursement',
-     {'D': 20000, 'C': 10000, 'M': 5000, 'O': 0, 'W': 0}),
+     {'D': 10000, 'C': 5000, 'M': 2500, 'O': 0, 'W': 0}, 'both'),
     ('fuel',      'Fuel & Vehicle Maintenance Reimbursement',
-     {'D': None, 'C': 5000, 'M': 5000, 'O': 0, 'W': 0}),
+     {'D': 5000, 'C': 5000, 'M': 5000, 'O': 0, 'W': 0}, 'both'),
     ('driver',    'Driver / Chauffeur Salary',
-     {'D': None, 'C': 3000, 'M': 3000, 'O': 0, 'W': 0}),
+     {'D': 3000, 'C': 3000, 'M': 3000, 'O': 0, 'W': 0}, 'both'),
     ('health',    'Health & Wellness Reimbursement',
-     {'D': None, 'C': 6000, 'M': 3000, 'O': 0, 'W': 0}),
+     {'D': 6000, 'C': 3000, 'M': 1500, 'O': 0, 'W': 0}, 'both'),
     ('books',     'Books, Periodicals & Professional Development Reimbursement',
-     {'D': 10000, 'C': 5000, 'M': 2500, 'O': 0, 'W': 0}),
+     {'D': 10000, 'C': 5000, 'M': 2500, 'O': 0, 'W': 0}, 'old'),
     ('uniform',   'Uniform & Attire Reimbursement',
-     {'D': 20000, 'C': 10000, 'M': 5000, 'O': 0, 'W': 0}),
+     {'D': 10000, 'C': 5000, 'M': 2500, 'O': 0, 'W': 0}, 'old'),
 ]
+
+# Reimbursements, LTA and the tax regime apply only above this annual CTC.
+REIMBURSEMENT_MIN_CTC = 1_200_000
 
 # Employer mediclaim charge by grade (monthly).
 MEDICLAIM = {
@@ -68,26 +78,34 @@ MEDICLAIM = {
 }
 
 # Variable / Performance Pay, as a % of total CTC.
-# Sales: by grade + designation, within a department (None = either).
+#
+# Sales, grade M5 and above (M5, M6, C1-C5, D): 15%, whatever the department.
+VPP_SALES_SENIOR = 15
+VPP_SALES_SENIOR_FROM_GRADE = 'M5'
+# Sales below M5: P & C's VPP table - the grade and the Department (GENERAL
+# TRADE / ALTERNATE CHANNELS / BOTH, from the template) must match a row. A
+# row for BOTH applies to either department. No match for the department:
+# the grade's rate, the higher one where it has two.
 VPP_SALES = [
-    # grade, department,            designation,                        %
-    ('C2', 'General Trade',       'NSH',                               15),
-    ('M1', 'General Trade',       'Area Sales Manager',                10),
-    ('M1', 'Alternate Channels',  'Key Account Manager',               12),
-    ('M2', 'General Trade',       'Senior Area Sales Manager',         10),
-    ('M3', 'General Trade',       'Deputy Regional Sales Manager',     10),
-    ('M3', 'Alternate Channels',  'Customer Development Manager',      12),
-    ('M4', None,                  'Regional Sales Manager',            12),
-    ('M5', 'Alternate Channels',  'Assistant General Manager',         15),
+    # grade, department,           %
+    ('C2', 'General Trade',       15),
+    ('M1', 'General Trade',       10),
+    ('M1', 'Alternate Channels',  12),
+    ('M2', 'General Trade',       10),
+    ('M3', 'General Trade',       10),
+    ('M3', 'Alternate Channels',  12),
+    ('M4', 'Both',                12),
+    ('M5', 'Alternate Channels',  15),
 ]
-# HO and Plant: by grade alone, any department or designation.
-VPP_BY_GRADE = {
-    'HO':    ({'C1', 'C2', 'M3', 'M4', 'M5'}, 8),
-    'Plant': ({'M3', 'M4', 'M5'}, 8),
-}
 
-# Minimum wages per month, by state (P & C's table). Basic is never below
-# the minimum wage of the candidate's work location.
+# Corporate (HO) and Factory (Plant): 8%, M3 grade and above, except Deputy
+# and Assistant Managers (Variable Pay Policy Ver. 1.0.0 2024).
+VPP_NON_SALES = 8
+VPP_NON_SALES_FROM_GRADE = 'M3'
+VPP_NON_SALES_EXCLUDED = ['deputy manager', 'assistant manager']
+
+# Minimum wages per month, by state (P & C's table). The CTC per month is
+# never below the minimum wage of the candidate's work location.
 MIN_WAGES = {
     'Uttar Pradesh': 15500, 'Chhattisgarh': 12700, 'Maharashtra': 15500, 'Telangana': 15000,
     'Karnataka': 18600, 'West Bengal': 13000, 'Odisha': 15000, 'Madhya Pradesh': 15500,
