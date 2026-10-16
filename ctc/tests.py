@@ -355,6 +355,23 @@ class Calculator(TestCase):
         # "Deputy General Manager" is not a Deputy Manager.
         self.assertEqual(vpp_percent('Plant', 'C1', 'Ops', 'Deputy General Manager')[0], 8)
 
+    def test_salaries_right_at_the_esi_and_pf_limits(self):
+        # Where switching Mediclaim to ESI, or PF on wages to Rs 3,000, would jump
+        # Gross back across the limit: ESI if within the limit with Mediclaim,
+        # PF Rs 3,000 if the salary reaches its limit - and a note says so.
+        pf_band = self.calc(ctc_annual=383447, cadre='C', grade='C2', category='Plant', children=1,
+                            work_location='Uttar Pradesh')
+        ben = {x['label']: x['monthly'] for x in pf_band['benefits']}
+        self.assertEqual(ben['Employer PF Contribution'], 3000)
+        self.assertTrue(any('sits right at' in n for n in pf_band['notes']))
+        esi_band = self.calc(ctc_annual=326410, cadre='D', grade='D1', category='Plant',
+                             work_location='Maharashtra')
+        ben = {x['label']: x['monthly'] for x in esi_band['benefits']}
+        self.assertGreater(ben['Employer ESI Contribution'], 0)
+        self.assertEqual(ben['Mediclaim Charges'], 0)
+        for b in (pf_band, esi_band):
+            self.assertEqual(b['totalCtcAnnual'], b['ctcAnnual'])
+
     def test_esi_instead_of_mediclaim_up_to_21000(self):
         small = self.calc(ctc_annual=264000, cadre='O', grade='O5', category='HO',
                           work_location='Uttar Pradesh')

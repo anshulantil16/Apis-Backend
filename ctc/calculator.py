@@ -22,7 +22,8 @@ the one that agrees with its own result is used.
 LTA and reimbursements (rules.REIMBURSEMENTS, the Reference Master) apply
 only to cadres D, C and M with a CTC above Rs 12 lakh. Those picked Yes are
 paid in preference order out of the Special Allowance left, each only if
-it fits in full; Old Regime items are left out under the New Regime.
+it fits in full; Old Regime only items (Books, Uniform) are given only under
+the Old Regime.
 The CTC per month must be at least the work location's state minimum wage
 (rules.MIN_WAGES); one below it is raised to it, with a note saying so.
 
@@ -173,28 +174,41 @@ def vpp_percent(category, grade, department, designation, date_of_joining=None):
 
 
 def _solve(base, med, hra, s):
-    """(gross, esi, mediclaim, pf) for base = everything left after VPP,
-    Gift and Gratuity. Tries the four cases and keeps the consistent one."""
+    """(gross, esi, mediclaim, pf, on_a_limit) for base = everything left
+    after VPP, Gift and Gratuity. Tries the four cases and keeps the one
+    that agrees with itself.
+
+    Just at the two limits none does - the rules jump there: switching from
+    Mediclaim to ESI can lift Gross back over Rs 21,000, and switching PF from
+    12% of (Gross - HRA) to Rs 3,000 can drop it back under Rs 25,000. In that
+    narrow band: ESI applies if the salary with Mediclaim is within the ESI
+    limit, and PF is Rs 3,000 if the salary with PF on wages reaches the PF
+    limit (on_a_limit is then True)."""
     esi_rate = rules.ESI_PERCENT / 100
     pf_rate = rules.PF_PERCENT / 100
     esi_limit, pf_limit = s.esi_bonus_gross_limit, s.pf_wage_ceiling
     pf_cap = pf_limit * pf_rate
-    cases = [
-        # (ESI?, PF on wages?, gross)
-        (False, False, base - med - pf_cap),
-        (False, True, (base - med + pf_rate * hra) / (1 + pf_rate)),
-        (True, True, (base + pf_rate * hra) / (1 + esi_rate + pf_rate)),
-        (True, False, (base - pf_cap) / (1 + esi_rate)),
-    ]
-    for esi_on, pf_on, g in cases:
+
+    def gross_for(esi_on, pf_on):
+        less = 0 if esi_on else med
+        if pf_on:
+            return (base - less + pf_rate * hra) / (1 + pf_rate + (esi_rate if esi_on else 0))
+        return (base - less - pf_cap) / (1 + (esi_rate if esi_on else 0))
+
+    on_a_limit = False
+    for esi_on, pf_on in ((False, False), (False, True), (True, True), (True, False)):
+        g = gross_for(esi_on, pf_on)
         if (g <= esi_limit) == esi_on and (g < pf_limit) == pf_on:
             break
-    else:                       # on a boundary, rounding can leave no exact fit
-        esi_on, pf_on, g = cases[1]
+    else:
+        on_a_limit = True
+        esi_on = gross_for(False, True) <= esi_limit
+        pf_on = gross_for(esi_on, True) < pf_limit
+        g = gross_for(esi_on, pf_on)
     pf = _r(max(g - hra, 0) * pf_rate) if pf_on else _r(pf_cap)
     esi = _r(g * esi_rate) if esi_on else 0
     med = 0 if esi_on else med
-    return base - esi - med - pf, esi, med, pf
+    return base - esi - med - pf, esi, med, pf, on_a_limit
 
 
 def _line(label, monthly, note=''):
@@ -262,14 +276,18 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         med = 0
         notes.append(f'No mediclaim rate for grade "{grade or "-"}", so it was taken as 0.')
 
-
     counted = min(max(int(children or 0), 0), rules.CEA_MAX_CHILDREN)
     cea = rules.CEA_PER_CHILD[cadre] * counted
     basic = _r(float(ctc_annual) / 12 * rules.BASIC_PERCENT / 100)
     hra = full_hra = _r(basic * rules.HRA_PERCENT[cadre] / 100)
     grat = _r(basic * float(s.gratuity_percent) / 100)
-    gross, esi, med, pf = _solve(F - grat, med, full_hra, s)
+    gross, esi, med, pf, on_a_limit = _solve(F - grat, med, full_hra, s)
     bonus = 0
+    if on_a_limit:
+        notes.append(f'Gross Salary sits right at the Rs {_inr(s.esi_bonus_gross_limit)} ESI or '
+                     f'Rs {_inr(s.pf_wage_ceiling)} PF limit, where the rules jump: ESI was applied if '
+                     'the salary with Mediclaim is within its limit, and PF is Rs 3,000 if the salary '
+                     'reaches its limit.')
 
     # -- Special Allowance: what Gross leaves after Basic, HRA and CEA ------
     def balance():
@@ -319,7 +337,8 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         notes.append('Not enough Special Allowance left, so these were not given: '
                      + ', '.join(no_room) + '.')
     lta = paid.pop('lta')
-    reimb = [(key, label, paid[key]) for key, label, _a, _r in rules.REIMBURSEMENTS if key in paid]
+    reimb = [(key, label, paid[key]) for key, label, _amounts, _regime in rules.REIMBURSEMENTS
+             if key in paid]
     hra_note = (f'{rules.HRA_PERCENT[cadre]}% of Basic' if hra == full_hra
                 else f'Reduced from {rules.HRA_PERCENT[cadre]}% of Basic to fit')
 
@@ -339,8 +358,9 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     reimbursements = [{**_line(label, amount), 'key': key} for key, label, amount in reimb]
     benefits = [
         _line('Employer PF Contribution', pf,
-              f'{rules.PF_PERCENT}% of (Gross Salary - HRA)' if gross < s.pf_wage_ceiling else
-              f'Rs {_inr(pf)} (Gross Salary Rs {_inr(s.pf_wage_ceiling)} or more)'),
+              f'Rs {_inr(pf)} (Gross Salary Rs {_inr(s.pf_wage_ceiling)} or more)'
+              if pf == _r(s.pf_wage_ceiling * rules.PF_PERCENT / 100)
+              else f'{rules.PF_PERCENT}% of (Gross Salary - HRA)'),
         _line('Employer ESI Contribution', esi,
               f'{rules.ESI_PERCENT}% of Gross Salary (up to Rs {_inr(s.esi_bonus_gross_limit)})'
               if esi else 'Not applicable'),
