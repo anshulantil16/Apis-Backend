@@ -28,9 +28,9 @@ def _xlsx(rows, headings=HEADINGS, name='candidates.xlsx'):
 
 # Candidate Name, Category, Department, Designation, Grade, Cadre, Work Location, CTC
 FIELDS = [f for _h, f, *_ in COLUMNS]
-BASE_ROW = dict(employee_code='SL00225', candidate_name='Rahul Sharma', category='Sales',
+BASE_ROW = dict(candidate_name='Rahul Sharma', category='Sales',
                 department='General Trade', designation='Area Sales Manager', grade='M1', cadre='M',
-                number_of_children=2, date_of_joining='01-07-2026', work_location='Delhi HO', ctc=1200000,
+                number_of_children=2, work_location='Delhi HO', ctc=1200000,
                 tax_regime='New Regime')
 
 
@@ -67,9 +67,9 @@ class CtcUploads(TestCase):
         lists = [dv.formula1 for dv in ws.data_validations.dataValidation]
         self.assertIn('"Sales,HO,Plant"', lists)
         self.assertIn('"D,C,M,O,W"', lists)
-        self.assertIn('IF(N($K2)<=1200000,Lists!$C$1,Lists!$D$1:$D$3)', lists)   # Tax Regime
+        self.assertIn('IF(N($I2)<=1200000,Lists!$C$1,Lists!$D$1:$D$3)', lists)   # Tax Regime
         # Gross Earnings: Yes/No, but only "N/A" (and greyed out) for O and W.
-        self.assertIn('IF(OR($G2="O",$G2="W",N($K2)<=1200000),Lists!$C$1,Lists!$B$1:$B$2)', lists)
+        self.assertIn('IF(OR($F2="O",$F2="W",N($I2)<=1200000),Lists!$C$1,Lists!$B$1:$B$2)', lists)
         self.assertTrue(ws.conditional_formatting)
 
     def test_gross_earnings_choices_are_stored_and_ignored_for_o_w_and_up_to_12_lakh(self):
@@ -96,17 +96,16 @@ class CtcUploads(TestCase):
         self.assertEqual(self.client.post(f'{BASE}/uploads/', {'file': _xlsx([ROW])}).status_code, 401)
 
     def test_upload_stores_every_row(self):
-        second = _row(employee_code='', candidate_name='Priya Verma', category='ho', department='Finance',
-                      designation='Manager', grade='m3', cadre='m', date_of_joining=None,
+        second = _row(candidate_name='Priya Verma', category='ho', department='Finance',
+                      designation='Manager', grade='m3', cadre='m',
                       work_location='Roorkee', ctc='12,50,000')
         r = self._upload(self.alice, _xlsx([ROW, [], second]))
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(r.json()['rowCount'], 2)
         rahul = CtcCandidate.objects.get(candidate_name='Rahul Sharma')
-        self.assertEqual((rahul.employee_code, str(rahul.date_of_joining)), ('SL00225', '2026-07-01'))
+        self.assertEqual((rahul.employee_code, rahul.date_of_joining), ('', None))   # not on the template
         self.assertEqual(rahul.number_of_children, 2)
         priya = CtcCandidate.objects.get(candidate_name='Priya Verma')
-        self.assertIsNone(priya.date_of_joining)
         self.assertEqual((priya.category, priya.grade, priya.cadre), ('HO', 'M3', 'M'))
         self.assertEqual(str(priya.ctc), '1250000.00')
         self.assertEqual(priya.row_number, 4)
@@ -125,20 +124,19 @@ class CtcUploads(TestCase):
         old = [h for h in HEADINGS if h != 'Tax Regime']
         self.assertEqual(self._upload(self.alice, _xlsx([ROW[:-1]], headings=old)).status_code, 201)
 
-    def test_a_real_excel_date_is_read(self):
-        from datetime import datetime
-        self.assertEqual(self._upload(self.alice, _xlsx([_row(date_of_joining=datetime(2026, 8, 15))])).status_code, 201)
-        self.assertEqual(str(CtcCandidate.objects.get().date_of_joining), '2026-08-15')
+    def test_an_old_template_with_employee_code_and_date_of_joining_still_uploads(self):
+        heads = ['Employee Code', *HEADINGS[:6], 'Date of Joining', *HEADINGS[6:]]
+        row = ['SL00225', *ROW[:6], '01-07-2026', *ROW[6:]]
+        self.assertEqual(self._upload(self.alice, _xlsx([row], headings=heads)).status_code, 201)
 
     def test_headings_are_matched_loosely(self):
-        loose = ['employee code', 'candidate name ', 'CATEGORY', 'department', 'designation', 'Grade',
-                 'cadre', 'number of children', 'date_of_joining',
-                 'work_location', 'ctc']
+        loose = ['candidate name ', 'CATEGORY', 'department', 'designation', 'Grade',
+                 'cadre', 'number of children', 'work_location', 'ctc', 'TAX_REGIME']
         self.assertEqual(self._upload(self.alice, _xlsx([ROW], headings=loose)).status_code, 201)
 
     def test_a_missing_column_is_named(self):
-        keep = HEADINGS[:6]
-        r = self._upload(self.alice, _xlsx([ROW[:6]], headings=keep))
+        keep = HEADINGS[:5]
+        r = self._upload(self.alice, _xlsx([ROW[:5]], headings=keep))
         self.assertEqual(r.status_code, 400)
         for heading in ('Cadre', 'Work Location', 'CTC'):
             self.assertIn(heading, r.json()['error'])
@@ -152,8 +150,7 @@ class CtcUploads(TestCase):
             _row(candidate_name='Om', category='HO', grade='O4', cadre='Officer'),  # row 7: reads as O
             _row(candidate_name='Raj', category='HO', grade='O4', cadre='M'),  # row 8: grade/cadre clash
             _row(candidate_name='Sia', category='HO', grade='', cadre=''),    # row 9: no grade/cadre
-            _row(candidate_name='Tara', date_of_joining='sometime soon'),     # row 10: bad date
-            _row(candidate_name='Uma', number_of_children='two'),            # row 11: bad count
+            _row(candidate_name='Uma', number_of_children='two'),            # row 10: bad count
         ]
         r = self._upload(self.alice, _xlsx([ROW, *bad]))
         self.assertEqual(r.status_code, 400)
@@ -162,8 +159,7 @@ class CtcUploads(TestCase):
                          'Row 5: CTC is empty', 'Row 6: Category "Marketing"',
                          'Row 8: Grade O4 does not belong to cadre M',
                          'Row 9: Grade is empty', 'Row 9: Cadre is empty',
-                         'Row 10: Date of Joining "sometime soon" is not a date',
-                         'Row 11: Number of Children "two"'):
+                         'Row 10: Number of Children "two"'):
             self.assertIn(expected, p)
         self.assertNotIn('Row 7', p, '"Officer" should read as cadre O')
         self.assertFalse(CtcUpload.objects.exists())

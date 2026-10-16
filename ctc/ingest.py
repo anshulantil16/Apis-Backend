@@ -10,7 +10,6 @@ and the view decides: any problem and nothing is stored, so a half-imported
 sheet never has to be untangled.
 """
 import re
-from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from openpyxl import load_workbook
@@ -51,26 +50,6 @@ def _amount(text):
     except InvalidOperation:
         return None
     return value if value.is_finite() else None
-
-
-DATE_FORMATS = ('%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y', '%Y-%m-%d', '%d-%b-%Y', '%d %b %Y',
-                '%d-%B-%Y', '%d %B %Y', '%d-%m-%y', '%d/%m/%y')
-
-
-def _date(raw):
-    """A date from a cell: a real Excel date, or text written day-month-year
-    (01-07-2026, 01/07/2026, 1 Jul 2026) or ISO. None if it isn't one."""
-    if isinstance(raw, datetime):
-        return raw.date()
-    if isinstance(raw, date):
-        return raw
-    text = _clean(raw)
-    for fmt in DATE_FORMATS:
-        try:
-            return datetime.strptime(text, fmt).date()
-        except ValueError:
-            continue
-    return None
 
 
 def _regime(text):
@@ -167,14 +146,8 @@ def parse(fileobj):
                 else:
                     errors.append(f'Row {n}: Number of Children "{kids_text}" should be a whole number '
                                   'such as 0, 1 or 2.')
-            doj_text, row['date_of_joining'] = row['date_of_joining'], None
-            if doj_text:
-                row['date_of_joining'] = _date(raw['date_of_joining'])
-                if row['date_of_joining'] is None:
-                    errors.append(f'Row {n}: Date of Joining "{doj_text}" is not a date '
-                                  '(write it like 01-07-2026).')
             for field, value in row.items():
-                if field in ('ctc', 'date_of_joining', 'number_of_children', 'gross_earnings'):
+                if field in ('ctc', 'number_of_children', 'gross_earnings'):
                     continue
                 if len(value) > MAX_LENGTH[field]:
                     heading = next(h for h, f, *_ in COLUMNS if f == field)
