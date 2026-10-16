@@ -315,6 +315,11 @@ class Calculator(TestCase):
                            ('Key Account Manager', 12), ('KAM', 12),
                            ('ASM', 10), ('Area Sales Manager', 10), ('Sr. ASM', 10)]:
             self.assertEqual(vpp_percent('Sales', 'M2', 'General Trade', desig)[0], pct, desig)
+        # Sales from grade M5 up: 15%, whatever the designation.
+        for grade in ('M5', 'M6', 'C1', 'C2', 'C3', 'C4', 'C5', 'D1'):
+            self.assertEqual(vpp_percent('Sales', grade, '', 'ASM')[0], 15, grade)
+        self.assertEqual(vpp_percent('Sales', 'M4', '', 'ASM')[0], 10)
+        self.assertEqual(vpp_percent('HO', 'C1', '', 'Manager')[0], 8)       # Sales only
         # ASM: only those who joined from 01-06-2024.
         self.assertEqual(vpp_percent('Sales', 'M1', '', 'ASM', date(2026, 7, 1))[0], 10)
         self.assertEqual(vpp_percent('Sales', 'M1', '', 'ASM', date(2024, 6, 1))[0], 10)
@@ -323,7 +328,6 @@ class Calculator(TestCase):
         self.assertIn('before 01-06-2024', why)
         # A Sales designation the policy doesn't name: the grade table.
         self.assertEqual(vpp_percent('Sales', 'M3', 'Alternate Channels', 'Customer Development Manager')[0], 12)
-        self.assertEqual(vpp_percent('Sales', 'M5', 'Sales', 'Assistant General Manager')[0], 15)
         # Managerial roles and above only.
         self.assertEqual(vpp_percent('Sales', 'O5', 'GT', 'ASM')[0], 0)
         # Corporate / Factory: 8% from M3 up ...

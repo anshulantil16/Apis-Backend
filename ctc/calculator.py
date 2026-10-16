@@ -147,7 +147,8 @@ def vpp_percent(category, grade, department, designation, date_of_joining=None):
     """(percent, description) under the Variable Pay Policy. With a percent,
     the description names the rule that gave it; with 0, it says why.
 
-    Sales: by designation - Business Head / OT Head 15%, ZSM / RSM / KAM 12%,
+    Sales: grade M5 and above (M5, M6, C1-C5, D) 15%. Below that, by
+    designation - Business Head / OT Head 15%, ZSM / RSM / KAM 12%,
     ASM 10% (not for an ASM who joined before 01-06-2024). A designation the
     policy doesn't name falls back to P & C's grade table.
     HO (Corporate) and Plant (Factory): 8% from grade M3 up, except Deputy
@@ -161,6 +162,8 @@ def vpp_percent(category, grade, department, designation, date_of_joining=None):
         return 0, f'No VPP: the Variable Pay Policy covers managerial roles and above, not grade {g}.'
     words = _words(designation)
     if category == 'Sales':
+        if rank is not None and rank >= _grade_rank(rules.VPP_SALES_SENIOR_FROM_GRADE):
+            return rules.VPP_SALES_SENIOR, f'Sales · grade {rules.VPP_SALES_SENIOR_FROM_GRADE} and above'
         for pct, role, phrases in rules.VPP_SALES_BY_DESIGNATION:
             if any(f' {p} ' in words for p in phrases):
                 if role == 'ASM' and date_of_joining and \

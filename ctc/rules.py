@@ -91,6 +91,9 @@ VPP_SALES_BY_DESIGNATION = [
 # "FY 24-25 all existing ASM has been excluded ... ASM joining after
 # 01-06-24 will be part of variable pay."
 VPP_ASM_JOINED_FROM = (2024, 6, 1)
+# Sales from grade M5 up (M5, M6, C1-C5, D): 15%, whatever the designation.
+VPP_SALES_SENIOR = 15
+VPP_SALES_SENIOR_FROM_GRADE = 'M5'
 
 # Corporate (HO) and Factory (Plant): 8%, M3 grade and above, except Deputy
 # and Assistant Managers.
