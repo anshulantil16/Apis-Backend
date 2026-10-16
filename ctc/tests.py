@@ -321,31 +321,22 @@ class Calculator(TestCase):
         self.assertEqual(self.calc(category='Plant', grade='M4', designation='Manager')['vppPercent'], 8)
 
     def test_vpp_follows_the_variable_pay_policy(self):
-        from datetime import date
-        # Sales: P & C's table, by grade and department.
+        # Sales: P & C's table only - grade and department.
         for grade, dept, pct in [('C2', 'GENERAL TRADE', 15),
                                  ('M1', 'GENERAL TRADE', 10), ('M1', 'ALTERNATE CHANNELS', 12),
                                  ('M2', 'GENERAL TRADE', 10),
                                  ('M3', 'GENERAL TRADE', 10), ('M3', 'ALTERNATE CHANNELS', 12),
-                                 ('M4', 'BOTH', 12), ('M4', 'GENERAL TRADE', 12),
-                                 ('M5', 'ALTERNATE CHANNELS', 15),
-                                 ('M3', 'BOTH', 12), ('M1', 'BOTH', 12)]:          # BOTH: the higher rate
-            self.assertEqual(vpp_percent('Sales', grade, dept, 'Senior')[0], pct, (grade, dept))
-        pct, why = vpp_percent('Sales', 'M3', 'ASM', 'Senior')          # not a sales department
-        self.assertEqual(pct, 0)
-        self.assertIn('set Department to General Trade (10%) or Alternate Channels (12%)', why)
-        # Not in the table, from grade M5 up: 15%, whatever the designation.
-        for grade in ('M6', 'C1', 'C3', 'C4', 'C5', 'D1'):
-            self.assertEqual(vpp_percent('Sales', grade, 'GENERAL TRADE', 'ASM')[0], 15, grade)
-        self.assertEqual(vpp_percent('HO', 'C1', '', 'Manager')[0], 8)       # Sales only
-        # ASM: only those who joined from 01-06-2024.
-        self.assertEqual(vpp_percent('Sales', 'M1', 'GENERAL TRADE', 'ASM', date(2026, 7, 1))[0], 10)
-        self.assertEqual(vpp_percent('Sales', 'M1', 'GENERAL TRADE', 'ASM', date(2024, 6, 1))[0], 10)
-        pct, why = vpp_percent('Sales', 'M1', 'GENERAL TRADE', 'ASM', date(2023, 4, 1))
-        self.assertEqual(pct, 0)
-        self.assertIn('before 01-06-2024', why)
-        # No department: the designation settles a grade with two rates.
-        self.assertEqual(vpp_percent('Sales', 'M3', '', 'Customer Development Manager')[0], 12)
+                                 ('M4', 'BOTH', 12), ('M4', 'GENERAL TRADE', 12), ('M4', 'ALTERNATE CHANNELS', 12),
+                                 ('M5', 'ALTERNATE CHANNELS', 15)]:
+            self.assertEqual(vpp_percent('Sales', grade, dept, 'Business Head')[0], pct, (grade, dept))
+        # Anything the table doesn't have: no VPP, whatever the designation.
+        for grade, dept in [('M2', 'ALTERNATE CHANNELS'), ('M5', 'GENERAL TRADE'), ('M1', 'BOTH'),
+                            ('C2', 'ALTERNATE CHANNELS'), ('M6', 'GENERAL TRADE'), ('C1', 'BOTH'),
+                            ('M3', 'ASM')]:
+            pct, why = vpp_percent('Sales', grade, dept, 'Business Head')
+            self.assertEqual(pct, 0, (grade, dept))
+            self.assertIn('No Sales VPP', why)
+        self.assertEqual(vpp_percent('HO', 'C1', '', 'Manager')[0], 8)       # HO is not the Sales table
         # Managerial roles and above only.
         self.assertEqual(vpp_percent('Sales', 'O5', 'GT', 'ASM')[0], 0)
         # Corporate / Factory: 8% from M3 up ...

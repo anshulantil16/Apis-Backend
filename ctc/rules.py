@@ -77,44 +77,28 @@ MEDICLAIM = {
     'W4': 300, 'W3': 250, 'W2': 200, 'W1': 150,
 }
 
-# Variable / Performance Pay, as a % of total CTC - Variable Pay Policy
-# Ver. 1.0.0 2024. Managerial roles and above (cadres D, C, M).
+# Variable / Performance Pay, as a % of total CTC.
 #
-# Sales: by designation. Each entry's words are matched as whole words in
-# the Designation ("ASM", "Area Sales Manager", "Sr. ASM" ...).
-VPP_SALES_BY_DESIGNATION = [
-    (15, 'Business Head / OT Head', ['business head', 'ot head', 'bh', 'nsh', 'national sales head']),
-    (12, 'ZSM / RSM / KAM', ['zsm', 'zonal sales manager', 'rsm', 'regional sales manager',
-                             'kam', 'key account manager']),
-    (10, 'ASM', ['asm', 'area sales manager']),
+# Sales: P & C's VPP table, and nothing else - the grade and the Department
+# (GENERAL TRADE / ALTERNATE CHANNELS / BOTH, from the template) must match a
+# row. A row for BOTH applies to either department. No match: no VPP.
+VPP_SALES = [
+    # grade, department,           %
+    ('C2', 'General Trade',       15),
+    ('M1', 'General Trade',       10),
+    ('M1', 'Alternate Channels',  12),
+    ('M2', 'General Trade',       10),
+    ('M3', 'General Trade',       10),
+    ('M3', 'Alternate Channels',  12),
+    ('M4', 'Both',                12),
+    ('M5', 'Alternate Channels',  15),
 ]
-# "FY 24-25 all existing ASM has been excluded ... ASM joining after
-# 01-06-24 will be part of variable pay."
-VPP_ASM_JOINED_FROM = (2024, 6, 1)
-# Sales from grade M5 up (M5, M6, C1-C5, D): 15%, whatever the designation.
-VPP_SALES_SENIOR = 15
-VPP_SALES_SENIOR_FROM_GRADE = 'M5'
 
 # Corporate (HO) and Factory (Plant): 8%, M3 grade and above, except Deputy
-# and Assistant Managers.
+# and Assistant Managers (Variable Pay Policy Ver. 1.0.0 2024).
 VPP_NON_SALES = 8
 VPP_NON_SALES_FROM_GRADE = 'M3'
 VPP_NON_SALES_EXCLUDED = ['deputy manager', 'assistant manager']
-
-# Sales: P & C's VPP table, by grade and department - used first.
-# Department None = BOTH (either). Designation settles a grade with two rates
-# when the department doesn't.
-VPP_SALES = [
-    # grade, department,            designation,                        %
-    ('C2', 'General Trade',       'NSH',                               15),
-    ('M1', 'General Trade',       'Area Sales Manager',                10),
-    ('M1', 'Alternate Channels',  'Key Account Manager',               12),
-    ('M2', 'General Trade',       'Senior Area Sales Manager',         10),
-    ('M3', 'General Trade',       'Deputy Regional Sales Manager',     10),
-    ('M3', 'Alternate Channels',  'Customer Development Manager',      12),
-    ('M4', None,                  'Regional Sales Manager',            12),
-    ('M5', 'Alternate Channels',  'Assistant General Manager',         15),
-]
 
 # Minimum wages per month, by state (P & C's table). The CTC per month is
 # never below the minimum wage of the candidate's work location.
