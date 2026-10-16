@@ -77,8 +77,29 @@ MEDICLAIM = {
     'W4': 300, 'W3': 250, 'W2': 200, 'W1': 150,
 }
 
-# Variable / Performance Pay, as a % of total CTC.
-# Sales: by grade; department (None = either) settles grades with two rates.
+# Variable / Performance Pay, as a % of total CTC - Variable Pay Policy
+# Ver. 1.0.0 2024. Managerial roles and above (cadres D, C, M).
+#
+# Sales: by designation. Each entry's words are matched as whole words in
+# the Designation ("ASM", "Area Sales Manager", "Sr. ASM" ...).
+VPP_SALES_BY_DESIGNATION = [
+    (15, 'Business Head / OT Head', ['business head', 'ot head', 'bh', 'nsh', 'national sales head']),
+    (12, 'ZSM / RSM / KAM', ['zsm', 'zonal sales manager', 'rsm', 'regional sales manager',
+                             'kam', 'key account manager']),
+    (10, 'ASM', ['asm', 'area sales manager']),
+]
+# "FY 24-25 all existing ASM has been excluded ... ASM joining after
+# 01-06-24 will be part of variable pay."
+VPP_ASM_JOINED_FROM = (2024, 6, 1)
+
+# Corporate (HO) and Factory (Plant): 8%, M3 grade and above, except Deputy
+# and Assistant Managers.
+VPP_NON_SALES = 8
+VPP_NON_SALES_FROM_GRADE = 'M3'
+VPP_NON_SALES_EXCLUDED = ['deputy manager', 'assistant manager']
+
+# Sales designations the policy doesn't name: P & C's grade table.
+# Grade; department (None = either) settles grades with two rates.
 VPP_SALES = [
     # grade, department,            designation,                        %
     ('C2', 'General Trade',       'NSH',                               15),
@@ -90,8 +111,6 @@ VPP_SALES = [
     ('M4', None,                  'Regional Sales Manager',            12),
     ('M5', 'Alternate Channels',  'Assistant General Manager',         15),
 ]
-# Everyone outside Sales (HO and Plant), whatever their grade.
-VPP_NON_SALES = 8
 
 # Minimum wages per month, by state (P & C's table). The CTC per month is
 # never below the minimum wage of the candidate's work location.

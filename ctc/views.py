@@ -200,6 +200,7 @@ def _breakdown(c):
                      department=c.department, designation=c.designation,
                      work_location=c.work_location, children=c.number_of_children,
                      options=c.gross_earnings, tax_regime=c.tax_regime,
+                     date_of_joining=c.date_of_joining,
                      settings=CtcSettings.current())
 
 

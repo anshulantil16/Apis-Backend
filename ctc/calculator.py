@@ -102,35 +102,81 @@ def _sales_department(text):
     return ''
 
 
-def vpp_percent(category, grade, department, designation):
-    """(percent, description). With a percent, the description names the
-    rule that gave it; with 0, it says why there is none.
+_WORD_FIXES = {'asst': 'assistant', 'dy': 'deputy', 'sr': 'senior', 'mgr': 'manager'}
 
-    Non-sales (HO, Plant) is a flat rules.VPP_NON_SALES for every grade.
-    Sales VPP is set by grade. Where one grade has two rates (M1, M3: 10% in
-    General Trade, 12% in Alternate Channels) the Department picks between
-    them, and failing that the Designation. Designation never has to match
-    word for word when the grade alone decides."""
+
+def _words(text):
+    """' deputy manager finance ' from "Dy. Manager (Finance)" - lower case,
+    punctuation to spaces, common short forms spelt out, padded so a phrase
+    can be found as whole words with `' x y ' in`."""
+    words = re.sub(r'[^a-z0-9]+', ' ', (text or '').lower()).split()
+    return ' ' + ' '.join(_WORD_FIXES.get(w, w) for w in words) + ' '
+
+
+_CADRE_RANK = {'W': 0, 'O': 1, 'M': 2, 'C': 3, 'D': 4}
+
+
+def _grade_rank(grade):
+    """(cadre rank, number) so grades compare: W1 < O5 < M1 < M6 < C1 < C5 < D1."""
     g = (grade or '').strip().upper()
+    if not g or g[0] not in _CADRE_RANK:
+        return None
+    digits = re.sub(r'\D', '', g)
+    return _CADRE_RANK[g[0]], int(digits) if digits else 0
+
+
+def _sales_by_grade(g, department, designation):
+    """P & C's grade table, for Sales designations the policy doesn't name."""
+    rows = [r for r in rules.VPP_SALES if r[0] == g]
+    if not rows:
+        return 0, (f'No Sales VPP: the designation is not one the Variable Pay Policy names '
+                   f'(Business Head, ZSM / RSM / KAM, ASM) and grade {g or "-"} is not in the grade table.')
+    if len(rows) > 1:
+        dept = _sales_department(department)
+        by_dept = [r for r in rows if r[1] is None or r[1] == dept] if dept else []
+        by_desig = [r for r in rows if _norm(r[2]) == _norm(designation)]
+        rows = by_dept if len(by_dept) == 1 else by_desig
+        if len(rows) != 1:
+            options = ' or '.join(f'{r[1]} ({r[3]}%)' for r in rules.VPP_SALES if r[0] == g)
+            return 0, f'Sales grade {g} has two VPP rates - set Department to {options} to pick one.'
+    r_grade, r_dept, _desig, pct = rows[0]
+    return pct, f'Sales · grade {r_grade}' + (f' · {r_dept}' if r_dept else '')
+
+
+def vpp_percent(category, grade, department, designation, date_of_joining=None):
+    """(percent, description) under the Variable Pay Policy. With a percent,
+    the description names the rule that gave it; with 0, it says why.
+
+    Sales: by designation - Business Head / OT Head 15%, ZSM / RSM / KAM 12%,
+    ASM 10% (not for an ASM who joined before 01-06-2024). A designation the
+    policy doesn't name falls back to P & C's grade table.
+    HO (Corporate) and Plant (Factory): 8% from grade M3 up, except Deputy
+    and Assistant Managers.
+    Managerial roles and above only (cadres D, C, M)."""
+    g = (grade or '').strip().upper()
+    rank = _grade_rank(g)
+    if category not in ('Sales', 'HO', 'Plant'):
+        return 0, ''
+    if rank is not None and rank[0] < _CADRE_RANK['M']:
+        return 0, f'No VPP: the Variable Pay Policy covers managerial roles and above, not grade {g}.'
+    words = _words(designation)
     if category == 'Sales':
-        rows = [r for r in rules.VPP_SALES if r[0] == g]
-        if not rows:
-            listed = ', '.join(sorted({r[0] for r in rules.VPP_SALES}))
-            return 0, f'No Sales VPP for grade {g or "-"} (the VPP table covers {listed}).'
-        if len(rows) > 1:
-            dept = _sales_department(department)
-            by_dept = [r for r in rows if r[1] is None or r[1] == dept] if dept else []
-            by_desig = [r for r in rows if _norm(r[2]) == _norm(designation)]
-            rows = by_dept if len(by_dept) == 1 else by_desig
-            if len(rows) != 1:
-                options = ' or '.join(f'{r[1]} ({r[3]}%)' for r in rules.VPP_SALES if r[0] == g)
-                return 0, (f'Sales grade {g} has two VPP rates - set Department to {options} '
-                           'to pick one.')
-        r_grade, r_dept, r_desig, pct = rows[0]
-        return pct, f'Sales · {r_grade}' + (f' · {r_dept}' if r_dept else '')
-    if category in ('HO', 'Plant'):
-        return rules.VPP_NON_SALES, f'{category} (non-sales)'
-    return 0, ''
+        for pct, role, phrases in rules.VPP_SALES_BY_DESIGNATION:
+            if any(f' {p} ' in words for p in phrases):
+                if role == 'ASM' and date_of_joining and \
+                        (date_of_joining.year, date_of_joining.month, date_of_joining.day) \
+                        < rules.VPP_ASM_JOINED_FROM:
+                    return 0, ('No VPP: ASMs who joined before 01-06-2024 are excluded '
+                               '(Variable Pay Policy, FY 24-25).')
+                return pct, f'Sales · {role}'
+        return _sales_by_grade(g, department, designation)
+    name = 'Corporate' if category == 'HO' else 'Factory'
+    excluded = next((p for p in rules.VPP_NON_SALES_EXCLUDED if f' {p} ' in words), None)
+    if excluded:
+        return 0, f'No VPP: {excluded.title()}s are excluded for {name} (Variable Pay Policy).'
+    if rank is None or rank < _grade_rank(rules.VPP_NON_SALES_FROM_GRADE):
+        return 0, f'No VPP: for {name} the Variable Pay Policy starts at grade M3, and this is {g or "-"}.'
+    return rules.VPP_NON_SALES, f'{name} · M3 and above'
 
 
 def _solve(base, med, hra, s):
@@ -173,7 +219,8 @@ def _inr(n):
 
 
 def calculate(*, ctc_annual, cadre, grade, category, department='', designation='',
-              work_location='', children=0, options=None, tax_regime='', settings):
+              work_location='', children=0, options=None, tax_regime='',
+              date_of_joining=None, settings):
     """The full break-up as plain data, or {'error': ...} if it can't be
     worked out. `settings` is a CtcSettings. `options` is the Gross Earnings
     answered on the template, {key: True/False}: an item answered No is not
@@ -192,7 +239,7 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         notes.append('Category (Sales / HO / Plant) is missing, so no VPP was applied.')
 
     # -- off the top: VPP and Gift ------------------------------------------
-    pct, vpp_rule = vpp_percent(category, grade, department, designation)
+    pct, vpp_rule = vpp_percent(category, grade, department, designation, date_of_joining)
     if not pct and vpp_rule:
         notes.append(vpp_rule)
     vpp_annual = _r(ctc_annual * pct / 100)

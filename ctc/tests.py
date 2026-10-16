@@ -306,32 +306,46 @@ class Calculator(TestCase):
             other = self.calc(ctc_annual=300000, cadre=cadre, grade=grade, category='Plant',
                               work_location='Rajasthan')['otherPayments']
             self.assertEqual(other[1]['annual'], 0, f'cadre {cadre} should get no gift')
-        self.assertEqual(self.calc(category='HO', grade='M1')['vppPercent'], 8)
-        self.assertEqual(self.calc(category='HO', grade='M3', cadre='M')['vppPercent'], 8)
-        self.assertEqual(self.calc(category='Plant', grade='M4')['vppPercent'], 8)
+        self.assertEqual(self.calc(category='HO', grade='M1', designation='Manager')['vppPercent'], 0)
+        self.assertEqual(self.calc(category='HO', grade='M3', designation='Manager')['vppPercent'], 8)
+        self.assertEqual(self.calc(category='Plant', grade='M4', designation='Manager')['vppPercent'], 8)
 
-    def test_vpp_sales_table(self):
-        # One rate for the grade: the grade alone decides, whatever the title.
-        self.assertEqual(vpp_percent('Sales', 'M2', 'Sales', 'Analyst')[0], 10)
-        self.assertEqual(vpp_percent('Sales', 'M4', '', 'Regional Sales Manager')[0], 12)
-        self.assertEqual(vpp_percent('Sales', 'M5', 'Sales', '')[0], 15)
-        self.assertEqual(vpp_percent('Sales', 'C2', '', 'NSH')[0], 15)
-        # Two rates: Department picks, then Designation.
-        self.assertEqual(vpp_percent('Sales', 'M1', 'General Trade', 'Key Account Manager')[0], 10)
-        self.assertEqual(vpp_percent('Sales', 'M1', 'Alternate Channels', '')[0], 12)
-        self.assertEqual(vpp_percent('Sales', 'M3', 'GT', '')[0], 10)
-        self.assertEqual(vpp_percent('Sales', 'M3', 'Sales', 'Customer Development Manager')[0], 12)
-        pct, why = vpp_percent('Sales', 'M1', 'Sales', 'Analyst')
+    def test_vpp_follows_the_variable_pay_policy(self):
+        from datetime import date
+        # Sales: by designation.
+        for desig, pct in [('Business Head', 15), ('OT Head - Modern Trade', 15), ('NSH', 15),
+                           ('ZSM', 12), ('Regional Sales Manager', 12), ('Sr. RSM', 12),
+                           ('Key Account Manager', 12), ('KAM', 12),
+                           ('ASM', 10), ('Area Sales Manager', 10), ('Sr. ASM', 10)]:
+            self.assertEqual(vpp_percent('Sales', 'M2', 'General Trade', desig)[0], pct, desig)
+        # ASM: only those who joined from 01-06-2024.
+        self.assertEqual(vpp_percent('Sales', 'M1', '', 'ASM', date(2026, 7, 1))[0], 10)
+        self.assertEqual(vpp_percent('Sales', 'M1', '', 'ASM', date(2024, 6, 1))[0], 10)
+        pct, why = vpp_percent('Sales', 'M1', '', 'ASM', date(2023, 4, 1))
         self.assertEqual(pct, 0)
-        self.assertIn('two VPP rates', why)
-        # Not in the table at all: 0, with the reason.
-        self.assertEqual(vpp_percent('Sales', 'O5', 'GT', 'Executive')[0], 0)
-        # Non-sales: 8% for every grade.
-        for cat, grade in (('HO', 'O5'), ('HO', 'C2'), ('Plant', 'C2'), ('Plant', 'W1')):
-            self.assertEqual(vpp_percent(cat, grade, 'IT', 'Analyst')[0], 8, (cat, grade))
+        self.assertIn('before 01-06-2024', why)
+        # A Sales designation the policy doesn't name: the grade table.
+        self.assertEqual(vpp_percent('Sales', 'M3', 'Alternate Channels', 'Customer Development Manager')[0], 12)
+        self.assertEqual(vpp_percent('Sales', 'M5', 'Sales', 'Assistant General Manager')[0], 15)
+        # Managerial roles and above only.
+        self.assertEqual(vpp_percent('Sales', 'O5', 'GT', 'ASM')[0], 0)
+        # Corporate / Factory: 8% from M3 up ...
+        for cat in ('HO', 'Plant'):
+            for grade in ('M3', 'M6', 'C1', 'C5', 'D1'):
+                self.assertEqual(vpp_percent(cat, grade, 'Finance', 'Manager')[0], 8, (cat, grade))
+            for grade in ('M1', 'M2', 'O5', 'W1'):
+                self.assertEqual(vpp_percent(cat, grade, 'Finance', 'Manager')[0], 0, (cat, grade))
+        # ... except Deputy and Assistant Managers, however they're written.
+        for desig in ('Deputy Manager', 'Dy. Manager - Finance', 'Assistant Manager', 'Asst. Manager (HR)'):
+            pct, why = vpp_percent('HO', 'M4', 'Finance', desig)
+            self.assertEqual(pct, 0, desig)
+            self.assertIn('excluded', why)
+        # "Deputy General Manager" is not a Deputy Manager.
+        self.assertEqual(vpp_percent('Plant', 'C1', 'Ops', 'Deputy General Manager')[0], 8)
 
     def test_esi_instead_of_mediclaim_up_to_21000(self):
-        small = self.calc(ctc_annual=288000, cadre='O', grade='O5', category='HO', work_location='Delhi')
+        small = self.calc(ctc_annual=264000, cadre='O', grade='O5', category='HO',
+                          work_location='Uttar Pradesh')
         self.assertLessEqual(small['grossSalary'], 21000)
         ben = {x['label']: x['monthly'] for x in small['benefits']}
         self.assertEqual(ben['Employer ESI Contribution'], round(small['grossSalary'] * 0.0325))
