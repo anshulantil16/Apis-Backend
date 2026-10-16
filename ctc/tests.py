@@ -391,7 +391,7 @@ class Calculator(TestCase):
         from .rules import REIMBURSEMENTS
         everything = {k: True for k, *_ in REIMBURSEMENTS}
         b = self.calc(ctc_annual=6000000, cadre='C', grade='C2', category='HO', children=2,
-                      work_location='Delhi', options=everything)
+                      work_location='Delhi', options=everything, tax_regime='Old Regime')
         paid = {x['key']: x['monthly'] for x in b['reimbursements']}
         lta = next(x for x in b['earnings'] if x['label'].startswith('Leave Travel'))['monthly']
         self.assertEqual({**paid, 'lta': lta}, {k: a['C'] for k, _l, a, _r in REIMBURSEMENTS})
@@ -413,12 +413,16 @@ class Calculator(TestCase):
         self.assertEqual(paid, {'telephone': 5000, 'driver': 3000})
         self.assertEqual(b['earnings'][4]['monthly'], 683)
         self.assertTrue(any('Not enough Special Allowance' in n for n in b['notes']))
-        # New Regime: Books and Uniform are never given, even when they'd fit.
+        # Books and Uniform (Old Regime only) only under Old Regime; New and Both
+        # Regime get the Both Regime items only.
         rich = dict(base, ctc_annual=6000000)
-        new = self.calc(**rich, options=everything, tax_regime='New Regime')
-        paid = {x['key']: x['monthly'] for x in new['reimbursements']}
-        self.assertEqual((paid['books'], paid['uniform']), (0, 0))
-        self.assertTrue(any('Old Regime' in n for n in new['notes']))
+        for regime, books in (('Old Regime', 5000), ('New Regime', 0), ('Both Regime', 0), ('', 0)):
+            b = self.calc(**rich, options=everything, tax_regime=regime)
+            paid = {x['key']: x['monthly'] for x in b['reimbursements']}
+            self.assertEqual((paid['books'], paid['uniform']), (books, books), regime)
+            self.assertEqual(paid['meal'], 9600, regime)                     # Both Regime item
+        self.assertTrue(any('Old Regime only' in n for n in
+                            self.calc(**rich, options=everything, tax_regime='Both Regime')['notes']))
         # Up to Rs 12 lakh: none at all.
         small = self.calc(**dict(base, ctc_annual=1200000), options=everything)
         self.assertEqual(sum(x['monthly'] for x in small['reimbursements']), 0)

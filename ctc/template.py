@@ -59,7 +59,8 @@ def _option_columns(ws, lists):
         cell.comment = Comment(
             'Gross Earnings - Yes or No. Blank means No.\n\nYes pays it at the cadre slab out of the '
             'Special Allowance left, in preference order - only if it fits in full.'
-            + ('\n\nOld Regime only.' if regimes.get(key) == 'old' else '')
+            + ('\n\nOld Regime only - not given under New Regime or Both Regime.'
+               if regimes.get(key) == 'old' else '')
             + '\n\nOnly for cadres D, C and M with a CTC above Rs 12 lakh - greyed out otherwise.',
             'APIS Intranet')
         ws.column_dimensions[get_column_letter(i)].width = OPTION_WIDTH

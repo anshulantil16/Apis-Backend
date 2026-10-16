@@ -302,11 +302,13 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         notes.append('LTA and reimbursements apply only to cadres D, C and M with a CTC above '
                      f'Rs {_inr(rules.REIMBURSEMENT_MIN_CTC)}.')
     car_lease = picked.get('car') is True               # as per the car lease policy
-    new_regime = _norm(tax_regime) == 'newregime'
+    # Old Regime gets the Old Regime items and the Both Regime ones; New
+    # Regime and Both Regime get only the Both Regime ones.
+    old_regime = _norm(tax_regime) == 'oldregime'
     paid, no_room, old_only = {}, [], []
     for key, label, amounts, regime in rules.REIMBURSEMENTS:
         amount = amounts[cadre] if picked.get(key) is True else 0
-        if amount and regime == 'old' and new_regime:
+        if amount and regime == 'old' and not old_regime:
             old_only.append(label)
             amount = 0
         if amount > spl:
@@ -315,7 +317,8 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         paid[key] = amount
         spl -= amount
     if old_only:
-        notes.append('New Regime, so these Old Regime items were not given: ' + ', '.join(old_only) + '.')
+        notes.append(f'{tax_regime or "No tax regime given"}, so these Old Regime only items were not '
+                     'given: ' + ', '.join(old_only) + '.')
     if no_room:
         notes.append('Not enough Special Allowance left, so these were not given: '
                      + ', '.join(no_room) + '.')
