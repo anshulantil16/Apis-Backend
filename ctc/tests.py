@@ -329,13 +329,15 @@ class Calculator(TestCase):
                                  ('M4', 'BOTH', 12), ('M4', 'GENERAL TRADE', 12), ('M4', 'ALTERNATE CHANNELS', 12),
                                  ('M5', 'ALTERNATE CHANNELS', 15)]:
             self.assertEqual(vpp_percent('Sales', grade, dept, 'Business Head')[0], pct, (grade, dept))
-        # Anything the table doesn't have: no VPP, whatever the designation.
-        for grade, dept in [('M2', 'ALTERNATE CHANNELS'), ('M5', 'GENERAL TRADE'), ('M1', 'BOTH'),
-                            ('C2', 'ALTERNATE CHANNELS'), ('M6', 'GENERAL TRADE'), ('C1', 'BOTH'),
-                            ('M3', 'ASM')]:
-            pct, why = vpp_percent('Sales', grade, dept, 'Business Head')
-            self.assertEqual(pct, 0, (grade, dept))
-            self.assertIn('No Sales VPP', why)
+        # M5 and above: 15%, whatever the department.
+        for grade in ('M5', 'M6', 'C1', 'C2', 'C3', 'C4', 'C5', 'D1'):
+            for dept in ('GENERAL TRADE', 'ALTERNATE CHANNELS', 'BOTH', ''):
+                self.assertEqual(vpp_percent('Sales', grade, dept, 'ase')[0], 15, (grade, dept))
+        # Below M5, a department the table doesn't pair with the grade: the
+        # grade's rate (the higher of two) - never 0.
+        for grade, dept, pct in [('M2', 'ALTERNATE CHANNELS', 10), ('M1', 'BOTH', 12), ('M3', 'BOTH', 12),
+                                 ('M3', 'ASM', 12), ('M1', '', 12), ('M4', '', 12)]:
+            self.assertEqual(vpp_percent('Sales', grade, dept, 'Business Head')[0], pct, (grade, dept))
         self.assertEqual(vpp_percent('HO', 'C1', '', 'Manager')[0], 8)       # HO is not the Sales table
         # Managerial roles and above only.
         self.assertEqual(vpp_percent('Sales', 'O5', 'GT', 'ASM')[0], 0)

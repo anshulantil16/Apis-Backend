@@ -79,9 +79,13 @@ MEDICLAIM = {
 
 # Variable / Performance Pay, as a % of total CTC.
 #
-# Sales: P & C's VPP table, and nothing else - the grade and the Department
-# (GENERAL TRADE / ALTERNATE CHANNELS / BOTH, from the template) must match a
-# row. A row for BOTH applies to either department. No match: no VPP.
+# Sales, grade M5 and above (M5, M6, C1-C5, D): 15%, whatever the department.
+VPP_SALES_SENIOR = 15
+VPP_SALES_SENIOR_FROM_GRADE = 'M5'
+# Sales below M5: P & C's VPP table - the grade and the Department (GENERAL
+# TRADE / ALTERNATE CHANNELS / BOTH, from the template) must match a row. A
+# row for BOTH applies to either department. No match for the department:
+# the grade's rate, the higher one where it has two.
 VPP_SALES = [
     # grade, department,           %
     ('C2', 'General Trade',       15),

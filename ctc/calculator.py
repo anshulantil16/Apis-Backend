@@ -135,8 +135,10 @@ def vpp_percent(category, grade, department, designation, date_of_joining=None):
     """(percent, description). With a percent, the description names the
     rule that gave it; with 0, it says why.
 
-    Sales: P & C's table only (rules.VPP_SALES) - grade and department must
-    match a row; a BOTH row fits either department.
+    Sales: grade M5 and above (M5, M6, C1-C5, D) 15%, any department. Below
+    M5, P & C's table (rules.VPP_SALES) by grade and department; a BOTH row
+    fits either department. A department that matches no row for the grade
+    takes the grade's rate (the higher of two) - never 0 for a grade in it.
     HO (Corporate) and Plant (Factory): 8% from grade M3 up, except Deputy
     and Assistant Managers. Managerial roles and above only (cadres D, C, M).
     `date_of_joining` is accepted for callers but no rule uses it now."""
@@ -145,14 +147,18 @@ def vpp_percent(category, grade, department, designation, date_of_joining=None):
     if category not in ('Sales', 'HO', 'Plant'):
         return 0, ''
     if category == 'Sales':
+        if rank is not None and rank >= _grade_rank(rules.VPP_SALES_SENIOR_FROM_GRADE):
+            return rules.VPP_SALES_SENIOR, f'Sales · grade {rules.VPP_SALES_SENIOR_FROM_GRADE} and above'
         dept = _sales_department(department)
         for r_grade, r_dept, pct in rules.VPP_SALES:
             if r_grade == g and (r_dept == 'Both' or r_dept == dept):
                 return pct, f'Sales · grade {g} · {r_dept}'
-        rows = [f'{d} {p}%' for r_g, d, p in rules.VPP_SALES if r_g == g]
-        if rows:
-            return 0, (f'No Sales VPP: the VPP table has grade {g} only for ' + ' and '.join(rows)
-                       + f', and the department is "{department or "-"}".')
+        # The department doesn't match a row for this grade (or is BOTH where
+        # the grade has two): the grade's rate from the table - the higher one
+        # if it has two - rather than none.
+        rates = [p for r_g, _d, p in rules.VPP_SALES if r_g == g]
+        if rates:
+            return max(rates), f'Sales · grade {g} (table rate for the grade)'
         return 0, f'No Sales VPP: grade {g or "-"} is not in the Sales VPP table.'
     if rank is not None and rank[0] < _CADRE_RANK['M']:
         return 0, f'No VPP: the Variable Pay Policy covers managerial roles and above, not grade {g}.'
