@@ -78,7 +78,9 @@ def _option_columns(ws, lists):
     dept, category = _col('department'), _col('category')
     dd = DataValidation(type='list',
                         formula1=f'IF({own(category)}="Sales",Lists!$E$1:$E${len(SALES_DEPARTMENTS)},Lists!$C$1)',
-                        allow_blank=True, showErrorMessage=False)
+                        allow_blank=True, showErrorMessage=False, showInputMessage=True,
+                        promptTitle='Department',
+                        prompt='Sales: pick from the list.\nHO / Plant: just type it (the list is empty).')
     dd.add(f'{dept}2:{dept}2001')
     ws.add_data_validation(dd)
 
