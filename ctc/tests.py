@@ -4,7 +4,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from openpyxl import Workbook, load_workbook
 
-from accounts.models import PortalSession, PortalUser
+from accounts.models import AppKey, PortalSession, PortalUser
 
 from .calculator import calculate, state_for, vpp_percent
 from .columns import COLUMNS, OPTION_COLUMNS
@@ -47,10 +47,15 @@ class CtcUploads(TestCase):
     def setUp(self):
         self.admin = PortalUser.objects.create(email='a@apisindia.com', employee_code='A1',
                                                name='Admin', is_superadmin=True)
+        # Alice and Bob are P & C: the CTC Calculator is granted to them from
+        # Admin Console. Being signed in is not enough on its own.
         self.alice = PortalUser.objects.create(email='alice@apisindia.com', employee_code='E1',
-                                               name='Alice')
+                                               name='Alice', app_access=[AppKey.CTC])
         self.bob = PortalUser.objects.create(email='bob@apisindia.com', employee_code='E2',
-                                             name='Bob')
+                                             name='Bob', app_access=[AppKey.CTC])
+        # Carol is an ordinary employee with no tools granted.
+        self.carol = PortalUser.objects.create(email='carol@apisindia.com', employee_code='E3',
+                                               name='Carol')
 
     def _auth(self, user):
         return {'HTTP_AUTHORIZATION': f'Bearer {PortalSession.start(user)}'}
@@ -525,3 +530,47 @@ class Calculator(TestCase):
         note = next((n for n in b['notes'] if 'right at the' in n), '')
         self.assertIn('Rs 3,600', note)
         self.assertNotIn('Rs 3,000', note)
+
+
+class CtcAccessIsGranted(TestCase):
+    """The Admin Console matrix has to be a control, not a courtesy.
+
+    Candidate names and the salaries they are offered sit behind these
+    endpoints. Before the CTC Calculator was a grantable tool every signed-in
+    employee -- all 664 of them -- could open it, because the only check was
+    "are you signed in" and the screen decided the rest.
+    """
+    def setUp(self):
+        self.granted = PortalUser.objects.create(email='pc@apisindia.com', employee_code='P1',
+                                                 name='P and C', app_access=[AppKey.CTC])
+        self.plain = PortalUser.objects.create(email='emp@apisindia.com', employee_code='P2',
+                                               name='Employee')
+        self.admin = PortalUser.objects.create(email='sa@apisindia.com', employee_code='P3',
+                                               name='Super', is_superadmin=True)
+
+    def _auth(self, user):
+        return {'HTTP_AUTHORIZATION': f'Bearer {PortalSession.start(user)}'}
+
+    def test_an_employee_without_the_grant_is_refused_everywhere(self):
+        for path in ('/template/', '/uploads/', '/settings/'):
+            r = self.client.get(f'{BASE}{path}', **self._auth(self.plain))
+            self.assertEqual(r.status_code, 403, path)
+        r = self.client.post(f'{BASE}/uploads/', {}, **self._auth(self.plain))
+        self.assertEqual(r.status_code, 403)
+
+    def test_the_grant_opens_it_and_a_super_admin_never_needs_one(self):
+        for user in (self.granted, self.admin):
+            for path in ('/template/', '/uploads/', '/settings/'):
+                r = self.client.get(f'{BASE}{path}', **self._auth(user))
+                self.assertEqual(r.status_code, 200, (user.email, path))
+
+    def test_signed_out_is_401_not_403(self):
+        # 401 is what tells the browser the token is dead; 403 would leave a
+        # stale token in place and the person stuck on a blank screen.
+        self.assertEqual(self.client.get(f'{BASE}/uploads/').status_code, 401)
+
+    def test_the_tool_is_in_the_admin_console_matrix(self):
+        # The column only exists because AppKey does -- that is what makes a
+        # new tool controllable without anyone remembering to wire it up.
+        self.assertIn('ctc-calculator', AppKey.values)
+        self.assertEqual(AppKey.CTC.label, 'CTC Calculator')
