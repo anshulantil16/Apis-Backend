@@ -121,7 +121,6 @@ def build_pdf(candidate, b) -> bytes:
         ('Cadre', b['cadre']),
         ('Grade', b['grade']),
         ('Work Location', candidate.work_location),
-        ('Tax Regime', getattr(candidate, 'tax_regime', '')),
     ]
     for k, v in details:
         rows.append([Paragraph(k, label), Paragraph(str(v or ''), value)])
