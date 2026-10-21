@@ -53,7 +53,8 @@ def serialize_user(u):
     return {
         'id': u.id,
         'employee_code': u.employee_code,
-        'email': u.email,
+        'email': u.email or '',
+        'can_sign_in': u.can_sign_in,
         'name': u.name,
         'designation': u.designation,
         'department': u.department,
@@ -298,7 +299,7 @@ class MyProfileView(PortalAPIView):
         return Response({'profile': {
             'name': u.name,
             'employee_code': u.employee_code,
-            'email': u.email,
+            'email': u.email or '',
             'designation': u.designation,
             'department': u.department,
             'category': u.category,

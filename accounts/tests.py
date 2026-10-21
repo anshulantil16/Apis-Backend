@@ -22,6 +22,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 
 from .models import HrmsSyncLog
+from .views import serialize_user
 
 from .models import PortalOTP, PortalSession, PortalUser, SUPERADMIN_BOOTSTRAP_EMAIL
 
@@ -1105,3 +1106,93 @@ class WhereTheReadableValueLives(TestCase):
         self.assertEqual(hrms._resolved({'Department': '37'}, 'Department'), '')
         self.assertEqual(hrms._resolved({'Department': '0'}, 'Department'), '')
         self.assertEqual(hrms._resolved({}, 'Department'), '')
+
+
+class PeopleHrmsHasNoAddressFor(TestCase):
+    """Six NA-coded staff and 47 others work here and were not in the master.
+
+    They were skipped because the portal signs people in by email and they
+    have none. But the directory is what the company counts itself with --
+    headcount, departments, reporting lines, birthdays -- and leaving 53
+    people out of it to protect a login they were never going to use made
+    the master disagree with the company. They are imported now and simply
+    cannot sign in until HR fills an address in upstream.
+    """
+
+    def _sync(self, rows):
+        log = HrmsSyncLog.objects.create(triggered_by='test')
+        hrms._write_employees(log, rows, deactivate_missing=False,
+                              modified_since=None, emp_status=hrms.ACTIVE_ONLY)
+        return log
+
+    @staticmethod
+    def _row(code, email='', fname='A Person', status='Live'):
+        return {'Code': code, 'Email': email, 'FName': fname, 'EmpStatus': status}
+
+    def test_a_person_with_no_address_is_imported_not_dropped(self):
+        log = self._sync([self._row('NA0001', fname='KUNAL PAREWA')])
+        u = PortalUser.objects.get(employee_code='NA0001')
+        self.assertEqual(u.name, 'KUNAL PAREWA')
+        self.assertIsNone(u.email, 'stored as NULL, not an empty string')
+        self.assertEqual(log.created, 1)
+        self.assertEqual(log.skipped_no_email, 1, 'counted, so HR can be told')
+
+    def test_all_six_arrive_rather_than_collapsing_into_one(self):
+        """The trap this fell into, verified by removing the guard.
+
+        The duplicate-email check keys on the address. Keyed on '' as well,
+        the first address-less person claims the empty key and every one
+        after looks like a duplicate of them: six people arrive as one, five
+        counted as clashes. Without the `if email:` guard in
+        _write_employees this test fails 1 != 6.
+        """
+        self._sync([self._row(c) for c in
+                    ('NA0001', 'NA0002', 'NA0003', 'NA0004', 'NA0005', 'NA0006')])
+        self.assertEqual(PortalUser.objects.filter(employee_code__startswith='NA').count(), 6)
+
+    def test_they_cannot_sign_in_until_there_is_somewhere_to_send_the_code(self):
+        self._sync([self._row('NA0001')])
+        u = PortalUser.objects.get(employee_code='NA0001')
+        self.assertTrue(u.is_active, 'they work here')
+        self.assertFalse(u.can_sign_in, 'but there is nowhere to send a code')
+
+    def test_hr_filling_the_address_in_later_completes_the_same_person(self):
+        """What happens next, per the plan: HR adds the address in Pocket
+        HRMS and the following sync finds them by employee code. One person,
+        updated -- not a second record alongside the first."""
+        self._sync([self._row('NA0001', fname='KUNAL PAREWA')])
+        log = self._sync([self._row('NA0001', email='kunal@apisindia.com',
+                                    fname='KUNAL PAREWA')])
+        self.assertEqual(log.created, 0)
+        self.assertEqual(log.updated, 1)
+        self.assertEqual(PortalUser.objects.filter(employee_code='NA0001').count(), 1)
+        u = PortalUser.objects.get(employee_code='NA0001')
+        self.assertEqual(u.email, 'kunal@apisindia.com')
+        self.assertTrue(u.can_sign_in)
+
+    def test_two_real_addresses_that_clash_are_still_refused(self):
+        """Letting a blank through must not weaken the check that stops one
+        person taking over another's account."""
+        log = self._sync([self._row('HO0001', email='same@apisindia.com'),
+                          self._row('HO0002', email='same@apisindia.com')])
+        self.assertEqual(log.skipped_duplicate_email, 1)
+        self.assertEqual(PortalUser.objects.filter(email='same@apisindia.com').count(), 1)
+
+    def test_a_screen_is_given_a_string_never_null(self):
+        self._sync([self._row('NA0001')])
+        u = PortalUser.objects.get(employee_code='NA0001')
+        self.assertEqual(serialize_user(u)['email'], '')
+        self.assertIs(serialize_user(u)['can_sign_in'], False)
+
+    def test_a_working_address_is_never_replaced_with_nothing(self):
+        """Live has an NA-coded account somebody typed in by hand, with a
+        real address, precisely BECAUSE Pocket HRMS holds none. Importing
+        the HRMS row must not blank it -- that would take away the login
+        created to work around the gap, silently, every night."""
+        PortalUser.objects.create(employee_code='NA0005', name='Rainy Chaudhary',
+                                  email='rainy@apisindia.com')
+        self._sync([self._row('NA0005', fname='RAINY CHAUDHARY')])
+        u = PortalUser.objects.get(employee_code='NA0005')
+        self.assertEqual(u.email, 'rainy@apisindia.com')
+        self.assertTrue(u.can_sign_in)
+        self.assertEqual(u.name, 'RAINY CHAUDHARY', 'the rest of the row still updates')
