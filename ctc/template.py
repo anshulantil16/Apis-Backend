@@ -60,7 +60,7 @@ def _option_columns(ws, lists):
         cell.comment = Comment(
             'Gross Earnings - Yes or No. Blank means No.\n\nYes pays it at the cadre slab out of the '
             'Special Allowance left, in preference order - only if it fits in full.'
-            + ('\n\nOld Regime only - not given under New Regime or Both Regime.'
+            + ('\n\nOld Regime only - not given under New Regime.'
                if regimes.get(key) == 'old' else '')
             + '\n\nOnly for cadres D, C and M with a CTC above Rs 12 lakh - greyed out otherwise.',
             'APIS Intranet')
@@ -98,7 +98,7 @@ def _option_columns(ws, lists):
     rv = DataValidation(type='list',
                         formula1=f'IF({small},Lists!$C$1,Lists!$D$1:$D${len(TAX_REGIMES)})',
                         allow_blank=True, showErrorMessage=True, errorTitle='Tax Regime',
-                        error='Pick Old Regime, New Regime or Both Regime. Only for a CTC above '
+                        error='Pick Old Regime or New Regime. Only for a CTC above '
                               'Rs 12 lakh - otherwise leave it blank.')
     rv.add(f'{regime}2:{regime}2001')
     ws.add_data_validation(rv)
@@ -121,7 +121,7 @@ def build_template() -> bytes:
     lists.sheet_state = 'hidden'
     _option_columns(ws, lists)
 
-    # Dropdowns, so Category and Cadre can only be typed one way.
+    # Dropdowns, so Category, Cadre and Number of Children can only be typed one way.
     for i, (_h, field, *_rest) in enumerate(COLUMNS, start=1):
         if field in CHOICES:
             dv = DataValidation(type='list', formula1='"' + ','.join(CHOICES[field]) + '"',

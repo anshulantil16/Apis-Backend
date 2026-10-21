@@ -320,7 +320,8 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
                      f'Rs {_inr(rules.REIMBURSEMENT_MIN_CTC)}.')
     car_lease = picked.get('car') is True               # as per the car lease policy
     # Old Regime gets the Old Regime items and the Both Regime ones; New
-    # Regime and Both Regime get only the Both Regime ones.
+    # Regime (and a 'Both Regime' row from before it was dropped) gets only
+    # the Both Regime ones.
     old_regime = _norm(tax_regime) == 'oldregime'
     paid, no_room, old_only = {}, [], []
     for key, label, amounts, regime in rules.REIMBURSEMENTS:

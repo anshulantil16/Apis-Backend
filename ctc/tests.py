@@ -72,7 +72,11 @@ class CtcUploads(TestCase):
         lists = [dv.formula1 for dv in ws.data_validations.dataValidation]
         self.assertIn('"Sales,HO,Plant"', lists)
         self.assertIn('"D,C,M,O,W"', lists)
-        self.assertIn('IF(N(INDEX($I:$I,ROW()))<=1200000,Lists!$C$1,Lists!$D$1:$D$3)', lists)   # Tax Regime
+        self.assertIn('"0,1,2"', lists)                                     # Number of Children
+        self.assertIn('IF(N(INDEX($I:$I,ROW()))<=1200000,Lists!$C$1,Lists!$D$1:$D$2)', lists)   # Tax Regime
+        regimes = load_workbook(io.BytesIO(r.content))['Lists']
+        self.assertEqual([regimes.cell(row=i, column=4).value for i in (1, 2, 3)],
+                         ['Old Regime', 'New Regime', None])
         # Gross Earnings: Yes/No, but an empty list (and greyed out) for O and W.
         self.assertIn('IF(OR(INDEX($F:$F,ROW())="O",INDEX($F:$F,ROW())="W",N(INDEX($I:$I,ROW()))<=1200000),'
                       'Lists!$C$1,Lists!$B$1:$B$2)', lists)
@@ -129,12 +133,14 @@ class CtcUploads(TestCase):
 
     def test_tax_regime_is_read_and_optional(self):
         rows = [_row(tax_regime='old', ctc=1500000),
-                _row(candidate_name='B', tax_regime='BOTH REGIME', ctc=1500000),
+                _row(candidate_name='B', tax_regime='NEW', ctc=1500000),
                 _row(candidate_name='C', tax_regime='', ctc=1500000),
                 _row(candidate_name='D', tax_regime='New Regime', ctc=1200000)]   # up to 12 lakh: ignored
         self.assertEqual(self._upload(self.alice, _xlsx(rows)).status_code, 201)
         self.assertEqual([c.tax_regime for c in CtcCandidate.objects.order_by('row_number')],
-                         ['Old Regime', 'Both Regime', '', ''])
+                         ['Old Regime', 'New Regime', '', ''])
+        r = self._upload(self.alice, _xlsx([_row(tax_regime='Both Regime', ctc=1500000)]))
+        self.assertIn('should be Old Regime or New Regime', str(r.json()))
         # 'N/A' (from an older template) is read as blank, not an error.
         self.assertEqual(self._upload(self.alice, _xlsx([_row(tax_regime='N/A', ctc=1500000)])).status_code, 201)
         r = self._upload(self.alice, _xlsx([_row(tax_regime='flat tax')]))
@@ -170,6 +176,7 @@ class CtcUploads(TestCase):
             _row(candidate_name='Raj', category='HO', grade='O4', cadre='M'),  # row 8: grade/cadre clash
             _row(candidate_name='Sia', category='HO', grade='', cadre=''),    # row 9: no grade/cadre
             _row(candidate_name='Uma', number_of_children='two'),            # row 10: bad count
+            _row(candidate_name='Ved', number_of_children=3),                # row 11: more than two
         ]
         r = self._upload(self.alice, _xlsx([ROW, *bad]))
         self.assertEqual(r.status_code, 400)
@@ -178,7 +185,8 @@ class CtcUploads(TestCase):
                          'Row 5: CTC is empty', 'Row 6: Category "Marketing"',
                          'Row 8: Grade O4 does not belong to cadre M',
                          'Row 9: Grade is empty', 'Row 9: Cadre is empty',
-                         'Row 10: Number of Children "two"'):
+                         'Row 10: Number of Children "two"',
+                         'Row 11: Number of Children "3" should be 0, 1 or 2'):
             self.assertIn(expected, p)
         self.assertNotIn('Row 7', p, '"Officer" should read as cadre O')
         self.assertFalse(CtcUpload.objects.exists())
@@ -446,8 +454,9 @@ class Calculator(TestCase):
         self.assertEqual(paid, {'telephone': 5000, 'driver': 3000})
         self.assertEqual(b['earnings'][4]['monthly'], 683)
         self.assertTrue(any('Not enough Special Allowance' in n for n in b['notes']))
-        # Books and Uniform (Old Regime only) only under Old Regime; New and Both
-        # Regime get the Both Regime items only.
+        # Books and Uniform (Old Regime only) only under Old Regime; New Regime
+        # (and a 'Both Regime' row stored before it was dropped) gets the Both
+        # Regime items only.
         rich = dict(base, ctc_annual=6000000)
         for regime, books in (('Old Regime', 5000), ('New Regime', 0), ('Both Regime', 0), ('', 0)):
             b = self.calc(**rich, options=everything, tax_regime=regime)
@@ -455,7 +464,7 @@ class Calculator(TestCase):
             self.assertEqual((paid['books'], paid['uniform']), (books, books), regime)
             self.assertEqual(paid['meal'], 9600, regime)                     # Both Regime item
         self.assertTrue(any('Old Regime only' in n for n in
-                            self.calc(**rich, options=everything, tax_regime='Both Regime')['notes']))
+                            self.calc(**rich, options=everything, tax_regime='New Regime')['notes']))
         # Up to Rs 12 lakh: none at all.
         small = self.calc(**dict(base, ctc_annual=1200000), options=everything)
         self.assertEqual(sum(x['monthly'] for x in small['reimbursements']), 0)

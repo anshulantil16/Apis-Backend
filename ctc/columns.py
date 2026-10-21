@@ -15,7 +15,7 @@ COLUMNS = [
     ('Grade',          'grade',          10, True,  'e.g. M1, M3, O5, C2. Required.'),
     ('Cadre',          'cadre',          10, True,  'D, C, M, O or W. Required.'),
     ('Number of Children', 'number_of_children', 12, False,
-     'Optional - 0, 1, 2 ... Leave blank for none.\n\nChild Education Allowance is '
+     'Optional - 0, 1 or 2, picked from the list. Leave blank for none.\n\nChild Education Allowance is '
      'Rs 3,000 a month per child, for up to 2 children (cadres D, C, M).'),
     ('Work Location',  'work_location',  20, False,
      'State, picked from the list - or a city such as Delhi HO, Roorkee, Mumbai.\n\n'
@@ -24,17 +24,17 @@ COLUMNS = [
      'Total annual CTC in rupees, including Variable Pay and Gift. Required.\n\n'
      'e.g. 1200000 (commas and the ₹ sign are fine too).'),
     ('Tax Regime',     'tax_regime',     16, False,
-     'Old Regime, New Regime or Both Regime, picked from the list.\n\n'
+     'Old Regime or New Regime, picked from the list.\n\n'
      'Only for a CTC above Rs 12 lakh - greyed out otherwise.\n\n'
-     'Old Regime gets every item; New Regime and Both Regime get all but Books and '
-     'Uniform (Old Regime only).'),
+     'Old Regime gets every item; New Regime gets only the Both Regime items - all but '
+     'Books and Uniform (Old Regime only).'),
 ]
 
 # Columns a sheet may leave out altogether (added after the template first
 # went out, so an older filled-in template still uploads).
 OPTIONAL_FIELDS = {'tax_regime'}
 
-TAX_REGIMES = ['Old Regime', 'New Regime', 'Both Regime']
+TAX_REGIMES = ['Old Regime', 'New Regime']
 
 # The Department choices for a Sales row (P & C's VPP table).
 SALES_DEPARTMENTS = ['GENERAL TRADE', 'ALTERNATE CHANNELS', 'BOTH']
@@ -64,6 +64,7 @@ NOT_ANSWERED = {'', 'na', 'n/a', '-', 'not applicable'}
 CHOICES = {
     'category': ['Sales', 'HO', 'Plant'],
     'cadre': ['D', 'C', 'M', 'O', 'W'],
+    'number_of_children': ['0', '1', '2'],
 }
 
 MAX_LENGTH = {
