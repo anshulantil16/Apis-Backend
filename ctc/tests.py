@@ -72,6 +72,7 @@ class CtcUploads(TestCase):
         lists = [dv.formula1 for dv in ws.data_validations.dataValidation]
         self.assertIn('"Sales,HO,Plant"', lists)
         self.assertIn('"D,C,M,O,W"', lists)
+        self.assertIn('"0,1,2"', lists)                                     # Number of Children
         self.assertIn('IF(N(INDEX($I:$I,ROW()))<=1200000,Lists!$C$1,Lists!$D$1:$D$3)', lists)   # Tax Regime
         # Gross Earnings: Yes/No, but an empty list (and greyed out) for O and W.
         self.assertIn('IF(OR(INDEX($F:$F,ROW())="O",INDEX($F:$F,ROW())="W",N(INDEX($I:$I,ROW()))<=1200000),'
@@ -170,6 +171,7 @@ class CtcUploads(TestCase):
             _row(candidate_name='Raj', category='HO', grade='O4', cadre='M'),  # row 8: grade/cadre clash
             _row(candidate_name='Sia', category='HO', grade='', cadre=''),    # row 9: no grade/cadre
             _row(candidate_name='Uma', number_of_children='two'),            # row 10: bad count
+            _row(candidate_name='Ved', number_of_children=3),                # row 11: more than two
         ]
         r = self._upload(self.alice, _xlsx([ROW, *bad]))
         self.assertEqual(r.status_code, 400)
@@ -178,7 +180,8 @@ class CtcUploads(TestCase):
                          'Row 5: CTC is empty', 'Row 6: Category "Marketing"',
                          'Row 8: Grade O4 does not belong to cadre M',
                          'Row 9: Grade is empty', 'Row 9: Cadre is empty',
-                         'Row 10: Number of Children "two"'):
+                         'Row 10: Number of Children "two"',
+                         'Row 11: Number of Children "3" should be 0, 1 or 2'):
             self.assertIn(expected, p)
         self.assertNotIn('Row 7', p, '"Officer" should read as cadre O')
         self.assertFalse(CtcUpload.objects.exists())

@@ -15,7 +15,7 @@ COLUMNS = [
     ('Grade',          'grade',          10, True,  'e.g. M1, M3, O5, C2. Required.'),
     ('Cadre',          'cadre',          10, True,  'D, C, M, O or W. Required.'),
     ('Number of Children', 'number_of_children', 12, False,
-     'Optional - 0, 1, 2 ... Leave blank for none.\n\nChild Education Allowance is '
+     'Optional - 0, 1 or 2, picked from the list. Leave blank for none.\n\nChild Education Allowance is '
      'Rs 3,000 a month per child, for up to 2 children (cadres D, C, M).'),
     ('Work Location',  'work_location',  20, False,
      'State, picked from the list - or a city such as Delhi HO, Roorkee, Mumbai.\n\n'
@@ -64,6 +64,7 @@ NOT_ANSWERED = {'', 'na', 'n/a', '-', 'not applicable'}
 CHOICES = {
     'category': ['Sales', 'HO', 'Plant'],
     'cadre': ['D', 'C', 'M', 'O', 'W'],
+    'number_of_children': ['0', '1', '2'],
 }
 
 MAX_LENGTH = {

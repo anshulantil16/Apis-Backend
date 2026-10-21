@@ -121,7 +121,7 @@ def build_template() -> bytes:
     lists.sheet_state = 'hidden'
     _option_columns(ws, lists)
 
-    # Dropdowns, so Category and Cadre can only be typed one way.
+    # Dropdowns, so Category, Cadre and Number of Children can only be typed one way.
     for i, (_h, field, *_rest) in enumerate(COLUMNS, start=1):
         if field in CHOICES:
             dv = DataValidation(type='list', formula1='"' + ','.join(CHOICES[field]) + '"',

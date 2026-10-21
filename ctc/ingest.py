@@ -150,11 +150,10 @@ def parse(fileobj):
                     row['ctc'] = amount.quantize(Decimal('0.01'))
             kids_text, row['number_of_children'] = row['number_of_children'], 0
             if kids_text:
-                if kids_text.isdigit() and int(kids_text) <= 20:
+                if kids_text.isdigit() and int(kids_text) <= 2:
                     row['number_of_children'] = int(kids_text)
                 else:
-                    errors.append(f'Row {n}: Number of Children "{kids_text}" should be a whole number '
-                                  'such as 0, 1 or 2.')
+                    errors.append(f'Row {n}: Number of Children "{kids_text}" should be 0, 1 or 2.')
             for field, value in row.items():
                 if field in ('ctc', 'number_of_children', 'gross_earnings'):
                     continue
