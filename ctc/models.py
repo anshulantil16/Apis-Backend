@@ -59,7 +59,8 @@ class CtcCandidate(models.Model):
     work_location  = models.CharField(max_length=120, blank=True)
     # Annual CTC in rupees, as offered.
     ctc            = models.DecimalField(max_digits=12, decimal_places=2)
-    # Old Regime / New Regime / Both Regime (columns.TAX_REGIMES), or blank.
+    # Old Regime / New Regime (columns.TAX_REGIMES), or blank. Rows uploaded
+    # before Both Regime was dropped may still hold it; it counts as New Regime.
     tax_regime     = models.CharField(max_length=20, blank=True)
     # The Gross Earnings items answered on the template, {key: True/False}
     # (columns.OPTION_COLUMNS); a missing key takes that column's default.

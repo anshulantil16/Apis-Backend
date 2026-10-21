@@ -126,7 +126,7 @@ def parse(fileobj):
                     row['tax_regime'] = regime
                 else:
                     errors.append(f'Row {n}: Tax Regime "{row["tax_regime"]}" should be '
-                                  'Old Regime, New Regime or Both Regime.')
+                                  'Old Regime or New Regime.')
             if row['cadre']:
                 cadre = normalise_cadre(row['cadre'])
                 if cadre:

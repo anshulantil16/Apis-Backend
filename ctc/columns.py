@@ -24,17 +24,17 @@ COLUMNS = [
      'Total annual CTC in rupees, including Variable Pay and Gift. Required.\n\n'
      'e.g. 1200000 (commas and the ₹ sign are fine too).'),
     ('Tax Regime',     'tax_regime',     16, False,
-     'Old Regime, New Regime or Both Regime, picked from the list.\n\n'
+     'Old Regime or New Regime, picked from the list.\n\n'
      'Only for a CTC above Rs 12 lakh - greyed out otherwise.\n\n'
-     'Old Regime gets every item; New Regime and Both Regime get all but Books and '
-     'Uniform (Old Regime only).'),
+     'Old Regime gets every item; New Regime gets only the Both Regime items - all but '
+     'Books and Uniform (Old Regime only).'),
 ]
 
 # Columns a sheet may leave out altogether (added after the template first
 # went out, so an older filled-in template still uploads).
 OPTIONAL_FIELDS = {'tax_regime'}
 
-TAX_REGIMES = ['Old Regime', 'New Regime', 'Both Regime']
+TAX_REGIMES = ['Old Regime', 'New Regime']
 
 # The Department choices for a Sales row (P & C's VPP table).
 SALES_DEPARTMENTS = ['GENERAL TRADE', 'ALTERNATE CHANNELS', 'BOTH']
