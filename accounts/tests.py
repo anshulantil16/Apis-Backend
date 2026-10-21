@@ -1183,3 +1183,16 @@ class PeopleHrmsHasNoAddressFor(TestCase):
         u = PortalUser.objects.get(employee_code='NA0001')
         self.assertEqual(serialize_user(u)['email'], '')
         self.assertIs(serialize_user(u)['can_sign_in'], False)
+
+    def test_a_working_address_is_never_replaced_with_nothing(self):
+        """Live has an NA-coded account somebody typed in by hand, with a
+        real address, precisely BECAUSE Pocket HRMS holds none. Importing
+        the HRMS row must not blank it -- that would take away the login
+        created to work around the gap, silently, every night."""
+        PortalUser.objects.create(employee_code='NA0005', name='Rainy Chaudhary',
+                                  email='rainy@apisindia.com')
+        self._sync([self._row('NA0005', fname='RAINY CHAUDHARY')])
+        u = PortalUser.objects.get(employee_code='NA0005')
+        self.assertEqual(u.email, 'rainy@apisindia.com')
+        self.assertTrue(u.can_sign_in)
+        self.assertEqual(u.name, 'RAINY CHAUDHARY', 'the rest of the row still updates')

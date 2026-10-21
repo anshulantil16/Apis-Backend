@@ -562,6 +562,14 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status,
                     # person is adopted rather than duplicated.
                     existing.employee_code = code
                     for k, v in fields.items():
+                        # An address we already hold is never replaced with
+                        # "none". Somebody was typed into the console with a
+                        # working address precisely BECAUSE Pocket HRMS has
+                        # none for them -- overwriting it would take away the
+                        # login that was created to work around the gap, and
+                        # the sync would do it silently every night.
+                        if k == 'email' and v is None and existing.email:
+                            continue
                         setattr(existing, k, v)
                     # The founding account can never be deactivated by an
                     # upstream status change - that is how a company locks
