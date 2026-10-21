@@ -472,15 +472,26 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status,
                       'PersonalEmail').lower()
         if not code:
             continue
+        # No address is no longer a reason to leave somebody out of the
+        # directory. They are imported and counted; they simply cannot sign
+        # in until HR fills the address in, at which point the next sync
+        # finds them by code and adds it. Until then the column is NULL, not
+        # '' -- see PortalUser.email for why that distinction matters.
         if not email:
             log.skipped_no_email += 1
-            continue
 
         seen_codes.append(code)
         active = _is_active(row)
 
-        existing = (PortalUser.objects.filter(employee_code=code).first()
-                    or PortalUser.objects.filter(email__iexact=email).first())
+        # The fallback is only asked when there IS an address to match on.
+        # Matching '' against a column that stores NULL finds nothing, so
+        # this is a pointless query rather than a dangerous one -- but it
+        # runs for every address-less person on every sync, and saying
+        # plainly that the fallback needs an address is worth more than the
+        # query it saves.
+        existing = PortalUser.objects.filter(employee_code=code).first()
+        if not existing and email:
+            existing = PortalUser.objects.filter(email__iexact=email).first()
 
         # A leaver who never had a portal account does not get one now. The
         # feed carries every employee APIS has ever had - two thirds of the
@@ -500,14 +511,19 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status,
         # take over the first person's account, employee code and all, and one
         # of them would lose their login with nothing saying so. First row
         # keeps it; the clash is named in the log so HR can fix it upstream.
-        if claimed_by.get(email, code) != code:
-            log.skipped_duplicate_email += 1
-            clashes.append(f'{code} and {claimed_by[email]} both use {email}')
-            continue
-        claimed_by[email] = code
+        # Only a real address can be claimed. Keyed on '' instead, every
+        # address-less person after the first would look like a duplicate of
+        # the first and be skipped -- the very bug this block exists to stop,
+        # inverted.
+        if email:
+            if claimed_by.get(email, code) != code:
+                log.skipped_duplicate_email += 1
+                clashes.append(f'{code} and {claimed_by[email]} both use {email}')
+                continue
+            claimed_by[email] = code
 
         fields = {
-            'email': email,
+            'email': email or None,
             'name': _name_of(row) or code,
             'designation': _resolved(row, 'Designation'),
             'department': _resolved(row, 'Department'),
@@ -597,7 +613,8 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status,
     prefix = getattr(log, 'message_prefix', '')
     log.message = (prefix + '\n\n') if prefix else ''
     log.message += (f'{log.created} created, {log.updated} updated, '
-                   f'{log.deactivated} deactivated, {log.skipped_no_email} skipped (no email), '
+                   f'{log.deactivated} deactivated, {log.skipped_no_email} without an email '
+                   f'(in the directory, cannot sign in), '
                    f'{log.skipped_leavers} skipped (already left).')
     if refused:
         log.message += ('\n\nThe database would not accept these rows, so '

@@ -88,7 +88,15 @@ class PortalUser(models.Model):
 
     # ── Identity, synced from Pocket HRMS ────────────────────────────────────
     employee_code = models.CharField(max_length=50, unique=True)
-    email         = models.EmailField(unique=True)
+    # NULL means "HRMS has no address for this person". They belong in the
+    # directory -- they work here, they appear in headcount, departments and
+    # reporting lines -- but they cannot sign in, because the one-time code
+    # has nowhere to go. Six NA-coded staff and 47 others were being dropped
+    # from the master entirely over this, which made the directory disagree
+    # with the company. NULL rather than '' on purpose: MySQL allows many
+    # NULLs under a unique index but only one empty string, so '' would let
+    # exactly one person have no address and refuse the rest.
+    email         = models.EmailField(unique=True, null=True, blank=True)
     name          = models.CharField(max_length=200)
     designation   = models.CharField(max_length=200, blank=True)
     department    = models.CharField(max_length=200, blank=True)
@@ -198,7 +206,7 @@ class PortalUser(models.Model):
         else's last remaining access - and lock the company out of its own
         portal with no way back in short of a database edit.
         """
-        return self.email.lower() == SUPERADMIN_BOOTSTRAP_EMAIL.lower()
+        return (self.email or '').lower() == SUPERADMIN_BOOTSTRAP_EMAIL.lower()
 
     def can_open(self, app_key):
         """May this user open a given tool?"""
@@ -207,6 +215,16 @@ class PortalUser(models.Model):
         if self.is_superadmin:
             return True
         return str(app_key) in (self.app_access or [])
+
+    @property
+    def can_sign_in(self):
+        """Whether this person can actually get in.
+
+        The portal signs people in by emailing a one-time code, so no address
+        means no way in -- however active the record is. In the directory for
+        headcount and reporting, not in the portal.
+        """
+        return bool(self.is_active and self.email)
 
     @property
     def allowed_apps(self):
@@ -391,6 +409,9 @@ class HrmsSyncLog(models.Model):
     created     = models.PositiveIntegerField(default=0)
     updated     = models.PositiveIntegerField(default=0)
     deactivated = models.PositiveIntegerField(default=0)
+    # People HRMS has no address for. They ARE imported -- the directory
+    # should match the company -- but they cannot sign in until HR adds
+    # one, so the count is shown to say who is waiting on that.
     skipped_no_email = models.PositiveIntegerField(default=0)
     # Ex-employees in the feed who never had a portal account. Counted rather
     # than imported - see hrms._write_employees.
