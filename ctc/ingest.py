@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 
 from .calculator import normalise_cadre, normalise_category, sales_department
 from .rules import REIMBURSEMENT_MIN_CTC
-from .columns import (COLUMNS, MAX_CTC, MAX_LENGTH, NO, NOT_ANSWERED, OPTION_CADRES,
+from .columns import (COLUMNS, DEPARTMENTS, MAX_CTC, MAX_LENGTH, NO, NOT_ANSWERED, OPTION_CADRES,
                       OPTION_COLUMNS, OPTIONAL_FIELDS, TAX_REGIMES, YES)
 from .template import SHEET_NAME
 
@@ -118,6 +118,13 @@ def parse(fileobj):
                 else:
                     errors.append(f'Row {n}: Department "{row["department"]}" - for Sales pick GENERAL TRADE, '
                                   'ALTERNATE CHANNELS or BOTH (it sets the Variable Pay %).')
+            elif row['category'] in ('HO', 'Plant') and row['department']:
+                dept = next((d for d in DEPARTMENTS if _key(d) == _key(row['department'])), '')
+                if dept:
+                    row['department'] = dept
+                else:
+                    errors.append(f'Row {n}: Department "{row["department"]}" is not on the list - '
+                                  "pick one from the template's dropdown, e.g. Finance & Accounts.")
             if row['tax_regime'].strip().lower() in NOT_ANSWERED:
                 row['tax_regime'] = ''                     # 'N/A', '-' ... from an older template
             if row['tax_regime']:

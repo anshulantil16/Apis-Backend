@@ -9,7 +9,7 @@ COLUMNS = [
      'Sales, HO or Plant. Required.\n\nDecides which Variable Pay table applies.'),
     ('Department',     'department',     24, False,
      'Sales: pick GENERAL TRADE, ALTERNATE CHANNELS or BOTH from the list - with the '
-     'Grade it sets the Variable Pay %.\n\nHO and Plant: type the department, e.g. Finance.'),
+     'Grade it sets the Variable Pay %.\n\nHO and Plant: pick the department from the list, e.g. Finance & Accounts.'),
     ('Designation',    'designation',    30, False,
      'Job title being offered, e.g. Area Sales Manager.'),
     ('Grade',          'grade',          10, True,  'e.g. M1, M3, O5, C2. Required.'),
@@ -35,6 +35,15 @@ COLUMNS = [
 OPTIONAL_FIELDS = {'tax_regime'}
 
 TAX_REGIMES = ['Old Regime', 'New Regime']
+
+# The Department choices for an HO or Plant row (P & C's department list).
+DEPARTMENTS = [
+    'Admin & Facilities', 'Business Development', 'Business Excellence', 'Company Secretarial',
+    "Director's Office", 'Engineering', 'Export', 'Finance & Accounts', 'Information Technology',
+    'Manufacturing', 'Marketing', 'New Product Development', 'People & Culture', 'Procurement',
+    'Production', 'Quality Assurance & Control', 'Stores & Despatch', 'Supply Chain Management (SCM)',
+    'Sales',
+]
 
 # The Department choices for a Sales row (P & C's VPP table).
 SALES_DEPARTMENTS = ['GENERAL TRADE', 'ALTERNATE CHANNELS', 'BOTH']

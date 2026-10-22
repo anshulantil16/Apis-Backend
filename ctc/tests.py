@@ -7,7 +7,7 @@ from openpyxl import Workbook, load_workbook
 from accounts.models import AppKey, PortalSession, PortalUser
 
 from .calculator import calculate, state_for, vpp_percent
-from .columns import COLUMNS, OPTION_COLUMNS
+from .columns import COLUMNS, DEPARTMENTS, OPTION_COLUMNS
 from .models import CtcCandidate, CtcSettings, CtcUpload
 
 BASE = '/api/ctc'
@@ -73,6 +73,11 @@ class CtcUploads(TestCase):
         self.assertIn('"Sales,HO,Plant"', lists)
         self.assertIn('"D,C,M,O,W"', lists)
         self.assertIn('"0,1,2"', lists)                                     # Number of Children
+        # Department: the sales three on a Sales row, P & C's list otherwise.
+        self.assertIn(f'IF(INDEX($B:$B,ROW())="Sales",Lists!$E$1:$E$3,Lists!$F$1:$F${len(DEPARTMENTS)})', lists)
+        depts = load_workbook(io.BytesIO(r.content))['Lists']
+        self.assertEqual([depts.cell(row=i, column=6).value for i in range(1, len(DEPARTMENTS) + 1)],
+                         DEPARTMENTS)
         self.assertIn('IF(N(INDEX($I:$I,ROW()))<=1200000,Lists!$C$1,Lists!$D$1:$D$2)', lists)   # Tax Regime
         regimes = load_workbook(io.BytesIO(r.content))['Lists']
         self.assertEqual([regimes.cell(row=i, column=4).value for i in (1, 2, 3)],
@@ -106,7 +111,7 @@ class CtcUploads(TestCase):
         self.assertEqual(self.client.post(f'{BASE}/uploads/', {'file': _xlsx([ROW])}).status_code, 401)
 
     def test_upload_stores_every_row(self):
-        second = _row(candidate_name='Priya Verma', category='ho', department='Finance',
+        second = _row(candidate_name='Priya Verma', category='ho', department='Finance & Accounts',
                       designation='Manager', grade='m3', cadre='m',
                       work_location='Roorkee', ctc='12,50,000')
         r = self._upload(self.alice, _xlsx([ROW, [], second]))
@@ -123,10 +128,13 @@ class CtcUploads(TestCase):
     def test_sales_rows_need_a_sales_department(self):
         rows = [_row(department='general trade'), _row(candidate_name='B', department='Alternate Channels'),
                 _row(candidate_name='C', department='BOTH'),
-                _row(candidate_name='D', category='HO', department='Finance', designation='Manager')]
+                _row(candidate_name='D', category='HO', department='finance & accounts', designation='Manager'),
+                _row(candidate_name='E', category='Plant', department='', designation='Operator')]
         self.assertEqual(self._upload(self.alice, _xlsx(rows)).status_code, 201)
         self.assertEqual([c.department for c in CtcCandidate.objects.order_by('row_number')],
-                         ['General Trade', 'Alternate Channels', 'Both', 'Finance'])
+                         ['General Trade', 'Alternate Channels', 'Both', 'Finance & Accounts', ''])
+        r = self._upload(self.alice, _xlsx([_row(category='HO', department='Finance')]))
+        self.assertIn('Department "Finance" is not on the list', str(r.json()))
         r = self._upload(self.alice, _xlsx([_row(department='ASM')]))
         self.assertEqual(r.status_code, 400)
         self.assertIn('for Sales pick GENERAL TRADE, ALTERNATE CHANNELS or BOTH', str(r.json()))
@@ -172,9 +180,9 @@ class CtcUploads(TestCase):
             _row(candidate_name='Ravi', ctc='twelve lakh'),                   # row 4: CTC text
             _row(candidate_name='Amit', ctc=None),                            # row 5: no CTC
             _row(candidate_name='Neha', category='Marketing'),                # row 6: category
-            _row(candidate_name='Om', category='HO', grade='O4', cadre='Officer'),  # row 7: reads as O
-            _row(candidate_name='Raj', category='HO', grade='O4', cadre='M'),  # row 8: grade/cadre clash
-            _row(candidate_name='Sia', category='HO', grade='', cadre=''),    # row 9: no grade/cadre
+            _row(candidate_name='Om', category='HO', department='Production', grade='O4', cadre='Officer'),  # row 7: reads as O
+            _row(candidate_name='Raj', category='HO', department='Production', grade='O4', cadre='M'),  # row 8: grade/cadre clash
+            _row(candidate_name='Sia', category='HO', department='Production', grade='', cadre=''),    # row 9: no grade/cadre
             _row(candidate_name='Uma', number_of_children='two'),            # row 10: bad count
             _row(candidate_name='Ved', number_of_children=3),                # row 11: more than two
         ]
