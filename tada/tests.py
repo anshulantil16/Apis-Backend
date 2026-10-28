@@ -1,0 +1,181 @@
+"""The TA/DA directory comes from the HRMS master, not a spreadsheet.
+
+Everybody who works here is in the portal directory already. These tests are
+about the things the sync must never do, both of which would stay invisible
+until somebody was paid the wrong allowance or a request reached nobody.
+"""
+from django.test import TestCase
+
+from accounts.models import PortalSession, PortalUser
+from .models import TadaUser
+from .sync import sync_from_master
+
+
+class TheDirectoryComesFromTheMaster(TestCase):
+    def setUp(self):
+        self.p = PortalUser.objects.create(
+            employee_code='HO0101', email='asha@apisindia.com', name='Asha Rao',
+            designation='Area Sales Manager', department='GENERAL TRADE',
+            location='Delhi HO', grade='M4', reporting_manager_code='HO0235')
+
+    def test_an_employee_arrives_with_no_spreadsheet(self):
+        out = sync_from_master()
+        self.assertEqual(out['created'], 1)
+        u = TadaUser.objects.get(employee_id='HO0101')
+        self.assertEqual((u.name, u.email), ('Asha Rao', 'asha@apisindia.com'))
+        self.assertEqual(u.department, 'GENERAL TRADE')
+        self.assertEqual(u.grade, 'M4')
+        self.assertEqual(u.role, 'employee', 'a role is decided here, not in HRMS')
+
+    def test_hrms_details_are_refreshed_every_run(self):
+        sync_from_master()
+        self.p.designation = 'Senior Area Sales Manager'
+        self.p.save()
+        sync_from_master()
+        self.assertEqual(TadaUser.objects.get(employee_id='HO0101').designation,
+                         'Senior Area Sales Manager')
+
+    def test_a_role_set_here_survives_the_next_sync(self):
+        """HRMS has no notion of who signs off Finance. If a sync could reset
+        a role, every approver would silently become an employee overnight."""
+        sync_from_master()
+        u = TadaUser.objects.get(employee_id='HO0101')
+        u.role = 'finance'
+        u.save()
+        sync_from_master()
+        self.assertEqual(TadaUser.objects.get(employee_id='HO0101').role, 'finance')
+
+    def test_a_level_set_by_hand_is_never_replaced(self):
+        """The level decides the allowance. Somebody set it deliberately, and
+        a sync overwriting it would quietly change what people are paid."""
+        sync_from_master()
+        u = TadaUser.objects.get(employee_id='HO0101')
+        u.level = 'M6'
+        u.save()
+        self.p.grade = 'M4'
+        self.p.save()
+        sync_from_master()
+        self.assertEqual(TadaUser.objects.get(employee_id='HO0101').level, 'M6')
+
+    def test_a_grade_that_is_not_a_tada_level_does_not_become_one(self):
+        """HRMS grades are a different alphabet: O2, W1, C1, 05, D1. Only the
+        ones that already are a TA/DA level are copied, because guessing the
+        rest pays people at the wrong rate."""
+        for grade in ('O2', 'W1', 'C1', '05', 'D1'):
+            TadaUser.objects.all().delete()
+            self.p.grade = grade
+            self.p.save()
+            sync_from_master()
+            self.assertEqual(TadaUser.objects.get(employee_id='HO0101').level, '',
+                             grade + ' is not a TA/DA level')
+
+    def test_a_grade_that_is_a_level_is_used(self):
+        for grade in ('M1', 'M7', 'E1', 'E4'):
+            TadaUser.objects.all().delete()
+            self.p.grade = grade
+            self.p.save()
+            sync_from_master()
+            self.assertEqual(TadaUser.objects.get(employee_id='HO0101').level, grade)
+
+    def test_an_approver_is_never_blanked_by_an_empty_feed(self):
+        """The one that would have done the most damage. reporting_manager_id
+        is what routes a request to whoever approves it, and HRMS holds a
+        manager for 3 of 717 people. Copying that column over wholesale would
+        leave everybody else's travel with nobody to approve it."""
+        sync_from_master()
+        u = TadaUser.objects.get(employee_id='HO0101')
+        u.reporting_manager_id = 'HO0999'
+        u.save()
+        self.p.reporting_manager_code = ''          # HRMS has nobody for them
+        self.p.save()
+        sync_from_master()
+        self.assertEqual(TadaUser.objects.get(employee_id='HO0101').reporting_manager_id,
+                         'HO0999')
+
+    def test_somebody_who_has_left_cannot_claim(self):
+        sync_from_master()
+        self.p.is_active = False
+        self.p.save()
+        out = sync_from_master(only_active=False)
+        self.assertEqual(out['deactivated'], 1)
+        self.assertFalse(TadaUser.objects.get(employee_id='HO0101').is_active)
+
+    def test_people_without_a_level_are_counted_so_they_can_be_fixed(self):
+        self.p.grade = 'O2'
+        self.p.save()
+        out = sync_from_master()
+        self.assertEqual(len(out['needs_level']), 1)
+        self.assertIn('HO0101', out['needs_level'][0])
+
+
+class OnlyASuperAdminChangesRolesAndLevels(TestCase):
+    def setUp(self):
+        PortalUser.objects.create(employee_code='HO0101', email='a@apisindia.com',
+                                  name='Asha', grade='M4')
+        PortalUser.objects.create(employee_code='HO0235', email='m@apisindia.com',
+                                  name='Manager', grade='M6')
+        sync_from_master()
+        self.u = TadaUser.objects.get(employee_id='HO0101')
+        self.plain = PortalUser.objects.create(email='plain@apisindia.com',
+                                               employee_code='X1', name='Plain')
+        self.admin = PortalUser.objects.create(email='boss@apisindia.com', employee_code='X2',
+                                               name='Boss', is_superadmin=True)
+
+    def _patch(self, body, user=None):
+        kw = {'HTTP_AUTHORIZATION': 'Bearer ' + PortalSession.start(user)} if user else {}
+        return self.client.patch('/api/tada/users/%d/' % self.u.id, body,
+                                 content_type='application/json', **kw)
+
+    def test_an_ordinary_employee_cannot_make_themselves_finance(self):
+        self.assertEqual(self._patch({'role': 'finance'}, self.plain).status_code, 403)
+        self.assertEqual(self._patch({'role': 'finance'}).status_code, 401)
+        self.u.refresh_from_db()
+        self.assertEqual(self.u.role, 'employee')
+
+    def test_a_super_admin_sets_the_role_here_rather_than_in_a_spreadsheet(self):
+        r = self._patch({'role': 'finance'}, self.admin)
+        self.assertEqual(r.status_code, 200)
+        self.u.refresh_from_db()
+        self.assertEqual(self.u.role, 'finance')
+
+    def test_a_level_that_is_not_on_the_matrix_is_refused(self):
+        # M8 and M9 are NOT invalid: the matrix treats M7 and above as one
+        # band, so band_for_level answers M7+ for them. The ones with no
+        # band are what must be refused -- stored, they would pay nothing.
+        for bad in ('X3', 'M0', 'E0', 'manager'):
+            r = self._patch({'level': bad}, self.admin)
+            self.assertEqual(r.status_code, 400, bad)
+            self.assertIn('not a TA/DA level', r.json()['error'])
+        self.u.refresh_from_db()
+        self.assertEqual(self.u.level, 'M4', 'unchanged, not stored as nonsense')
+
+    def test_a_level_above_m7_is_accepted_because_the_matrix_has_a_band(self):
+        r = self._patch({'level': 'M8'}, self.admin)
+        self.assertEqual(r.status_code, 200)
+        self.u.refresh_from_db()
+        self.assertEqual(self.u.level, 'M8')
+
+    def test_nobody_approves_their_own_travel(self):
+        r = self._patch({'reporting_manager_id': self.u.employee_id}, self.admin)
+        self.assertEqual(r.status_code, 400)
+
+    def test_an_approver_who_is_not_in_the_directory_is_refused(self):
+        r = self._patch({'reporting_manager_id': 'NOBODY1'}, self.admin)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('nothing would reach them', r.json()['error'])
+
+    def test_a_real_approver_is_accepted(self):
+        r = self._patch({'reporting_manager_id': 'HO0235'}, self.admin)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()['user']['reporting_manager_name'], 'Manager')
+
+    def test_hrms_owned_details_cannot_be_edited_here(self):
+        self._patch({'name': 'Someone Else', 'department': 'Nope'}, self.admin)
+        self.u.refresh_from_db()
+        self.assertEqual(self.u.name, 'Asha', 'the master owns this')
+
+
+class TheImportIsGone(TestCase):
+    def test_the_template_and_import_endpoints_no_longer_exist(self):
+        self.assertEqual(self.client.get('/api/tada/users/template/').status_code, 404)
+        self.assertEqual(self.client.post('/api/tada/users/import/').status_code, 404)

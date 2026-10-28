@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import (
     SendOTPView, VerifyOTPView, AdminOTPView, AdminVerifyView,
-    UserTemplateView, UserImportView, UsersListView, CapsView, EstimateView,
+    UsersListView, UserSyncView, UserDetailView, CapsView, EstimateView,
     AdminOverviewView, AdminResetView,
     MyRequestsView, RequestDetailView, ClaimableSanctionsView,
     CreateTourSanctionView, CreateTravelExpenseView, CreateLocalTravelView,
@@ -17,10 +17,10 @@ urlpatterns = [
     path('auth/admin-otp/',    AdminOTPView.as_view()),
     path('auth/admin-verify/', AdminVerifyView.as_view()),
 
-    # User directory
-    path('users/template/',  UserTemplateView.as_view()),
-    path('users/import/',    UserImportView.as_view()),
-    path('users/',           UsersListView.as_view()),
+    # User directory — from the HRMS master, not a spreadsheet.
+    path('users/',             UsersListView.as_view()),
+    path('users/sync/',        UserSyncView.as_view()),
+    path('users/<int:user_id>/', UserDetailView.as_view()),
     path('caps/',            CapsView.as_view()),
     path('estimate/',        EstimateView.as_view()),
     path('admin/overview/',  AdminOverviewView.as_view()),
