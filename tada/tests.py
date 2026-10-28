@@ -175,6 +175,41 @@ class OnlyASuperAdminChangesRolesAndLevels(TestCase):
         self.assertEqual(self.u.name, 'Asha', 'the master owns this')
 
 
+class TheDirectoryListIsReachableAndGated(TestCase):
+    """The list is what the admin table reads, and it went out as a 401.
+
+    It was a plain APIView while the screen called it with a portal Bearer
+    token, so SimpleJWT tried to parse that token as a JWT, failed, and
+    answered 401 before any of the view ran. Nothing tested it with a real
+    token, so nothing caught it -- the browser did, as a blank page.
+    """
+
+    def setUp(self):
+        PortalUser.objects.create(employee_code='HO0101', email='a@apisindia.com',
+                                  name='Asha', grade='M4')
+        sync_from_master()
+        self.plain = PortalUser.objects.create(email='p@apisindia.com', employee_code='P1',
+                                               name='Plain')
+        self.admin = PortalUser.objects.create(email='b@apisindia.com', employee_code='P2',
+                                               name='Boss', is_superadmin=True)
+
+    def _get(self, user=None):
+        kw = {'HTTP_AUTHORIZATION': 'Bearer ' + PortalSession.start(user)} if user else {}
+        return self.client.get('/api/tada/users/', **kw)
+
+    def test_a_super_admin_token_is_accepted_not_mangled_into_a_401(self):
+        r = self._get(self.admin)
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body['total'], 1)
+        self.assertIn('users', body, 'the screen reads body.users and crashes without it')
+        self.assertEqual(body['users'][0]['employee_id'], 'HO0101')
+
+    def test_the_employee_directory_is_not_handed_to_anyone_who_asks(self):
+        self.assertEqual(self._get().status_code, 401)
+        self.assertEqual(self._get(self.plain).status_code, 403)
+
+
 class TheImportIsGone(TestCase):
     def test_the_template_and_import_endpoints_no_longer_exist(self):
         self.assertEqual(self.client.get('/api/tada/users/template/').status_code, 404)

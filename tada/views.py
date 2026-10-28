@@ -453,10 +453,23 @@ class AdminVerifyView(APIView):
 # who works here is already in the portal directory, synced nightly from
 # Pocket HRMS, and maintaining the same people twice is what let the two
 # drift apart. See tada/sync.py for what this does and does not take over.
-class UsersListView(APIView):
-    """Everyone in the TA/DA directory, as a table."""
+class UsersListView(PortalScopedAPIView):
+    """Everyone in the TA/DA directory, as a table.
+
+    PortalScopedAPIView, not APIView: the caller sends an opaque portal
+    session token, and DRF's project-wide SimpleJWT would try to parse it
+    as a JWT, fail, and answer 401 before any of this ran. It only looked
+    fine while the screen called this with no Authorization header at all.
+
+    Gated like the two below it. The list carries every employee's name,
+    email, department and who approves their travel, which is not a thing
+    to hand to any caller who knows the URL.
+    """
 
     def get(self, request):
+        _user, err = require_superadmin(request)
+        if err:
+            return err
         users = list(TadaUser.objects.all())
         # One query for the approver names rather than one per row.
         names = dict(TadaUser.objects.filter(
