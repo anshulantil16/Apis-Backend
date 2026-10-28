@@ -94,7 +94,17 @@ _DEFAULT_FIELDS = [
     # "not available on this tenant" for months, then one employee had it.
     # There is no CADRE column of any spelling; the cadre is the letter in
     # front of the grade -- O2, M3, W1 -- so `grade` already carries it.
-    'HOD', 'Branch',
+    'Branch',
+
+    # The three people on somebody's record, named by Pocket HRMS support on
+    # 28-10-2026 as exactly these column names: HOD, LEAVERE and LEAVEAPP.
+    # HOD was already being asked for and came back empty for everybody --
+    # which, on this API, is what a column nobody has filled looks like AND
+    # what a wrong field name looks like, since an unrecognised name is
+    # dropped silently with a 200. Having the names confirmed is what tells
+    # the two apart. Asked for in capitals, as given: that mattered for
+    # POCKETREPORTINGMANAGER and there is no reason to assume otherwise here.
+    'HOD', 'LEAVERE', 'LEAVEAPP',
 ]
 
 # Which endpoint. "...filtered" is not a tidier version of the other one: it
@@ -290,26 +300,33 @@ def _resolved(row, base, string_name=None):
     return '' if plain.isdigit() else plain
 
 
-def _manager(row):
-    """-> (code, name) of this person's reporting manager.
+def _person(row, *names):
+    """-> (code, name) from a column that points at another employee.
 
-    The feed sends one string with both in it: "(HO0235)Pankaj Tripathi".
-    Split rather than stored whole, because the code is what joins a person
-    to their manager's record and the name is what a screen shows -- and a
-    string holding both is useless for either without doing this first.
+    The feed sends one string with both parts in it: "(HO0235)Pankaj
+    Tripathi". Split rather than stored whole, because the code is what
+    joins a person to that record and the name is what a screen shows --
+    and a string holding both is useless for either without doing this
+    first.
 
     Anything that does not match the shape is kept as the name with no code,
     which is the honest reading of "we were given something, but not an
-    employee code".
+    employee code". The reporting manager, the HOD, the leave recommender
+    and the leave approver all arrive this way.
     """
-    raw = _pick(row, 'PocketReportingManager', 'POCKETREPORTINGMANAGERstring',
-                'ReportingManager', 'ManagerNames')
+    raw = _pick(row, *names)
     if not raw:
         return '', ''
     m = re.match(r'^\s*\(([^)]+)\)\s*(.*)$', raw)
     if m:
         return m.group(1).strip(), m.group(2).strip()
     return '', raw.strip()
+
+
+def _manager(row):
+    """-> (code, name) of this person's reporting manager."""
+    return _person(row, 'PocketReportingManager', 'POCKETREPORTINGMANAGERstring',
+                   'ReportingManager', 'ManagerNames')
 
 
 def _grade(row):
@@ -405,7 +422,11 @@ def _limit(field):
 # the whole person over one long label would stop their name, department and
 # designation updating too.
 _TRIMMABLE = ('name', 'designation', 'department', 'location',
-              'reporting_manager_code', 'grade', 'category', 'office_mobile')
+              'reporting_manager_code', 'reporting_manager_name',
+              'hod_code', 'hod_name',
+              'leave_recommender_code', 'leave_recommender_name',
+              'leave_approver_code', 'leave_approver_name',
+              'grade', 'category', 'office_mobile')
 
 
 def _fit(value, field, code, trimmed):
@@ -530,6 +551,12 @@ def _write_employees(log, rows, deactivate_missing, modified_since, emp_status,
             'location': _resolved(row, 'Location'),
             'reporting_manager_code': _manager(row)[0],
             'reporting_manager_name': _manager(row)[1],
+            'hod_code': _person(row, 'HOD', 'Hod', 'HODString')[0],
+            'hod_name': _person(row, 'HOD', 'Hod', 'HODString')[1],
+            'leave_recommender_code': _person(row, 'LEAVERE', 'LeaveRe', 'LEAVEREString')[0],
+            'leave_recommender_name': _person(row, 'LEAVERE', 'LeaveRe', 'LEAVEREString')[1],
+            'leave_approver_code': _person(row, 'LEAVEAPP', 'LeaveApp', 'LEAVEAPPString')[0],
+            'leave_approver_name': _person(row, 'LEAVEAPP', 'LeaveApp', 'LEAVEAPPString')[1],
             'date_of_birth': _date(row, 'DateOfBirth'),
             'date_of_joining': _date(row, 'DateOfJoining'),
             'grade': _grade(row),

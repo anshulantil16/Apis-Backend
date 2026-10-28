@@ -60,6 +60,13 @@ def serialize_user(u):
         'department': u.department,
         'location': u.location,
         'reporting_manager_code': u.reporting_manager_code,
+        'reporting_manager_name': u.reporting_manager_name,
+        'hod_code': u.hod_code,
+        'hod_name': u.hod_name,
+        'leave_recommender_code': u.leave_recommender_code,
+        'leave_recommender_name': u.leave_recommender_name,
+        'leave_approver_code': u.leave_approver_code,
+        'leave_approver_name': u.leave_approver_name,
         'is_active': u.is_active,
         'is_superadmin': u.is_superadmin,
         'is_bootstrap': u.is_bootstrap_superadmin,
@@ -287,14 +294,25 @@ class MyProfileView(PortalAPIView):
                     f'{rest} month{"s" if rest != 1 else ""}' if rest else '',
                 ) if part) or 'Joined this month'
 
-        # The reporting line is empty on this tenant today, so this resolves
-        # to nothing rather than showing a code nobody recognises. It starts
+        # The four people on somebody's record: who they report to, their
+        # head of department, and who recommends and approves their leave.
+        # Mostly empty on this tenant today, so each resolves to nothing
+        # rather than showing a code nobody recognises -- and each starts
         # working by itself the day HR fills it in.
-        manager = ''
-        if u.reporting_manager_code:
-            manager = (PortalUser.objects
-                       .filter(employee_code=u.reporting_manager_code)
-                       .values_list('name', flat=True).first() or '')
+        #
+        # The name HRMS sent is preferred over a lookup, because the person
+        # named may not have a portal account at all (53 of them have no
+        # email and so no login); falling straight to the lookup would show
+        # an empty HOD for someone whose HOD is perfectly well known.
+        def who(code, name):
+            if name:
+                return name
+            if not code:
+                return ''
+            return (PortalUser.objects.filter(employee_code=code)
+                    .values_list('name', flat=True).first() or '')
+
+        manager = who(u.reporting_manager_code, u.reporting_manager_name)
 
         return Response({'profile': {
             'name': u.name,
@@ -306,6 +324,9 @@ class MyProfileView(PortalAPIView):
             'location': u.location,
             'office_mobile': u.office_mobile,
             'manager': manager,
+            'hod': who(u.hod_code, u.hod_name),
+            'leave_recommender': who(u.leave_recommender_code, u.leave_recommender_name),
+            'leave_approver': who(u.leave_approver_code, u.leave_approver_name),
             'date_of_joining': (u.date_of_joining.strftime('%d %b %Y')
                                 if u.date_of_joining else ''),
             'served': served,
