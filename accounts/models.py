@@ -109,6 +109,23 @@ class PortalUser(models.Model):
     reporting_manager_code = models.CharField(max_length=50, blank=True)
     reporting_manager_name = models.CharField(max_length=200, blank=True)
 
+    # The other three people on somebody's record, named by Pocket HRMS
+    # support on 28-10-2026 as the columns HOD, LEAVERE and LEAVEAPP. Each
+    # arrives the same way the reporting manager does -- one string holding
+    # both parts, "(HO0235)Pankaj Tripathi" -- so each is split the same
+    # way: the code joins to that person's record, the name is what a
+    # screen shows.
+    #
+    # The head of department is not always the person somebody reports to,
+    # and neither is always who signs off their leave, which is why these
+    # are three separate pairs rather than one field reused.
+    hod_code = models.CharField(max_length=50, blank=True)
+    hod_name = models.CharField(max_length=200, blank=True)
+    leave_recommender_code = models.CharField(max_length=50, blank=True)
+    leave_recommender_name = models.CharField(max_length=200, blank=True)
+    leave_approver_code = models.CharField(max_length=50, blank=True)
+    leave_approver_name = models.CharField(max_length=200, blank=True)
+
     # Already requested from HRMS and already arriving on every row; they
     # were being dropped on the floor.
     #

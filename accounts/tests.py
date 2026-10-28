@@ -1196,3 +1196,64 @@ class PeopleHrmsHasNoAddressFor(TestCase):
         self.assertEqual(u.email, 'rainy@apisindia.com')
         self.assertTrue(u.can_sign_in)
         self.assertEqual(u.name, 'RAINY CHAUDHARY', 'the rest of the row still updates')
+
+
+class TheThreePeopleHrmsNamesOnEachRecord(TestCase):
+    """HOD, LEAVERE and LEAVEAPP — the column names Pocket HRMS support
+    gave on 28-10-2026.
+
+    The names matter more than they look. An unrecognised field name is
+    dropped silently with a 200 on this API, so a wrong name and a column
+    nobody has filled in produce exactly the same thing: empty for all
+    2,400 people. That is how GRADE hid for months, and how HOD looked
+    unavailable until they told us it was spelt that way all along.
+    """
+
+    def test_all_three_are_asked_for_by_the_names_they_gave(self):
+        for name in ('HOD', 'LEAVERE', 'LEAVEAPP'):
+            self.assertIn(name, hrms.EMPLOYEE_FIELDS, f'{name} must be requested verbatim')
+
+    def test_each_is_split_into_a_code_and_a_name(self):
+        row = {'HOD': '(HO0235)Pankaj Tripathi',
+               'LEAVERE': '(HO0101)Hemant Tripathi',
+               'LEAVEAPP': '(SL0007)Arun Mishra'}
+        self.assertEqual(hrms._person(row, 'HOD'), ('HO0235', 'Pankaj Tripathi'))
+        self.assertEqual(hrms._person(row, 'LEAVERE'), ('HO0101', 'Hemant Tripathi'))
+        self.assertEqual(hrms._person(row, 'LEAVEAPP'), ('SL0007', 'Arun Mishra'))
+
+    def test_a_plain_name_is_kept_as_the_name_with_no_code(self):
+        """We do not know yet which shape HR will fill these in as. A bare
+        name is a usable answer; inventing a code from it would not be."""
+        self.assertEqual(hrms._person({'HOD': 'Pankaj Tripathi'}), ('', ''))
+        self.assertEqual(hrms._person({'HOD': 'Pankaj Tripathi'}, 'HOD'), ('', 'Pankaj Tripathi'))
+
+    def test_unmapped_is_empty_rather_than_a_stray_bracket(self):
+        self.assertEqual(hrms._person({'HOD': ''}, 'HOD'), ('', ''))
+        self.assertEqual(hrms._person({}, 'HOD'), ('', ''))
+
+    def test_they_are_written_to_the_record(self):
+        log = HrmsSyncLog.objects.create(triggered_by='test')
+        hrms._write_employees(log, [{
+            'Code': 'HO0999', 'Email': 'x@apisindia.com', 'FName': 'Someone',
+            'EmpStatus': 'Live',
+            'HOD': '(HO0235)Pankaj Tripathi',
+            'LEAVERE': '(HO0101)Hemant Tripathi',
+            'LEAVEAPP': '(SL0007)Arun Mishra',
+        }], deactivate_missing=False, modified_since=None, emp_status=hrms.ACTIVE_ONLY)
+        u = PortalUser.objects.get(employee_code='HO0999')
+        self.assertEqual((u.hod_code, u.hod_name), ('HO0235', 'Pankaj Tripathi'))
+        self.assertEqual((u.leave_recommender_code, u.leave_recommender_name),
+                         ('HO0101', 'Hemant Tripathi'))
+        self.assertEqual((u.leave_approver_code, u.leave_approver_name),
+                         ('SL0007', 'Arun Mishra'))
+
+    def test_a_profile_shows_the_name_even_when_that_person_has_no_login(self):
+        """53 people have no email and so no portal account. Resolving the
+        HOD by lookup alone would show nothing for someone whose HOD is
+        perfectly well known -- so the name HRMS sent is preferred."""
+        me = PortalUser.objects.create(employee_code='HO0998', email='me@apisindia.com',
+                                       name='Me', hod_code='NA0001', hod_name='Kunal Parewa')
+        r = self.client.get('/api/accounts/portal/profile/',
+                            HTTP_AUTHORIZATION=f'Bearer {PortalSession.start(me)}')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()['profile']['hod'], 'Kunal Parewa')
