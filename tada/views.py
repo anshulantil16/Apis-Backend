@@ -18,7 +18,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
+from accounts.auth import PortalScopedAPIView, require_superadmin
+from accounts.moderation import log_activity
 from config.tz import local_str
+from .sync import sync_from_master
 from .models import (TadaUser, TadaOTP, TravelRequest, TravelLeg, ExpenseItem,
                      LocalTravelItem, ApprovalLog, ReturnJourney, BookingOption, StayPlan)
 from . import policy
@@ -72,11 +75,33 @@ def _sf(v, d=0):
         return d
 
 
-def serialize_user(u):
+def serialize_user(u, manager_names=None):
+    # The grade is shown beside the level on purpose. The level decides the
+    # allowance and is set here; the grade is what HRMS holds. Whoever sets
+    # a level needs to see the grade next to it rather than guess from a
+    # name, and a mismatch between the two is worth noticing.
+    mgr = (u.reporting_manager_id or '')
     return {
         'id': u.id, 'employee_id': u.employee_id, 'name': u.name, 'email': u.email,
         'designation': u.designation, 'department': u.department, 'level': u.level,
-        'hq_city': u.hq_city, 'role': u.role, 'reporting_manager_id': u.reporting_manager_id,
+        'grade': u.grade,
+        'hq_city': u.hq_city, 'role': u.role, 'reporting_manager_id': mgr,
+        'reporting_manager_name': (manager_names or {}).get(mgr, ''),
+        # Where that approver came from. HRMS sends a reporting manager for
+        # almost nobody, so most are routed through the HOD or the leave
+        # chain instead -- the screen says which, rather than showing a code
+        # that appeared from nowhere.
+        'approver_source': u.approver_source,
+        'hod_id': u.hod_id,
+        'hod_name': u.hod_name or (manager_names or {}).get(u.hod_id, ''),
+        'is_active': u.is_active,
+        'vehicle_rc_no': u.vehicle_rc_no,
+        # A person with no level cannot be paid an allowance, because every
+        # matrix is keyed on the band. Said plainly here so the table can
+        # show it rather than leaving a quietly broken row.
+        'needs_level': not bool(policy.band_for_level(u.level)),
+        # No approver means a request has nowhere to go once it is raised.
+        'needs_approver': not bool(mgr),
         'caps': policy.get_caps(u.level),
     }
 
@@ -431,110 +456,140 @@ class AdminVerifyView(APIView):
         }})
 
 
-# ── USER DIRECTORY (import / template / list) ─────────────────────────────────
-class UserTemplateView(APIView):
+# ── USER DIRECTORY ───────────────────────────────────────────────────────────
+#
+# There is no template to download and no spreadsheet to import. Everybody
+# who works here is already in the portal directory, synced nightly from
+# Pocket HRMS, and maintaining the same people twice is what let the two
+# drift apart. See tada/sync.py for what this does and does not take over.
+class UsersListView(PortalScopedAPIView):
+    """Everyone in the TA/DA directory, as a table.
+
+    PortalScopedAPIView, not APIView: the caller sends an opaque portal
+    session token, and DRF's project-wide SimpleJWT would try to parse it
+    as a JWT, fail, and answer 401 before any of this ran. It only looked
+    fine while the screen called this with no Authorization header at all.
+
+    Gated like the two below it. The list carries every employee's name,
+    email, department and who approves their travel, which is not a thing
+    to hand to any caller who knows the URL.
+    """
+
     def get(self, request):
-        from django.http import HttpResponse
-        from openpyxl.styles import PatternFill, Font, Alignment
-        wb = openpyxl.Workbook(); ws = wb.active; ws.title = 'TADA Users'
-        headers = ['Employee ID *', 'Name *', 'Email *', 'Designation', 'Department',
-                   'Level (M1-M7/E1-E4) *', 'HQ City', 'Reporting Manager ID',
-                   'Role (employee/manager/hr/finance/travel_desk)', 'Vehicle RC No']
-        hf = PatternFill(start_color='2E75B6', end_color='2E75B6', fill_type='solid')
-        for ci, h in enumerate(headers, 1):
-            c = ws.cell(row=1, column=ci, value=h)
-            c.fill = hf; c.font = Font(color='FFFFFF', bold=True)
-            c.alignment = Alignment(horizontal='center', wrap_text=True)
-        samples = [
-            ['E1001', 'Rahul Verma', 'rahul@apisindia.com', 'Area Sales Manager', 'Sales', 'M1', 'Delhi', 'M2001', 'employee', 'DL01AB1234'],
-            ['M2001', 'Suresh Rao', 'suresh@apisindia.com', 'Regional Sales Manager', 'Sales', 'M4', 'Mumbai', 'M5001', 'manager', ''],
-            ['H3001', 'Neha P&C', 'neha@apisindia.com', 'P&C Manager', 'People & Culture', 'M3', 'Delhi', '', 'hr', ''],
-            ['F4001', 'Amit Finance', 'amit@apisindia.com', 'Finance Manager', 'Finance', 'M4', 'Delhi', '', 'finance', ''],
-            ['T5001', 'Kavita Desk', 'kavita@apisindia.com', 'Travel Desk Executive', 'Administration', 'E3', 'Delhi', '', 'travel_desk', ''],
-        ]
-        for ri, row in enumerate(samples, 2):
-            for ci, v in enumerate(row, 1):
-                ws.cell(row=ri, column=ci, value=v)
-        for i in range(1, len(headers) + 1):
-            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = 22
-        buf = io.BytesIO(); wb.save(buf); buf.seek(0)
-        resp = HttpResponse(buf.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        resp['Content-Disposition'] = 'attachment; filename="TADA_Users_Template.xlsx"'
-        return resp
+        _user, err = require_superadmin(request)
+        if err:
+            return err
+        users = list(TadaUser.objects.all())
+        # One query for the approver names rather than one per row.
+        wanted = {u.reporting_manager_id for u in users if u.reporting_manager_id}
+        wanted |= {u.hod_id for u in users if u.hod_id and not u.hod_name}
+        names = dict(TadaUser.objects.filter(employee_id__in=wanted)
+                     .values_list('employee_id', 'name'))
+        rows = [serialize_user(u, names) for u in users]
+        return Response({
+            'users': rows,
+            'total': len(rows),
+            'needs_level': sum(1 for r in rows if r['needs_level'] and r['is_active']),
+            'no_manager': sum(1 for r in rows
+                              if not r['reporting_manager_id'] and r['is_active']),
+        })
 
 
-class UserImportView(APIView):
-    parser_classes = (MultiPartParser, FormParser)
+class UserSyncView(PortalScopedAPIView):
+    """Pull the directory from the HRMS master."""
 
     def post(self, request):
-        f = request.FILES.get('file')
-        if not f:
-            return Response({'error': 'No file provided.'}, status=400)
-        try:
-            wb = openpyxl.load_workbook(f, data_only=True); ws = wb.active
-        except Exception as e:
-            return Response({'error': f'Cannot read file: {e}'}, status=400)
-        ALIASES = {
-            'employee id': 'employee_id', 'name': 'name', 'email': 'email',
-            'designation': 'designation', 'department': 'department',
-            'level': 'level', 'level (m1-m7/e1-e4)': 'level',
-            'hq city': 'hq_city', 'reporting manager id': 'reporting_manager_id',
-            'role': 'role', 'role (employee/manager/hr/finance)': 'role',
-            'role (employee/manager/hr/finance/travel_desk)': 'role',
-            'vehicle rc no': 'vehicle_rc_no',
-        }
-        header = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
-        cmap = {}
-        for ci, cell in enumerate(header):
-            if cell is None:
+        _user, err = require_superadmin(request)
+        if err:
+            return err
+        result = sync_from_master()
+        log_activity('tada.users.sync', 'TA/DA directory synced from the HRMS master',
+                     detail={k: v for k, v in result.items() if k != 'needs_level'},
+                     request=request)
+        n = len(result['needs_level'])
+        message = (f"{result['created']} added, {result['updated']} updated, "
+                   f"{result['unchanged']} already current.")
+        if result['routed']:
+            message += (' Approver taken from the master for '
+                        + ', '.join(f'{v} via {k}' for k, v in
+                                    sorted(result['routed'].items(), key=lambda x: -x[1]))
+                        + '.')
+        if result['no_approver']:
+            message += (f" {result['no_approver']} still have no approver — HRMS has "
+                        'nobody for them, so set one here or their requests have '
+                        'nowhere to go.')
+        if n:
+            message += (f" {n} have no TA/DA level yet — set one before they claim, "
+                        "or every allowance comes out at zero.")
+        return Response({**result, 'message': message})
+
+
+class UserDetailView(PortalScopedAPIView):
+    """Change what TA/DA owns about a person: their role, level, HQ and approver.
+
+    Name, email, designation and department are not editable here -- they
+    come from the HRMS master and the next sync would put them back. Fixing
+    those means fixing them in Pocket HRMS, which is the point of having one
+    master rather than four copies.
+    """
+
+    EDITABLE = ('role', 'level', 'hq_city', 'reporting_manager_id', 'vehicle_rc_no')
+
+    def patch(self, request, user_id):
+        _user, err = require_superadmin(request)
+        if err:
+            return err
+        u = TadaUser.objects.filter(id=user_id).first()
+        if not u:
+            return Response({'error': 'No such person in the TA/DA directory.'}, status=404)
+
+        changes = {}
+        for field in self.EDITABLE:
+            if field not in request.data:
                 continue
-            key = str(cell).strip().lower().replace('*', '').strip()
-            if key in ALIASES:
-                cmap[ALIASES[key]] = ci
-        created = updated = 0
-        errors = []
-        for ri, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            if not any(row):
-                continue
-            data = {k: (row[ci] if ci < len(row) else None) for k, ci in cmap.items()}
-            eid = str(data.get('employee_id') or '').strip()
-            name = str(data.get('name') or '').strip()
-            if not eid or not name:
-                errors.append(f'Row {ri}: missing Employee ID or Name'); continue
-            role = str(data.get('role') or 'employee').strip().lower()
-            # Spreadsheets carry "travel desk" as often as "travel_desk".
-            role = role.replace(' ', '_').replace('-', '_')
-            if role in ('traveldesk', 'travel_help_desk', 'desk'):
-                role = 'travel_desk'
-            if role not in ('employee', 'manager', 'hr', 'finance', 'travel_desk', 'admin'):
-                role = 'employee'
-            _, was_created = TadaUser.objects.update_or_create(
-                employee_id=eid,
-                defaults={
-                    'name': name, 'email': str(data.get('email') or '').strip(),
-                    'designation': str(data.get('designation') or '').strip(),
-                    'department': str(data.get('department') or '').strip(),
-                    'level': str(data.get('level') or '').strip().upper(),
-                    'hq_city': str(data.get('hq_city') or '').strip(),
-                    'reporting_manager_id': str(data.get('reporting_manager_id') or '').strip(),
-                    'role': role, 'vehicle_rc_no': str(data.get('vehicle_rc_no') or '').strip(),
-                    'is_active': True,
-                },
-            )
-            created += was_created; updated += not was_created
-        return Response({'message': f'✅ Imported {created} new, {updated} updated.',
-                         'created': created, 'updated': updated, 'errors': errors,
-                         'total': TadaUser.objects.count()})
+            value = str(request.data.get(field) or '').strip()
+            if field == 'role':
+                value = value.lower().replace(' ', '_').replace('-', '_')
+                if value not in {c[0] for c in TadaUser.ROLE_CHOICES}:
+                    return Response({'error': f'"{value}" is not a TA/DA role.'}, status=400)
+            if field == 'level':
+                value = value.upper().replace(' ', '')
+                # An unrecognised level is refused rather than stored. Every
+                # allowance is keyed on the band, so a typo here does not
+                # show up as an error -- it shows up as the wrong money.
+                if value and not policy.band_for_level(value):
+                    return Response({'error': f'"{value}" is not a TA/DA level. '
+                                              'Use M1-M7 or E1-E4.'}, status=400)
+            if field == 'reporting_manager_id':
+                # Chosen here, so it stops being whatever HRMS routed it to
+                # and the table stops claiming it came from the master.
+                u.approver_source = 'set here' if value else ''
+            if field == 'reporting_manager_id' and value:
+                if not TadaUser.objects.filter(employee_id=value).exists():
+                    return Response({'error': f'No employee {value} in the directory, '
+                                              'so nothing would reach them for approval.'},
+                                    status=400)
+                if value == u.employee_id:
+                    return Response({'error': 'Somebody cannot approve their own travel.'},
+                                    status=400)
+            if getattr(u, field) != value:
+                changes[field] = {'from': getattr(u, field), 'to': value}
+                setattr(u, field, value)
 
+        if 'is_active' in request.data:
+            wanted = bool(request.data.get('is_active'))
+            if u.is_active != wanted:
+                changes['is_active'] = {'from': u.is_active, 'to': wanted}
+                u.is_active = wanted
 
-class UsersListView(APIView):
-    def get(self, request):
-        users = TadaUser.objects.all()
-        return Response({'users': [serialize_user(u) for u in users], 'total': users.count()})
-
-    def delete(self, request):
-        TadaUser.objects.all().delete()
-        return Response({'message': 'All TA/DA users cleared.'})
+        if changes:
+            u.save()
+            log_activity('tada.users.update', f'TA/DA: {u.name} ({u.employee_id}) changed',
+                         detail=changes, request=request)
+        names = dict(TadaUser.objects.filter(
+            employee_id__in=[c for c in (u.reporting_manager_id, u.hod_id) if c]
+        ).values_list('employee_id', 'name'))
+        return Response({'user': serialize_user(u, names), 'changed': list(changes)})
 
 
 class AdminOverviewView(APIView):
@@ -579,9 +634,18 @@ class AdminOverviewView(APIView):
         })
 
 
-class AdminResetView(APIView):
-    """Clear TA/DA data. what='requests' (default) or 'all' (also users)."""
+class AdminResetView(PortalScopedAPIView):
+    """Clear TA/DA data. what='requests' (default) or 'all' (also users).
+
+    Gated, late. This deletes every travel request in the system and, with
+    what='all', the whole directory -- and it was answering any caller who
+    knew the URL, with no sign-in at all.
+    """
+
     def post(self, request):
+        _user, err = require_superadmin(request)
+        if err:
+            return err
         what = (request.data.get('what') or 'requests').strip()
         n = TravelRequest.objects.count()
         TravelRequest.objects.all().delete()   # cascades expense/local items + logs

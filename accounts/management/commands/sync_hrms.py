@@ -11,6 +11,12 @@ Usage, twice a day:
     crontab -e
     0 6,18 * * *  cd /var/www/html/apis-qa/backend && ./venv/bin/python manage.py sync_hrms >> /var/log/apis-hrms-sync.log 2>&1
 
+After the master is updated, the tools that keep their own copy of the
+directory are refreshed from it in the same run -- TA/DA and the Help Desk.
+They read PortalUser, so they have to follow this pull rather than race it
+from a crontab entry of their own. SalesIQ needs nothing: it reads
+PortalUser directly at sign-in and is current the moment this finishes.
+
 Every run is logged to HrmsSyncLog regardless of source - the admin console's
 "Sync history" table is the same table whether a person clicked the button or
 cron ran this file at 6am, distinguished only by triggered_by.
@@ -32,6 +38,10 @@ class Command(BaseCommand):
                  'runs on a full, unfiltered sync - a partial pull is not '
                  'evidence that anyone has left. Use this for a quick manual '
                  'check, not for the scheduled job.')
+        parser.add_argument(
+            '--skip-tools', action='store_true',
+            help='Pull the master but do not push it out to TA/DA and the '
+                 'Help Desk afterwards.')
 
     def handle(self, *args, **opts):
         if not hrms.is_configured():
@@ -59,3 +69,51 @@ class Command(BaseCommand):
             raise CommandError(f'Pocket HRMS sync failed: {e}') from e
 
         self.stdout.write(self.style.SUCCESS(log.message))
+
+        if opts['skip_tools']:
+            return
+        for line in refresh_tool_directories():
+            self.stdout.write(line)
+
+
+def refresh_tool_directories():
+    """Push the refreshed master out to the tools that keep their own copy.
+
+    Run here rather than from their own cron entries, because the ordering
+    is the whole point: these read PortalUser, so they have to follow the
+    HRMS pull, not race it. One entry in the crontab, one guaranteed order.
+
+    SalesIQ is deliberately absent. It has no copy of the directory -- it
+    reads PortalUser when somebody signs in -- so it is already current the
+    moment the sync above finishes, and a sync step for it would be
+    pretending to do something.
+
+    A failure in one tool is reported and does not stop the other, and
+    neither stops the command: the master is already updated by this point,
+    and exiting non-zero would tell cron the HRMS pull had failed when it
+    had not.
+    """
+    lines = []
+    try:
+        from tada.sync import sync_from_master
+        r = sync_from_master()
+        # The routing counts are the point of the line, not decoration: an
+        # approver is what a claim travels to, and "0 added, 4 updated" said
+        # nothing about whether anybody could actually raise one.
+        line = (f"TA/DA: {r['created']} added, {r['updated']} updated, "
+                f"{len(r['needs_level'])} still need a level")
+        if r['routed']:
+            line += (', routed ' + ', '.join(f'{v} via {k}' for k, v in
+                                             sorted(r['routed'].items(), key=lambda x: -x[1])))
+        line += f", {r['no_approver']} still have no approver."
+        lines.append(line)
+    except Exception as e:                                   # noqa: BLE001
+        lines.append(f'TA/DA directory refresh failed: {e}')
+    try:
+        from roompulse.directory import sync_from_directory
+        r = sync_from_directory()
+        lines.append('Help Desk: ' + ', '.join(f'{k} {v}' for k, v in sorted(r.items())
+                                               if isinstance(v, int)))
+    except Exception as e:                                   # noqa: BLE001
+        lines.append(f'Help Desk directory refresh failed: {e}')
+    return lines
