@@ -36,7 +36,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from accounts.auth import PortalScopedAPIView, optional_user, require_superadmin, require_user
-from accounts.moderation import ModerationStatus, log_activity
+from accounts.moderation import ModerationStatus, can_see_submitter, log_activity
 
 from .models import BuiltInRemoval, PolicyDocument
 from .pdf_convert import ConversionError, convert_to_pdf
@@ -75,8 +75,11 @@ def _serialize(d, request=None, viewer=None):
         'approvalDate': d.approval_date.isoformat() if d.approval_date else None,
         'file': url, 'fileName': d.original_name, 'sizeBytes': d.size_bytes,
         'moderationStatus': d.moderation_status,
-        'reviewNote': d.review_note or '',
-        'submittedBy': d.submitted_by_name or '',
+        # approvedBy / reviewedBy above are printed on the document itself
+        # and stay public; this is who uploaded it to the portal, which is
+        # a different thing and nobody else's business.
+        'reviewNote': (d.review_note or '') if can_see_submitter(d, viewer) else '',
+        'submittedBy': (d.submitted_by_name or '') if can_see_submitter(d, viewer) else '',
         'submittedAt': d.created_at.isoformat() if d.created_at else None,
         'isMine': bool(viewer and d.submitted_by_id == viewer.id),
         'canDelete': d.can_delete(viewer),

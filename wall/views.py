@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework import status as http
 
 from accounts.auth import PortalScopedAPIView, optional_user, require_superadmin, require_user
-from accounts.moderation import ModerationStatus, log_activity
+from accounts.moderation import ModerationStatus, can_see_submitter, log_activity
 
 from .models import WallPhoto
 
@@ -23,15 +23,31 @@ def _serialize(p, request=None, viewer=None):
     # the QA proxy build_absolute_uri answered with 127.0.0.1:8001, which the
     # browser read as the viewer's own machine.
     url = p.image.url if p.image else ''
+    mine = bool(viewer and p.submitted_by_id == viewer.id)
+
+    # Who uploaded a photo is not for the whole company. The wall is a
+    # noticeboard, not a list of who posted what, and the address especially
+    # is nobody else's business -- it was going out to every caller, signed
+    # in or not, on a tool 717 people can open.
+    #
+    # Withheld from the payload rather than hidden by the screen: a field the
+    # API sends is readable by anyone who opens the network tab, so hiding it
+    # in the page would have looked fixed without being fixed.
+    #
+    # A super admin sees it because that is what moderating a queue needs,
+    # and you always see your own.
+    show_who = can_see_submitter(p, viewer)
     return {
         'id': p.id, 'title': p.title, 'category': p.category, 'caption': p.caption,
         'src': url,
         'moderationStatus': p.moderation_status,
-        'submittedBy': p.submitted_by_name or '',
-        'submittedByEmail': p.submitted_by_email or '',
+        'submittedBy': (p.submitted_by_name or '') if show_who else '',
+        'submittedByEmail': (p.submitted_by_email or '') if show_who else '',
         'submittedAt': p.created_at.isoformat() if p.created_at else None,
-        'reviewNote': p.review_note or '',
-        'isMine': bool(viewer and p.submitted_by_id == viewer.id),
+        # The note says why something was refused or what was changed. It is
+        # between the person who uploaded it and whoever reviewed it.
+        'reviewNote': (p.review_note or '') if show_who else '',
+        'isMine': mine,
     }
 
 
