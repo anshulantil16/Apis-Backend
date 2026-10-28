@@ -395,3 +395,56 @@ class TheQueueAndTheLog(UploadsToATempFolder):
         ref = EmployeeReferral.objects.get()
         self.assertEqual(ref.referrer_name, 'Someone Else')
         self.assertEqual(ref.submitted_by, self.staff)
+
+
+class WhoUploadedAPhotoIsNotPublic(TestCase):
+    """The wall is a noticeboard, not a list of who posted what.
+
+    Every caller of /api/wall/photos/ was being told the name AND the email
+    address of whoever uploaded each photo — signed in or not, on a tool 717
+    people can open. Withheld from the payload rather than hidden by the
+    screen: a field the API sends is readable by anyone who opens the
+    network tab, so hiding it in the page would have looked fixed without
+    being fixed.
+    """
+
+    def setUp(self):
+        self.rainy = PortalUser.objects.create(email='rainy@apisindia.com',
+                                               employee_code='W1', name='RAINY CHAUDHARY')
+        self.other = PortalUser.objects.create(email='someone@apisindia.com',
+                                               employee_code='W2', name='Someone Else')
+        self.admin = PortalUser.objects.create(email='admin@apisindia.com', employee_code='W3',
+                                               name='Admin', is_superadmin=True)
+        self.photo = WallPhoto.objects.create(
+            title='Quality Day', category='team', submitted_by=self.rainy,
+            submitted_by_name=self.rainy.name, submitted_by_email=self.rainy.email,
+            moderation_status=ModerationStatus.APPROVED, review_note='looks fine')
+
+    def _wall(self, user=None):
+        kw = {'HTTP_AUTHORIZATION': f'Bearer {PortalSession.start(user)}'} if user else {}
+        r = self.client.get('/api/wall/photos/', **kw)
+        self.assertEqual(r.status_code, 200)
+        return next(p for p in r.json() if p['id'] == self.photo.id)
+
+    def test_another_employee_is_not_told_who_uploaded_it(self):
+        row = self._wall(self.other)
+        self.assertEqual(row['submittedBy'], '')
+        self.assertEqual(row['submittedByEmail'], '')
+        self.assertEqual(row['reviewNote'], '')
+        self.assertEqual(row['title'], 'Quality Day', 'the photo itself still shows')
+
+    def test_a_caller_with_no_session_is_told_even_less(self):
+        row = self._wall()
+        self.assertEqual(row['submittedBy'], '')
+        self.assertEqual(row['submittedByEmail'], '')
+
+    def test_you_still_see_your_own(self):
+        row = self._wall(self.rainy)
+        self.assertEqual(row['submittedBy'], 'RAINY CHAUDHARY')
+        self.assertTrue(row['isMine'])
+
+    def test_a_super_admin_still_sees_it_because_moderating_needs_it(self):
+        row = self._wall(self.admin)
+        self.assertEqual(row['submittedBy'], 'RAINY CHAUDHARY')
+        self.assertEqual(row['submittedByEmail'], 'rainy@apisindia.com')
+        self.assertEqual(row['reviewNote'], 'looks fine')
