@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework import status as http
 
 from accounts.auth import PortalScopedAPIView, optional_user, require_superadmin, require_user
-from accounts.moderation import ModerationStatus, log_activity
+from accounts.moderation import ModerationStatus, can_see_submitter, log_activity
 
 from wall.views import _validate as validate_image
 
@@ -18,14 +18,15 @@ from .models import Announcement, Holiday, HolidayZone, NewsItem, NewsSource
 
 
 def _announcement(a, viewer=None):
+    show_who = can_see_submitter(a, viewer)
     return {
         'id': a.id, 'title': a.title, 'body': a.body, 'tone': a.tone,
         'date': a.announced_on.isoformat(),
         'expiresOn': a.expires_on.isoformat() if a.expires_on else None,
         'pinned': a.pinned,
         'moderationStatus': a.moderation_status,
-        'submittedBy': a.submitted_by_name or '',
-        'reviewNote': a.review_note or '',
+        'submittedBy': (a.submitted_by_name or '') if show_who else '',
+        'reviewNote': (a.review_note or '') if show_who else '',
         'isMine': bool(viewer and a.submitted_by_id == viewer.id),
     }
 
@@ -245,8 +246,8 @@ def _news(n, request=None, viewer=None):
         'pinned': n.pinned,
         'createdAt': n.created_at.isoformat() if n.created_at else None,
         'moderationStatus': n.moderation_status,
-        'submittedBy': n.submitted_by_name or '',
-        'reviewNote': n.review_note or '',
+        'submittedBy': (n.submitted_by_name or '') if can_see_submitter(n, viewer) else '',
+        'reviewNote': (n.review_note or '') if can_see_submitter(n, viewer) else '',
         'isMine': bool(viewer and n.submitted_by_id == viewer.id),
     }
 

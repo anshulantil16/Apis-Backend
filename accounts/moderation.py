@@ -155,3 +155,25 @@ def log_activity(actor, action, obj=None, summary='', detail=None, request=None,
         )
     except Exception:
         pass
+
+
+def can_see_submitter(obj, viewer):
+    """Whether this viewer may be told who put something on the intranet.
+
+    The dashboard, the wall, the policy shelf and the vacancies board are
+    places to read what was posted, not registers of who posted it. The
+    name was going out to every caller of all four -- and on the wall and
+    the vacancies board, the person's email address with it.
+
+    You always see your own, and a super admin sees everyone's because
+    that is what moderating the queue needs. Anybody else gets nothing,
+    and gets it from the API rather than from the screen: a field the
+    server sends is readable by anyone who opens the network tab, so
+    hiding it in the page looks fixed without being fixed.
+
+    `moderation_payload` above is deliberately NOT scoped by this -- it
+    builds the approval queue, which only a super admin can open at all.
+    """
+    if not viewer:
+        return False
+    return bool(viewer.is_superadmin or obj.submitted_by_id == viewer.id)

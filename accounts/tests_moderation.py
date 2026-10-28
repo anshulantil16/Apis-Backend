@@ -13,6 +13,7 @@ from django.urls import reverse  # noqa: F401  (paths are literal here)
 
 from accounts.models import ActivityLog, PortalSession, PortalUser
 from accounts.moderation import ModerationStatus
+from noticeboard.models import Announcement
 from vacancies.models import Vacancy
 from wall.models import WallPhoto
 
@@ -448,3 +449,63 @@ class WhoUploadedAPhotoIsNotPublic(TestCase):
         self.assertEqual(row['submittedBy'], 'RAINY CHAUDHARY')
         self.assertEqual(row['submittedByEmail'], 'rainy@apisindia.com')
         self.assertEqual(row['reviewNote'], 'looks fine')
+
+
+class WhoPostedSomethingIsNotPublicAnywhere(TestCase):
+    """The same leak the wall had, on the three boards beside it.
+
+    The dashboard announcements, the policy shelf and the vacancies board
+    all told every caller who had submitted each item — and vacancies sent
+    the person's email address too. These are places to read what was
+    posted, not registers of who posted it.
+    """
+
+    def setUp(self):
+        self.rainy = PortalUser.objects.create(email='rainy@apisindia.com',
+                                               employee_code='M1', name='RAINY CHAUDHARY')
+        self.other = PortalUser.objects.create(email='other@apisindia.com',
+                                               employee_code='M2', name='Someone Else')
+        self.admin = PortalUser.objects.create(email='boss@apisindia.com', employee_code='M3',
+                                               name='Admin', is_superadmin=True)
+        common = dict(submitted_by=self.rainy, submitted_by_name=self.rainy.name,
+                      submitted_by_email=self.rainy.email,
+                      moderation_status=ModerationStatus.APPROVED, review_note='fine')
+        self.ann = Announcement.objects.create(title='Diwali', body='Closed Monday', **common)
+        self.vac = Vacancy.objects.create(function='Sales', department='GT', title='ASM',
+                                          location='Delhi', state='Delhi', **common)
+
+    def _get(self, path, user=None):
+        kw = {'HTTP_AUTHORIZATION': f'Bearer {PortalSession.start(user)}'} if user else {}
+        r = self.client.get(path, **kw)
+        self.assertEqual(r.status_code, 200, path)
+        return r.json()
+
+    @staticmethod
+    def _rows(payload):
+        return payload if isinstance(payload, list) else next(
+            v for v in payload.values() if isinstance(v, list))
+
+    def test_an_announcement_does_not_name_who_posted_it(self):
+        row = next(a for a in self._rows(self._get('/api/noticeboard/announcements/', self.other))
+                   if a['id'] == self.ann.id)
+        self.assertEqual(row['submittedBy'], '')
+        self.assertEqual(row['reviewNote'], '')
+        self.assertEqual(row['title'], 'Diwali', 'the announcement itself still shows')
+
+    def test_a_vacancy_leaks_neither_the_name_nor_the_address(self):
+        row = next(v for v in self._rows(self._get('/api/vacancies/', self.other))
+                   if v['id'] == self.vac.id)
+        self.assertEqual(row['submittedBy'], '')
+        self.assertEqual(row['submittedByEmail'], '')
+        self.assertEqual(row['title'], 'ASM')
+
+    def test_you_still_see_your_own_and_a_super_admin_sees_everyones(self):
+        mine = next(a for a in self._rows(self._get('/api/noticeboard/announcements/', self.rainy))
+                    if a['id'] == self.ann.id)
+        self.assertEqual(mine['submittedBy'], 'RAINY CHAUDHARY')
+        theirs = next(a for a in self._rows(self._get('/api/noticeboard/announcements/', self.admin))
+                      if a['id'] == self.ann.id)
+        self.assertEqual(theirs['submittedBy'], 'RAINY CHAUDHARY')
+        v = next(x for x in self._rows(self._get('/api/vacancies/', self.admin))
+                 if x['id'] == self.vac.id)
+        self.assertEqual(v['submittedByEmail'], 'rainy@apisindia.com')

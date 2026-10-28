@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework import status as http
 
 from accounts.auth import PortalScopedAPIView, optional_user, require_superadmin, require_user
-from accounts.moderation import ModerationStatus, log_activity
+from accounts.moderation import ModerationStatus, can_see_submitter, log_activity
 
 from .models import Vacancy
 
@@ -54,15 +54,16 @@ def _serialize(v, viewer=None):
     the queue from the same endpoint.
     """
     mine = bool(viewer and v.submitted_by_id == viewer.id)
+    show_who = can_see_submitter(v, viewer)
     return {
         'id': v.id, 'function': v.function, 'department': v.department, 'title': v.title,
         'grade': v.grade, 'location': v.location, 'state': v.state,
         'reportingManager': v.reporting_manager, 'type': v.type,
         'experience': v.experience, 'education': v.education, 'status': v.status,
         'moderationStatus': v.moderation_status,
-        'submittedBy': v.submitted_by_name or '',
-        'submittedByEmail': v.submitted_by_email or '',
-        'reviewNote': v.review_note or '',
+        'submittedBy': (v.submitted_by_name or '') if show_who else '',
+        'submittedByEmail': (v.submitted_by_email or '') if show_who else '',
+        'reviewNote': (v.review_note or '') if show_who else '',
         'isMine': mine,
         'confidential': v.confidential,
     }

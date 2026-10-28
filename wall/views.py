@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework import status as http
 
 from accounts.auth import PortalScopedAPIView, optional_user, require_superadmin, require_user
-from accounts.moderation import ModerationStatus, log_activity
+from accounts.moderation import ModerationStatus, can_see_submitter, log_activity
 
 from .models import WallPhoto
 
@@ -36,7 +36,7 @@ def _serialize(p, request=None, viewer=None):
     #
     # A super admin sees it because that is what moderating a queue needs,
     # and you always see your own.
-    show_who = mine or bool(viewer and viewer.is_superadmin)
+    show_who = can_see_submitter(p, viewer)
     return {
         'id': p.id, 'title': p.title, 'category': p.category, 'caption': p.caption,
         'src': url,
