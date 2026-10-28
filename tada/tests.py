@@ -214,3 +214,107 @@ class TheImportIsGone(TestCase):
     def test_the_template_and_import_endpoints_no_longer_exist(self):
         self.assertEqual(self.client.get('/api/tada/users/template/').status_code, 404)
         self.assertEqual(self.client.post('/api/tada/users/import/').status_code, 404)
+
+
+class TheApproverComesFromWhateverTheMasterHas(TestCase):
+    """HRMS sends a reporting manager for almost nobody.
+
+    The screen showed 716 people and three approvers, which is not a sync
+    that went wrong -- it is the master having a reporting manager for three
+    people. The master does hold a HOD and a leave chain as well, so the
+    approver is taken from the first of those that is actually filled in,
+    and which one it was is recorded rather than left to look like magic.
+    """
+
+    def setUp(self):
+        self.boss = PortalUser.objects.create(employee_code='HO0235', name='Boss',
+                                              email='boss@apisindia.com')
+        self.p = PortalUser.objects.create(employee_code='HO0101', name='Asha',
+                                           email='asha@apisindia.com', grade='M4')
+
+    def _sync_and_get(self):
+        sync_from_master()
+        return TadaUser.objects.get(employee_id='HO0101')
+
+    def test_the_reporting_manager_is_used_first(self):
+        self.p.reporting_manager_code = 'HO0235'
+        self.p.hod_code = 'HO0235'
+        self.p.save()
+        u = self._sync_and_get()
+        self.assertEqual((u.reporting_manager_id, u.approver_source), ('HO0235', 'manager'))
+
+    def test_the_hod_routes_the_request_when_there_is_no_manager(self):
+        self.p.hod_code, self.p.hod_name = 'HO0235', 'Boss'
+        self.p.save()
+        u = self._sync_and_get()
+        self.assertEqual((u.reporting_manager_id, u.approver_source), ('HO0235', 'hod'))
+        self.assertEqual(u.hod_name, 'Boss', 'shown in its own column either way')
+
+    def test_the_leave_chain_is_the_last_resort(self):
+        self.p.leave_approver_code = 'HO0235'
+        self.p.save()
+        self.assertEqual(self._sync_and_get().approver_source, 'leave approver')
+
+    def test_a_code_for_somebody_who_is_not_here_is_not_stored(self):
+        """Worse than no approver: an unrouted request is visible on the
+        admin screen, one routed at nobody waits in silence."""
+        self.p.hod_code = 'GONE99'
+        self.p.save()
+        u = self._sync_and_get()
+        self.assertEqual(u.reporting_manager_id, '')
+        self.assertEqual(u.hod_id, 'GONE99', 'still recorded, just not routed through')
+
+    def test_nobody_is_routed_to_themselves(self):
+        self.p.hod_code = 'HO0101'
+        self.p.save()
+        self.assertEqual(self._sync_and_get().reporting_manager_id, '')
+
+    def test_an_approver_set_by_hand_survives_a_master_that_now_has_one(self):
+        self.p.hod_code = 'HO0235'
+        self.p.save()
+        u = self._sync_and_get()
+        u.reporting_manager_id, u.approver_source = 'HO0999', 'set here'
+        u.save()
+        self.p.reporting_manager_code = 'HO0235'
+        self.p.save()
+        u = self._sync_and_get()
+        self.assertEqual((u.reporting_manager_id, u.approver_source), ('HO0999', 'set here'))
+
+    def test_a_hod_already_filled_in_is_not_wiped_by_a_thin_feed(self):
+        self.p.hod_code, self.p.hod_name = 'HO0235', 'Boss'
+        self.p.save()
+        self._sync_and_get()
+        self.p.hod_code, self.p.hod_name = '', ''
+        self.p.save()
+        self.assertEqual(self._sync_and_get().hod_name, 'Boss')
+
+    def test_the_summary_says_how_many_are_still_unrouted(self):
+        out = sync_from_master()
+        self.assertEqual(out['no_approver'], 2, 'neither of them has anybody')
+        self.p.hod_code = 'HO0235'
+        self.p.save()
+        out = sync_from_master()
+        self.assertEqual(out['routed'], {'hod': 1})
+        self.assertEqual(out['no_approver'], 1)
+
+
+class ClearingEverythingIsNotOpenToTheWorld(TestCase):
+    """POST /api/tada/admin/reset/ deleted every request, and with
+    what='all' the entire directory, for any caller who knew the URL."""
+
+    def test_an_anonymous_caller_cannot_delete_the_directory(self):
+        PortalUser.objects.create(employee_code='HO0101', name='Asha',
+                                  email='asha@apisindia.com')
+        sync_from_master()
+        r = self.client.post('/api/tada/admin/reset/', {'what': 'all'},
+                             content_type='application/json')
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(TadaUser.objects.count(), 1)
+
+    def test_an_ordinary_employee_cannot_either(self):
+        plain = PortalUser.objects.create(employee_code='P1', name='Plain',
+                                          email='p@apisindia.com')
+        r = self.client.post('/api/tada/admin/reset/', {'what': 'all'},
+                             content_type='application/json',
+                             HTTP_AUTHORIZATION='Bearer ' + PortalSession.start(plain))
+        self.assertEqual(r.status_code, 403)

@@ -26,6 +26,14 @@ class TadaUser(models.Model):
     grade                = models.CharField(max_length=20, blank=True)   # optional cadre-grade
     hq_city              = models.CharField(max_length=200, blank=True)
     reporting_manager_id = models.CharField(max_length=50, blank=True)
+    # Where the approver above came from, so the admin table can show whether
+    # a person was routed by HRMS or by hand. See tada/sync.py.
+    approver_source      = models.CharField(max_length=20, blank=True)
+    # The head of department, straight from HRMS. Not an approval step --
+    # it is who to escalate to, and the fallback the sync routes through
+    # when HRMS has no reporting manager for somebody.
+    hod_id               = models.CharField(max_length=50, blank=True)
+    hod_name             = models.CharField(max_length=200, blank=True)
     role                 = models.CharField(max_length=20, choices=ROLE_CHOICES, default='employee')
     is_active            = models.BooleanField(default=True)
     vehicle_rc_no        = models.CharField(max_length=50, blank=True)

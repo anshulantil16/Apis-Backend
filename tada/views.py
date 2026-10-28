@@ -87,12 +87,21 @@ def serialize_user(u, manager_names=None):
         'grade': u.grade,
         'hq_city': u.hq_city, 'role': u.role, 'reporting_manager_id': mgr,
         'reporting_manager_name': (manager_names or {}).get(mgr, ''),
+        # Where that approver came from. HRMS sends a reporting manager for
+        # almost nobody, so most are routed through the HOD or the leave
+        # chain instead -- the screen says which, rather than showing a code
+        # that appeared from nowhere.
+        'approver_source': u.approver_source,
+        'hod_id': u.hod_id,
+        'hod_name': u.hod_name or (manager_names or {}).get(u.hod_id, ''),
         'is_active': u.is_active,
         'vehicle_rc_no': u.vehicle_rc_no,
         # A person with no level cannot be paid an allowance, because every
         # matrix is keyed on the band. Said plainly here so the table can
         # show it rather than leaving a quietly broken row.
         'needs_level': not bool(policy.band_for_level(u.level)),
+        # No approver means a request has nowhere to go once it is raised.
+        'needs_approver': not bool(mgr),
         'caps': policy.get_caps(u.level),
     }
 
@@ -472,9 +481,10 @@ class UsersListView(PortalScopedAPIView):
             return err
         users = list(TadaUser.objects.all())
         # One query for the approver names rather than one per row.
-        names = dict(TadaUser.objects.filter(
-            employee_id__in={u.reporting_manager_id for u in users if u.reporting_manager_id}
-        ).values_list('employee_id', 'name'))
+        wanted = {u.reporting_manager_id for u in users if u.reporting_manager_id}
+        wanted |= {u.hod_id for u in users if u.hod_id and not u.hod_name}
+        names = dict(TadaUser.objects.filter(employee_id__in=wanted)
+                     .values_list('employee_id', 'name'))
         rows = [serialize_user(u, names) for u in users]
         return Response({
             'users': rows,
@@ -499,6 +509,15 @@ class UserSyncView(PortalScopedAPIView):
         n = len(result['needs_level'])
         message = (f"{result['created']} added, {result['updated']} updated, "
                    f"{result['unchanged']} already current.")
+        if result['routed']:
+            message += (' Approver taken from the master for '
+                        + ', '.join(f'{v} via {k}' for k, v in
+                                    sorted(result['routed'].items(), key=lambda x: -x[1]))
+                        + '.')
+        if result['no_approver']:
+            message += (f" {result['no_approver']} still have no approver — HRMS has "
+                        'nobody for them, so set one here or their requests have '
+                        'nowhere to go.')
         if n:
             message += (f" {n} have no TA/DA level yet — set one before they claim, "
                         "or every allowance comes out at zero.")
@@ -541,6 +560,10 @@ class UserDetailView(PortalScopedAPIView):
                 if value and not policy.band_for_level(value):
                     return Response({'error': f'"{value}" is not a TA/DA level. '
                                               'Use M1-M7 or E1-E4.'}, status=400)
+            if field == 'reporting_manager_id':
+                # Chosen here, so it stops being whatever HRMS routed it to
+                # and the table stops claiming it came from the master.
+                u.approver_source = 'set here' if value else ''
             if field == 'reporting_manager_id' and value:
                 if not TadaUser.objects.filter(employee_id=value).exists():
                     return Response({'error': f'No employee {value} in the directory, '
@@ -563,8 +586,9 @@ class UserDetailView(PortalScopedAPIView):
             u.save()
             log_activity('tada.users.update', f'TA/DA: {u.name} ({u.employee_id}) changed',
                          detail=changes, request=request)
-        names = dict(TadaUser.objects.filter(employee_id=u.reporting_manager_id)
-                     .values_list('employee_id', 'name'))
+        names = dict(TadaUser.objects.filter(
+            employee_id__in=[c for c in (u.reporting_manager_id, u.hod_id) if c]
+        ).values_list('employee_id', 'name'))
         return Response({'user': serialize_user(u, names), 'changed': list(changes)})
 
 
@@ -610,9 +634,18 @@ class AdminOverviewView(APIView):
         })
 
 
-class AdminResetView(APIView):
-    """Clear TA/DA data. what='requests' (default) or 'all' (also users)."""
+class AdminResetView(PortalScopedAPIView):
+    """Clear TA/DA data. what='requests' (default) or 'all' (also users).
+
+    Gated, late. This deletes every travel request in the system and, with
+    what='all', the whole directory -- and it was answering any caller who
+    knew the URL, with no sign-in at all.
+    """
+
     def post(self, request):
+        _user, err = require_superadmin(request)
+        if err:
+            return err
         what = (request.data.get('what') or 'requests').strip()
         n = TravelRequest.objects.count()
         TravelRequest.objects.all().delete()   # cascades expense/local items + logs
