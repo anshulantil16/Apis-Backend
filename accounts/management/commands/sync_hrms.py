@@ -97,8 +97,16 @@ def refresh_tool_directories():
     try:
         from tada.sync import sync_from_master
         r = sync_from_master()
-        lines.append(f"TA/DA: {r['created']} added, {r['updated']} updated, "
-                     f"{len(r['needs_level'])} still need a level.")
+        # The routing counts are the point of the line, not decoration: an
+        # approver is what a claim travels to, and "0 added, 4 updated" said
+        # nothing about whether anybody could actually raise one.
+        line = (f"TA/DA: {r['created']} added, {r['updated']} updated, "
+                f"{len(r['needs_level'])} still need a level")
+        if r['routed']:
+            line += (', routed ' + ', '.join(f'{v} via {k}' for k, v in
+                                             sorted(r['routed'].items(), key=lambda x: -x[1])))
+        line += f", {r['no_approver']} still have no approver."
+        lines.append(line)
     except Exception as e:                                   # noqa: BLE001
         lines.append(f'TA/DA directory refresh failed: {e}')
     try:
