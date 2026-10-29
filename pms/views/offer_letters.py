@@ -37,7 +37,7 @@ class OfferLetterTemplateView(SessionRequiredAPIView):
             'Date of Joining', 'Work Location', 'Current CTC *', 'New CTC *',
             'Increment %', 'Promotion %', 'Performance Rating', 'Performance Assessment', 'Grade Label',
             'Special Reward (One-time)', 'Special Reward Note',
-            'Effective Date *', 'Remarks',
+            'Effective Date *', 'Letter Date', 'Remarks',
         ]
         component_headers = [c[3] for c in SALARY_COMPONENTS]
         headers = identity + component_headers
@@ -94,12 +94,16 @@ class OfferLetterTemplateView(SessionRequiredAPIView):
              'Basic Salary (Monthly)': 14000, 'HRA (Monthly)': 5600, 'Special Allowance (Monthly)': 4000},
         ]
 
-        date_col = headers.index('Effective Date *') + 1
+        # Left blank in the samples on purpose: Letter Date is optional and
+        # falls back to the date typed on the screen. Both columns are still
+        # formatted as dates so a typed value is not stored as text.
+        date_cols = {headers.index('Effective Date *') + 1,
+                     headers.index('Letter Date') + 1}
         for ri, d in enumerate(sample_dicts, 2):
             for ci, h in enumerate(headers, 1):
                 c = ws.cell(row=ri, column=ci, value=d.get(h, ''))
                 c.border = border
-                if ci == date_col:
+                if ci in date_cols:
                     c.number_format = 'yyyy-mm-dd'
 
         for i in range(1, len(headers) + 1):
@@ -182,6 +186,7 @@ def _process_offer_batch(rows, batch_id, send_emails):
                     current_ctc=r['current_ctc'], new_ctc=r['new_ctc'],
                     increment_pct=r['increment_pct'], promotion_pct=r['promotion_pct'],
                     effective_date=r['effective_date'],
+                    letter_date=r.get('letter_date'),
                     old_designation=_clip_to_field(OfferLetter, 'old_designation', r['current_designation']),
                     new_designation=_clip_to_field(OfferLetter, 'new_designation', r['new_designation']),
                     performance_rating=_clip_to_field(OfferLetter, 'performance_rating', r['performance_rating']),
@@ -209,6 +214,7 @@ def _process_offer_batch(rows, batch_id, send_emails):
                     salutation_title=r['salutation'], assessment=r['assessment'],
                     emp_details=r['emp_details'], salary_breakup=r['salary_breakup'],
                     special_reward=r['special_reward'], special_reward_note=r['special_reward_note'],
+                    letter_date=r.get('letter_date'),
                 ).getvalue()
                 safe_id = re.sub(r'[^A-Za-z0-9_.-]', '_', str(r['emp_id']))[:40]
                 offer.pdf_file.save(f"offer_{safe_id}_{offer.id}.pdf",
@@ -303,6 +309,22 @@ class OfferLetterUploadView(SessionRequiredAPIView):
 
         send_emails = str(request.data.get('send_emails', 'false')).lower() == 'true'
 
+        # The date printed on the letter. Blank means today, which is what it
+        # always was; a reissue needs the day the letters were actually given
+        # out, or the corrected copy contradicts the one already in the file.
+        raw_letter_date = str(request.data.get('letter_date', '') or '').strip()
+        batch_letter_date = None
+        if raw_letter_date:
+            for _fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
+                try:
+                    batch_letter_date = datetime.strptime(raw_letter_date, _fmt).date()
+                    break
+                except ValueError:
+                    pass
+            if batch_letter_date is None:
+                return Response({'error': f'"{raw_letter_date}" is not a date we can read. '
+                                          'Use YYYY-MM-DD, for example 2026-07-31.'}, status=400)
+
         file = request.FILES.get('file')
         if not file:
             return Response({'error': 'No file provided.'}, status=400)
@@ -329,6 +351,8 @@ class OfferLetterUploadView(SessionRequiredAPIView):
             'special reward (one-time)': 'special_reward', 'special reward': 'special_reward',
             'special reward note': 'special_reward_note',
             'effective date': 'effective_date', 'remarks': 'remarks',
+            # Optional. Overrides the date typed on the screen, row by row.
+            'letter date': 'letter_date',
         }
         # salary-component columns keyed by their (lower-cased) Excel header → component key
         COMP_MAP = {c[3].strip().lower(): c[0] for c in SALARY_COMPONENTS}
@@ -467,6 +491,7 @@ class OfferLetterUploadView(SessionRequiredAPIView):
                 'special_reward': sf(get_val(row, 'special_reward')),
                 'special_reward_note': str(get_val(row, 'special_reward_note') or '').strip(),
                 'effective_date': eff_date,
+                'letter_date': format_date(get_val(row, 'letter_date')) or batch_letter_date,
                 'salary_breakup': salary_breakup,
                 'emp_details': {'function': function, 'cadre': cadre, 'grade': grade,
                                 'date_of_joining': date_of_joining, 'work_location': work_location},

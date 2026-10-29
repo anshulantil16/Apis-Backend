@@ -444,3 +444,49 @@ class NobodySignedInSeesNothing(TestCase):
     def test_the_login_endpoint_stays_open(self):
         """Gating the way in locks everybody out of everything."""
         self.assertNotEqual(Client().post('/api/pms/login/', {}).status_code, 401)
+
+
+class TheDateOnTheLetterIsNotTheDateOfTheRun(TestCase):
+    """An appraisal letter reissued later must keep the date it was given.
+
+    The letters for the 2026 cycle were dated 31 July 2026. Regenerating one
+    in October -- a corrected figure, a changed designation -- stamped it
+    with the day of the run, so the employee's second copy contradicted the
+    one already in their file and the one P&C had on record.
+    """
+
+    def _pdf_text(self, **kw):
+        from datetime import date
+        from pms.offer_letter import generate_offer_letter_pdf
+        buf = generate_offer_letter_pdf(
+            None, 600000, 660000, 10, 0, date(2026, 4, 1),
+            employee_id='EMP001', employee_name='Rahul Sharma',
+            department='Sales', salary_breakup={'basic': 27500}, **kw)
+        from pypdf import PdfReader
+        return '\n'.join(p.extract_text() for p in PdfReader(buf).pages)
+
+    def test_a_given_date_is_what_the_letter_says(self):
+        self.assertIn('31 July 2026', self._pdf_text(letter_date=__import__('datetime').date(2026, 7, 31)))
+
+    def test_no_date_still_means_today(self):
+        """The old behaviour is the fallback, so every letter made before
+        this existed still reads the way it did."""
+        from datetime import date
+        self.assertIn(date.today().strftime('%d %B %Y'), self._pdf_text())
+
+    def test_the_upload_refuses_a_date_it_cannot_read(self):
+        """Silently falling back to today is how a letter goes out dated
+        wrong without anybody seeing it happen."""
+        import io
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.active.append(['Employee ID *', 'Employee Name *', 'Email *',
+                          'Current CTC *', 'New CTC *', 'Effective Date *'])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        buf.name = 'x.xlsx'
+        r = signed_in().post('/api/pms/offer-letter/upload/',
+                             {'file': buf, 'letter_date': '31 July 2026'})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('not a date we can read', r.json()['error'])

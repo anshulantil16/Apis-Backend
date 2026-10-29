@@ -372,7 +372,7 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
                                performance_rating=None, grade_label=None, employee_id=None,
                                employee_name=None, department=None, salutation_title=None,
                                assessment=None, emp_details=None, salary_breakup=None,
-                               special_reward=0, special_reward_note=''):
+                               special_reward=0, special_reward_note='', letter_date=None):
     """Generate the APIS appraisal / promotion letter PDF.
 
     Works with both PMS employees and standalone (Excel-uploaded) data.
@@ -424,7 +424,10 @@ def generate_offer_letter_pdf(employee, current_ctc, new_ctc, increment_pct, pro
 
     reviewed_fy, next_review = _fy_context(effective_date)
     eff_str = effective_date.strftime('%d %B %Y')
-    date_str = datetime.now().strftime('%d %B %Y')
+    # The date on the letter, not the date of the run. Regenerating a letter
+    # months later -- a corrected figure, a reissue -- must not restamp it
+    # with today, or the new copy disagrees with the one already issued.
+    date_str = (letter_date or datetime.now().date()).strftime('%d %B %Y')
 
     if is_promotion:
         letter_title = 'Annual Compensation Review &amp; Promotion Letter'
