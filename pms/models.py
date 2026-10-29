@@ -470,6 +470,13 @@ class OfferLetter(models.Model):
     increment_pct  = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     promotion_pct  = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     effective_date = models.DateField()
+    # The date PRINTED on the letter, which is not the date the PDF was made.
+    # A letter reissued in October because a figure was corrected still has to
+    # read 31 July 2026 -- the day it was given to everybody -- or the reissued
+    # copy contradicts the one already in the employee's file. Null means the
+    # letter was made before this was recorded; those fall back to the day of
+    # generation, which is what they already said.
+    letter_date    = models.DateField(null=True, blank=True)
     old_designation = models.CharField(max_length=200, blank=True)
     new_designation = models.CharField(max_length=200, blank=True)
     performance_rating = models.CharField(max_length=100, blank=True)
