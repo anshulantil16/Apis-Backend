@@ -51,6 +51,7 @@ class AppKey(models.TextChoices):
     POLICIES       = 'policies',       'Policies'
     APIS_WALL      = 'apis-wall',      'APIS Wall'
     CTC            = 'ctc-calculator', 'CTC Calculator'
+    TALENT_MATCH   = 'talent-match',   'TalentMatch'
 
 
 # What a brand-new employee can open before anyone grants them more. The
