@@ -40,6 +40,7 @@ class WallPhoto(ModeratedContent):
     CATEGORY_CHOICES = [
         ('Celebrations', 'Celebrations'),
         ('Team Moments', 'Team Moments'),
+        ('Welcome Aboard', 'Welcome Aboard'),
         ('CSR', 'CSR'),
         ('Events', 'Events'),
         ('Other', 'Other'),
