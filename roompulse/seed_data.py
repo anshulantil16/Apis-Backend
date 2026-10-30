@@ -8,8 +8,8 @@ change later. This module is for anything that needs the same seed data
 going forward (currently: the Super Admin reset endpoint).
 """
 SEED_ROOMS = [
-    {'name': 'Conference Room - 1', 'label': '(Apis)',     'floor': '1st Floor', 'color': '#f59e0b'},
-    {'name': 'Conference Room - 2', 'label': '(Misk)',      'floor': '2nd Floor', 'color': '#6366f1'},
-    {'name': 'Conference Room - 3', 'label': '(Nutrasip)',  'floor': '2nd Floor', 'color': '#10b981'},
+    {'name': 'Conference Room - 1', 'label': '(Apis)',     'floor': '1st Floor', 'color': '#f59e0b', 'capacity': 14},
+    {'name': 'Conference Room - 2', 'label': '(Misk)',      'floor': '2nd Floor', 'color': '#6366f1', 'capacity': 10},
+    {'name': 'Conference Room - 3', 'label': '(Nutrasip)',  'floor': '2nd Floor', 'color': '#10b981', 'capacity': 30},
 ]
-SEED_ROOM_DEFAULTS = {'capacity': 12, 'amenities': ['Projector', 'Whiteboard', 'Video Conferencing']}
+SEED_ROOM_DEFAULTS = {'amenities': ['Projector', 'Whiteboard', 'Video Conferencing']}
