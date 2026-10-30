@@ -1257,3 +1257,25 @@ class TheThreePeopleHrmsNamesOnEachRecord(TestCase):
                             HTTP_AUTHORIZATION=f'Bearer {PortalSession.start(me)}')
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()['profile']['hod'], 'Kunal Parewa')
+
+
+class EveryToolIsSomethingAnAdministratorCanGrant(TestCase):
+    """A tool that is not in AppKey has no column in "Who can open what".
+
+    TalentMatch arrived open to everyone signed in, on the reasoning that it
+    reads files in the browser and calls no API, so there is nothing for the
+    server to refuse. That is true about the data and beside the point about
+    access: it compares resumes against a job description, which is P&C's
+    work, and 717 people do not need it on their dashboard. The key is what
+    puts the column in the matrix.
+    """
+
+    def test_talentmatch_can_be_granted_like_every_other_tool(self):
+        from accounts.models import AppKey
+        self.assertIn('talent-match', AppKey.values)
+        self.assertEqual(AppKey.TALENT_MATCH.label, 'TalentMatch')
+
+    def test_nobody_holds_it_until_somebody_grants_it(self):
+        from accounts.models import DEFAULT_APPS
+        self.assertNotIn('talent-match', DEFAULT_APPS,
+                         'a recruiting tool is not a default for every new joiner')
