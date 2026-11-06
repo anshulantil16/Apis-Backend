@@ -9,6 +9,8 @@ urlpatterns = [
          views.MessageDetailView.as_view()),
     path('conversations/<int:conversation_id>/read/',     views.ReadView.as_view()),
     path('conversations/<int:conversation_id>/clear/',    views.ClearView.as_view()),
+    path('conversations/<int:conversation_id>/members/',  views.MembersView.as_view()),
+    path('attachments/<int:attachment_id>/',              views.AttachmentView.as_view()),
     path('people/',                                       views.PeopleView.as_view()),
     path('unread/',                                       views.UnreadView.as_view()),
 ]
