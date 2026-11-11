@@ -17,6 +17,10 @@ def _mb(n):
 
 class Command(BaseCommand):
     help = 'Report what Messages is using on disk, and optionally purge.'
+    # The project carries 33 deliberate DEFAULT_AUTO_FIELD warnings, which
+    # would otherwise print 35 lines above the one line this command exists
+    # to tell you. They are not checks about anything this command touches.
+    requires_system_checks = []
 
     def add_arguments(self, p):
         p.add_argument('--purge-abandoned', action='store_true',
