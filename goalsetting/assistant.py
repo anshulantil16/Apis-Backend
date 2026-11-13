@@ -114,9 +114,16 @@ class AssistantVerifyView(GSView):
                             status=res.status_code)
         cache.delete(tries_key)
         token = res.data['session']
-        emp_id = cache.get(_PREFIX + token)
-        cache.set(_PREFIX + token, emp_id, timeout=CHAT_SESSION_TTL)
-        emp = EmployeeProfile.objects.get(employee_id=emp_id)
+        # Taken from the answer the code check just gave, not read back out
+        # of the cache it wrote. A cache miss there -- eviction, a restart
+        # mid-request -- would put None into this lookup and answer a
+        # correct sign-in with a 500.
+        emp_id = (res.data.get('employee') or {}).get('employee_id') or ''
+        emp = EmployeeProfile.objects.filter(employee_id=emp_id).first()
+        if not emp:
+            return Response({'error': 'That sign-in could not be completed. Please try again.'},
+                            status=500)
+        cache.set(_PREFIX + token, emp.employee_id, timeout=CHAT_SESSION_TTL)
         return Response({
             'token': token, 'expires_in': CHAT_SESSION_TTL,
             'name': emp.name, 'employee_id': emp.employee_id,
