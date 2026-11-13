@@ -15,6 +15,7 @@ from django.db import transaction
 from django.db.models import Max, Q
 from django.http import FileResponse, Http404
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
@@ -234,10 +235,28 @@ class MessagesView(PortalScopedAPIView):
               .select_related('sender', 'reply_to', 'reply_to__sender')
               .prefetch_related('attachments'))
         after = request.query_params.get('after')
+        since = request.query_params.get('since')
         q = (request.query_params.get('q') or '').strip()
         before = request.query_params.get('before')
 
-        if after:
+        if since:
+            # Everything that CHANGED, not everything that is new.
+            #
+            # `after` asks for messages with a higher id, which is the wrong
+            # question for a delete or an edit: those alter a row that is
+            # already on the reader's screen and never raise the highest id.
+            # So a deleted message sat there looking normal until the reader
+            # happened to reload. Asking by time instead catches all three
+            # kinds of change in one request.
+            t = parse_datetime(since)
+            if t is None:
+                return Response({'error': 'since must be a timestamp.'}, status=400)
+            if timezone.is_naive(t):
+                t = timezone.make_aware(t)
+            rows = list(qs.filter(Q(created_at__gt=t) | Q(edited_at__gt=t)
+                                  | Q(deleted_at__gt=t)).order_by('id')[:200])
+            has_more = False
+        elif after:
             try:
                 rows = list(qs.filter(id__gt=int(after)).order_by('id')[:200])
             except (TypeError, ValueError):
@@ -264,6 +283,10 @@ class MessagesView(PortalScopedAPIView):
         other = me.conversation.other_member(user)
         return Response({
             'conversation_id': me.conversation.id,
+            # The moment this answer was true, by this server's clock. The
+            # client sends it back as `since`, so a browser whose clock is
+            # off never asks about a window that does not exist here.
+            'now': timezone.now().isoformat(),
             'is_group': me.conversation.is_group,
             'title': me.conversation.name_for(user),
             'person': _person(other) if not me.conversation.is_group and other else None,
