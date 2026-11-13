@@ -9,6 +9,7 @@ from .views import (
     BookingQueueView, BookingActionView, BookingOptionsView, BookingSelectView,
     TicketDownloadView,
 )
+from .assistant import AssistantSubmitView, AssistantVerifyView
 
 urlpatterns = [
     # Auth
@@ -44,4 +45,8 @@ urlpatterns = [
     path('requests/<int:req_id>/booking/select/',  BookingSelectView.as_view()),
     path('ticket/<int:req_id>/<str:journey_key>/', TicketDownloadView.as_view()),
     path('requests/<int:req_id>/action/',  ActionView.as_view()),
+
+    # Ask APIS — the same requests, filled in through the chat. See assistant.py.
+    path('assistant/verify/',              AssistantVerifyView.as_view()),
+    path('assistant/submit/',              AssistantSubmitView.as_view()),
 ]

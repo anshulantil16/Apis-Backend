@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import assistant, views
 
 urlpatterns = [
     # sign in
@@ -37,4 +37,9 @@ urlpatterns = [
     path('overview/', views.OverviewView.as_view()),
     path('reset/', views.ResetView.as_view()),
     path('export/', views.ExportView.as_view()),
+
+    # Ask APIS - your own goal sheet, filled in through the chat. See assistant.py.
+    path('assistant/verify/', assistant.AssistantVerifyView.as_view()),
+    path('assistant/save/', assistant.AssistantSaveView.as_view()),
+    path('assistant/logout/', assistant.AssistantLogoutView.as_view()),
 ]

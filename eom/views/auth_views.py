@@ -29,7 +29,21 @@ def _mask_email(email: str) -> str:
     return f"{masked_local}@{domain}"
 
 
-class EOMSendOTPView(APIView):
+class _EOMAuthView(APIView):
+    """The sign-in endpoints answer anyone - that is what a sign-in is for.
+
+    They must not run the project-wide JWT check. The page sends whatever
+    token it holds with every request, and inside the intranet that is the
+    portal's session token, which is not a JWT: the check rejected it with a
+    bare 401 before the view ran, so anyone already signed in to the intranet
+    was told "Failed to send OTP." and could never sign in here. The rest of
+    EOM opts out the same way (accounts.auth.PortalScopedAPIView).
+    """
+    authentication_classes = []
+    permission_classes = []
+
+
+class EOMSendOTPView(_EOMAuthView):
     """POST /api/eom/auth/send-otp/"""
 
     def post(self, request):
@@ -86,7 +100,7 @@ class EOMSendOTPView(APIView):
         })
 
 
-class EOMVerifyOTPView(APIView):
+class EOMVerifyOTPView(_EOMAuthView):
     """POST /api/eom/auth/verify-otp/"""
 
     def post(self, request):
@@ -148,7 +162,7 @@ class EOMVerifyOTPView(APIView):
         return Response(data)
 
 
-class EOMAdminOTPView(APIView):
+class EOMAdminOTPView(_EOMAuthView):
     """POST /api/eom/auth/admin-otp/"""
 
     def post(self, request):
@@ -178,7 +192,7 @@ class EOMAdminOTPView(APIView):
         })
 
 
-class EOMAdminVerifyView(APIView):
+class EOMAdminVerifyView(_EOMAuthView):
     """POST /api/eom/auth/admin-verify/"""
 
     def post(self, request):
