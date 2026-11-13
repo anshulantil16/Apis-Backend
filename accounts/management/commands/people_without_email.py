@@ -32,6 +32,10 @@ COLUMNS = [
 
 class Command(BaseCommand):
     help = 'List the people in the directory who have no email address.'
+    # The project carries 33 deliberate DEFAULT_AUTO_FIELD warnings, which
+    # would otherwise print 70 lines above the answer. They say nothing
+    # about anything this command reads.
+    requires_system_checks = []
 
     def add_arguments(self, p):
         p.add_argument('--out', metavar='FILE',
