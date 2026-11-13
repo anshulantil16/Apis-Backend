@@ -51,9 +51,13 @@ urlpatterns = [
     path('api/wall/',        include('wall.urls')),
     path('api/noticeboard/', include('noticeboard.urls')),
     path('api/policies/',    include('policies.urls')),
+    path('api/chat/',        include('chat.urls')),
     path('api/ctc/',         include('ctc.urls')),
     # Before the catch-all below: see no_media.
     re_path(r'^media/(?P<path>policies/.*)$', no_media),
+    # Chat attachments are read through chat.views.AttachmentView, which
+    # checks the caller is in the conversation first. See no_media.
+    re_path(r'^media/(?P<path>chat/.*)$', no_media),
     # Always serve media files (works in both DEBUG and production mode)
     re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
 ]

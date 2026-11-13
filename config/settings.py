@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     'noticeboard',
     'policies',
     'ctc',
+    'chat',
 ]
 
 MIDDLEWARE = [
