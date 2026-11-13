@@ -103,3 +103,28 @@ class ChangesSince(TestCase):
         fresh = Message.objects.create(conversation=self.conv, sender=self.asha, body='hi')
         rows = self._get(self.bhavesh, after=self.m.id).json()['messages']
         self.assertEqual([r['id'] for r in rows], [fresh.id])
+
+
+class TooMuchChangedAtOnce(ChangesSince):
+    """A laptop shut on Friday, opened on Monday.
+
+    One answer carries 200 changes. If it quietly returned the first 200
+    and the client moved its mark past the lot, every message after those
+    200 would be invisible until a reload -- the same class of bug as the
+    one this whole change fixes, just rarer and harder to notice.
+    """
+
+    def test_a_normal_poll_is_not_marked_truncated(self):
+        mark = self._get(self.bhavesh).json()['now']
+        Message.objects.create(conversation=self.conv, sender=self.asha, body='one')
+        self.assertFalse(self._get(self.bhavesh, since=mark).json()['truncated'])
+
+    def test_an_overflowing_poll_says_so(self):
+        mark = self._get(self.bhavesh).json()['now']
+        Message.objects.bulk_create([
+            Message(conversation=self.conv, sender=self.asha, body=f'n{i}')
+            for i in range(205)
+        ])
+        body = self._get(self.bhavesh, since=mark).json()
+        self.assertTrue(body['truncated'])
+        self.assertEqual(len(body['messages']), 200)

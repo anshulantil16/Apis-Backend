@@ -27,6 +27,7 @@ from .models import Attachment, Conversation, Membership, Message
 
 APP = 'chat'
 MAX_BODY = 4000
+CHANGED_CAP = 200
 PAGE = 50
 MAX_GROUP = 50
 
@@ -234,6 +235,7 @@ class MessagesView(PortalScopedAPIView):
         qs = (me.conversation.messages
               .select_related('sender', 'reply_to', 'reply_to__sender')
               .prefetch_related('attachments'))
+        truncated = False          # only a `since` poll can set this
         after = request.query_params.get('after')
         since = request.query_params.get('since')
         q = (request.query_params.get('q') or '').strip()
@@ -254,7 +256,13 @@ class MessagesView(PortalScopedAPIView):
             if timezone.is_naive(t):
                 t = timezone.make_aware(t)
             rows = list(qs.filter(Q(created_at__gt=t) | Q(edited_at__gt=t)
-                                  | Q(deleted_at__gt=t)).order_by('id')[:200])
+                                  | Q(deleted_at__gt=t)).order_by('id')[:CHANGED_CAP + 1])
+            # More changed than one answer carries -- a laptop shut on
+            # Friday asking on Monday. Say so rather than quietly handing
+            # back the first 200 and letting the client move its mark past
+            # everything it was not told about.
+            truncated = len(rows) > CHANGED_CAP
+            rows = rows[:CHANGED_CAP]
             has_more = False
         elif after:
             try:
@@ -287,6 +295,9 @@ class MessagesView(PortalScopedAPIView):
             # client sends it back as `since`, so a browser whose clock is
             # off never asks about a window that does not exist here.
             'now': timezone.now().isoformat(),
+            # Only ever true for a `since` poll: more changed than this
+            # answer holds, so the client must re-read the thread.
+            'truncated': truncated,
             'is_group': me.conversation.is_group,
             'title': me.conversation.name_for(user),
             'person': _person(other) if not me.conversation.is_group and other else None,
