@@ -73,6 +73,7 @@ def serialize_user(u):
         'can_edit_tree': u.can_edit_tree,
         'can_manage_tree': u.can_manage_tree,
         'can_view_confidential_vacancies': u.can_view_confidential_vacancies,
+        'can_review_referrals': u.can_review_referrals,
         'allowed_apps': u.allowed_apps,
         'from_hrms': u.from_hrms,
         'last_login_at': local_str(u.last_login_at, '%d-%m-%Y %H:%M'),
@@ -240,15 +241,47 @@ class VerifyOTPView(PortalAPIView):
         return Response({'message': 'Signed in.', 'token': token, 'user': serialize_user(user)})
 
 
+def is_new_joiner(u):
+    """On the home page's New Joiners list: joined within its window."""
+    if not (u.is_active and u.date_of_joining):
+        return False
+    today = timezone.localtime(timezone.now(), IST).date()
+    return today - timedelta(days=CelebrationsView.JOINED_DAYS) <= u.date_of_joining <= today
+
+
 class MeView(PortalAPIView):
-    """Who am I, and what may I open? The SPA's gate on every load."""
+    """Who am I, and what may I open? The SPA's gate on every load.
+
+    `welcome` is true for a new joiner who has not yet seen the "Welcome
+    aboard" note - the page shows it and then says so (WelcomedView).
+    `welcome_today` keeps it in their notifications for the rest of that day.
+    """
 
     def get(self, request):
         s = current_session(request)
         if not s:
             return Response({'error': 'Not signed in.'}, status=401)
         s.touch()
-        return Response({'user': serialize_user(s.user)})
+        u = s.user
+        today = timezone.localtime(timezone.now(), IST).date()
+        return Response({'user': {
+            **serialize_user(u),
+            'welcome': u.welcomed_at is None and is_new_joiner(u),
+            # Shown today: it stays in their notifications until midnight.
+            'welcome_today': bool(u.welcomed_at)
+                             and timezone.localtime(u.welcomed_at, IST).date() == today,
+        }})
+
+
+class WelcomedView(PortalAPIView):
+    """The welcome note has been shown: never show it to this person again."""
+
+    def post(self, request):
+        s = current_session(request)
+        if not s:
+            return Response({'error': 'Not signed in.'}, status=401)
+        PortalUser.objects.filter(pk=s.user.pk, welcomed_at=None).update(welcomed_at=timezone.now())
+        return Response({'ok': True})
 
 
 class MyProfileView(PortalAPIView):
@@ -498,6 +531,8 @@ class AdminUserDetailView(_AdminView):
             u.can_manage_tree = bool(d['can_manage_tree'])
         if 'can_view_confidential_vacancies' in d:
             u.can_view_confidential_vacancies = bool(d['can_view_confidential_vacancies'])
+        if 'can_review_referrals' in d:
+            u.can_review_referrals = bool(d['can_review_referrals'])
         if 'app_access' in d:
             wanted = d['app_access'] or []
             unknown = [a for a in wanted if a not in AppKey.values]

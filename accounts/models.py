@@ -193,6 +193,16 @@ class PortalUser(models.Model):
     def sees_confidential_vacancies(self):
         return self.is_superadmin or self.can_view_confidential_vacancies
 
+    # Sees every Employee Referral Form submission - candidates' and
+    # referrers' names, phone numbers and emails - and fills in the form's
+    # "For HR Use Only" section. Granted per person by a superadmin, for the
+    # HR people who handle hiring; a superadmin always has it.
+    can_review_referrals = models.BooleanField(default=False)
+
+    @property
+    def reviews_referrals(self):
+        return self.is_superadmin or self.can_review_referrals
+
     # The last record Pocket HRMS returned for this person, verbatim. Kept so
     # the console can show exactly what upstream is sending - including fields
     # the portal does not itself use - rather than only the handful mapped
@@ -208,6 +218,9 @@ class PortalUser(models.Model):
     from_hrms      = models.BooleanField(default=False)
     last_synced_at = models.DateTimeField(null=True, blank=True)
     last_login_at  = models.DateTimeField(null=True, blank=True)
+    # When this person was shown the "Welcome aboard" note as a new joiner -
+    # set the first time it appears, so it never appears again, on any device.
+    welcomed_at    = models.DateTimeField(null=True, blank=True)
     created_at     = models.DateTimeField(auto_now_add=True)
     updated_at     = models.DateTimeField(auto_now=True)
 

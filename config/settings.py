@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'policies',
     'ctc',
     'chat',
+    'marketwatch',
 ]
 
 MIDDLEWARE = [
@@ -202,6 +203,12 @@ CORS_ALLOWED_ORIGINS = [
     "http://103.205.66.45",
     *[o.strip() for o in os.getenv('CORS_EXTRA_ORIGINS', '').split(',') if o.strip()],
 ]
+# The Help Desk proves who is calling with this header (roompulse/views/
+# auth.py). Deployed, the page and the API share an origin and no browser
+# asks; on a developer's machine they are :5173 and :8000, and without it on
+# this list every signed-in Help Desk call was refused before it was sent.
+from corsheaders.defaults import default_headers  # noqa: E402
+CORS_ALLOW_HEADERS = (*default_headers, 'x-adminpulse-session')
 
 # Whether Appraisal and EOM refuse a request that carries no session.
 #
@@ -238,6 +245,15 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.getenv('EMAIL_HOST_USER', '')
+
+# A developer's machine with no mail account in .env: sign-in codes cannot be
+# emailed, so they are printed to this terminal instead, and the TA/DA login
+# shows its code on screen. Never on a server - DEBUG is off there, and a
+# server with no mail account should fail loudly, not quietly.
+EMAIL_DEV_ONLY = DEBUG and not EMAIL_HOST_USER
+if EMAIL_DEV_ONLY:
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+    DEFAULT_FROM_EMAIL = 'no-reply@apisindia.com'
 
 # ── Pocket HRMS ───────────────────────────────────────────────────────────────
 # The company's hire-to-retire system, and the source of truth for who works
