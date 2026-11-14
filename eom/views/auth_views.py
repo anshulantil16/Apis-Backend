@@ -93,11 +93,18 @@ class EOMSendOTPView(_EOMAuthView):
                 pass
         threading.Thread(target=_send, daemon=True).start()
 
-        return Response({
+        body = {
             'message': 'OTP sent successfully.',
             'masked_email': _mask_email(emp.email),
             'name': emp.name,
-        })
+        }
+        # A developer's machine has no mail account, so the code would go
+        # nowhere. Same PORTAL_DEV_LOGIN flag Goal Setting and the Help Desk
+        # use - off unless it is in that developer's own .env, absent from
+        # every deployed one.
+        if getattr(settings, 'PORTAL_DEV_LOGIN', False):
+            body['dev_otp'] = otp_code
+        return Response(body)
 
 
 class EOMVerifyOTPView(_EOMAuthView):
@@ -186,10 +193,14 @@ class EOMAdminOTPView(_EOMAuthView):
             cache.delete(_ADMIN_OTP_CACHE_KEY)
             return Response({'error': f'Failed to send email: {str(e)}'}, status=500)
 
-        return Response({
+        body = {
             'message': 'OTP sent to admin email.',
             'masked_email': _mask_email(ADMIN_BOOTSTRAP_EMAIL),
-        })
+        }
+        # See EOMSendOTPView: a developer's machine only, never a server.
+        if getattr(settings, 'PORTAL_DEV_LOGIN', False):
+            body['dev_otp'] = otp_code
+        return Response(body)
 
 
 class EOMAdminVerifyView(_EOMAuthView):
