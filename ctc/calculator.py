@@ -12,12 +12,13 @@ the way P & C's sheet does it (monthly figures):
 
     Gross Salary up to Rs 21,000: employer ESI (3.25% of Gross Salary) is
         taken instead of Mediclaim; above it, Mediclaim by grade.
-    Gross Salary under Rs 25,000: Employer PF = 12% of (Gross Salary - HRA);
-        from Rs 25,000: Rs 3,000.
+    Employer PF = 12% of Basic, up to the PF wage ceiling (Rs 25,000): a
+        Basic of Rs 16,667 gives Rs 2,000; from Rs 25,000 it is a flat
+        Rs 3,000.
 
-Gross Salary depends on ESI and PF, which depend on Gross Salary, so each
-of the four cases (ESI or Mediclaim, PF on wages or capped) is solved and
-the one that agrees with its own result is used.
+Gross Salary depends on ESI, which depends on Gross Salary, so both cases
+(ESI or Mediclaim) are solved and the one that agrees with its own result is
+used. PF needs no solving: it comes from Basic, which is fixed by the CTC.
 
 LTA and reimbursements (rules.REIMBURSEMENTS, the Reference Master) apply
 only to cadres D, C and M with a CTC above Rs 12 lakh. Those picked Yes are
@@ -173,39 +174,38 @@ def vpp_percent(category, grade, department, designation, date_of_joining=None):
     return rules.VPP_NON_SALES, f'{name} · M3 and above'
 
 
-def _solve(base, med, hra, s):
+def employer_pf(basic, s):
+    """12% of Basic, never more than 12% of the PF wage ceiling: Rs 2,000 on
+    a Basic of Rs 16,667, and a flat Rs 3,000 once Basic reaches Rs 25,000."""
+    rate = rules.PF_PERCENT / 100
+    return _r(min(basic, s.pf_wage_ceiling) * rate)
+
+
+def _solve(base, med, pf, s):
     """(gross, esi, mediclaim, pf, on_a_limit) for base = everything left
-    after VPP, Gift and Gratuity. Tries the four cases and keeps the one
-    that agrees with itself.
+    after VPP, Gift and Gratuity, with PF already known from Basic. Tries ESI
+    and Mediclaim and keeps the one that agrees with itself.
 
-    Just at the two limits none does - the rules jump there: switching from
-    Mediclaim to ESI can lift Gross back over Rs 21,000, and switching PF from
-    12% of (Gross - HRA) to Rs 3,000 can drop it back under Rs 25,000. In that
-    narrow band: ESI applies if the salary with Mediclaim is within the ESI
-    limit, and PF is Rs 3,000 if the salary with PF on wages reaches the PF
-    limit (on_a_limit is then True)."""
+    Just at the ESI limit neither does - the rule jumps there: switching from
+    Mediclaim to ESI can lift Gross back over Rs 21,000. In that narrow band
+    ESI applies if the salary with Mediclaim is within the limit (on_a_limit
+    is then True)."""
     esi_rate = rules.ESI_PERCENT / 100
-    pf_rate = rules.PF_PERCENT / 100
-    esi_limit, pf_limit = s.esi_bonus_gross_limit, s.pf_wage_ceiling
-    pf_cap = pf_limit * pf_rate
+    esi_limit = s.esi_bonus_gross_limit
 
-    def gross_for(esi_on, pf_on):
+    def gross_for(esi_on):
         less = 0 if esi_on else med
-        if pf_on:
-            return (base - less + pf_rate * hra) / (1 + pf_rate + (esi_rate if esi_on else 0))
-        return (base - less - pf_cap) / (1 + (esi_rate if esi_on else 0))
+        return (base - less - pf) / (1 + (esi_rate if esi_on else 0))
 
     on_a_limit = False
-    for esi_on, pf_on in ((False, False), (False, True), (True, True), (True, False)):
-        g = gross_for(esi_on, pf_on)
-        if (g <= esi_limit) == esi_on and (g < pf_limit) == pf_on:
+    for esi_on in (False, True):
+        g = gross_for(esi_on)
+        if (g <= esi_limit) == esi_on:
             break
     else:
         on_a_limit = True
-        esi_on = gross_for(False, True) <= esi_limit
-        pf_on = gross_for(esi_on, True) < pf_limit
-        g = gross_for(esi_on, pf_on)
-    pf = _r(max(g - hra, 0) * pf_rate) if pf_on else _r(pf_cap)
+        esi_on = gross_for(False) <= esi_limit
+        g = gross_for(esi_on)
     esi = _r(g * esi_rate) if esi_on else 0
     med = 0 if esi_on else med
     return base - esi - med - pf, esi, med, pf, on_a_limit
@@ -281,16 +281,18 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     basic = _r(float(ctc_annual) / 12 * rules.BASIC_PERCENT / 100)
     hra = full_hra = _r(basic * rules.HRA_PERCENT[cadre] / 100)
     grat = _r(basic * float(s.gratuity_percent) / 100)
-    gross, esi, med, pf, on_a_limit = _solve(F - grat, med, full_hra, s)
+    gross, esi, med, pf, on_a_limit = _solve(F - grat, med, employer_pf(basic, s), s)
     # PF at the ceiling: 12% of it, not a fixed Rs 3,000 -- the ceiling is a
     # setting a super admin can change, and the note has to follow it.
     pf_at_ceiling = _r(s.pf_wage_ceiling * rules.PF_PERCENT / 100)
     bonus = 0
     if on_a_limit:
-        notes.append(f'Gross Salary sits right at the Rs {_inr(s.esi_bonus_gross_limit)} ESI or '
-                     f'Rs {_inr(s.pf_wage_ceiling)} PF limit, where the rules jump: ESI was applied if '
-                     'the salary with Mediclaim is within its limit, and PF is '
-                     f'Rs {_inr(pf_at_ceiling)} if the salary reaches its limit.')
+        notes.append(f'Gross Salary sits right at the Rs {_inr(s.esi_bonus_gross_limit)} ESI limit, '
+                     'where the rule jumps: ESI was applied because the salary with Mediclaim is '
+                     'within its limit.' if esi else
+                     f'Gross Salary sits right at the Rs {_inr(s.esi_bonus_gross_limit)} ESI limit, '
+                     'where the rule jumps: Mediclaim was applied because the salary with Mediclaim '
+                     'is over the limit.')
 
     # -- Special Allowance: what Gross leaves after Basic, HRA and CEA ------
     def balance():
@@ -362,9 +364,10 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
     reimbursements = [{**_line(label, amount), 'key': key} for key, label, amount in reimb]
     benefits = [
         _line('Employer PF Contribution', pf,
-              f'{rules.PF_PERCENT}% of the Rs {_inr(s.pf_wage_ceiling)} PF wage ceiling'
-              if pf == pf_at_ceiling
-              else f'{rules.PF_PERCENT}% of (Gross Salary - HRA)'),
+              f'Rs {_inr(pf_at_ceiling)} cap: {rules.PF_PERCENT}% of Basic, Basic is '
+              f'Rs {_inr(s.pf_wage_ceiling)} or more (PF wage ceiling)'
+              if basic >= s.pf_wage_ceiling
+              else f'{rules.PF_PERCENT}% of Basic (Rs {_inr(basic)})'),
         _line('Employer ESI Contribution', esi,
               f'{rules.ESI_PERCENT}% of Gross Salary (up to Rs {_inr(s.esi_bonus_gross_limit)})'
               if esi else 'Not applicable'),
@@ -404,6 +407,9 @@ def calculate(*, ctc_annual, cadre, grade, category, department='', designation=
         'reimbursements': reimbursements, 'grossSalary': gross, 'grossSalaryAnnual': gross_salary_annual,
         'benefits': benefits, 'benefitsTotal': benefits_total, 'benefitsTotalAnnual': benefits_annual,
         'fixedMonthly': fixed, 'fixedAnnual': fixed_annual,
+        # In-hand / take home, as P & C put it on Annexure A: Gross Earnings
+        # less the PF contribution.
+        'takeHome': gross_earnings - pf, 'takeHomeAnnual': gross_earnings_annual - pf * 12,
         'otherPayments': other,
         'totalCtcMonthly': _r(total_annual / 12), 'totalCtcAnnual': total_annual,
         'carLease': car_lease,

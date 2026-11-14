@@ -376,22 +376,16 @@ class Calculator(TestCase):
         # "Deputy General Manager" is not a Deputy Manager.
         self.assertEqual(vpp_percent('Plant', 'C1', 'Ops', 'Deputy General Manager')[0], 8)
 
-    def test_salaries_right_at_the_esi_and_pf_limits(self):
-        # Where switching Mediclaim to ESI, or PF on wages to Rs 3,000, would jump
-        # Gross back across the limit: ESI if within the limit with Mediclaim,
-        # PF Rs 3,000 if the salary reaches its limit - and a note says so.
-        pf_band = self.calc(ctc_annual=383447, cadre='C', grade='C2', category='Plant', children=1,
-                            work_location='Uttar Pradesh')
-        ben = {x['label']: x['monthly'] for x in pf_band['benefits']}
-        self.assertEqual(ben['Employer PF Contribution'], 3000)
-        self.assertTrue(any('sits right at' in n for n in pf_band['notes']))
+    def test_salaries_right_at_the_esi_limit(self):
+        # Where switching Mediclaim to ESI would jump Gross back across the
+        # limit: ESI if within the limit with Mediclaim. PF has no such band
+        # any more - it comes from Basic, not from Gross.
         esi_band = self.calc(ctc_annual=326410, cadre='D', grade='D1', category='Plant',
                              work_location='Maharashtra')
         ben = {x['label']: x['monthly'] for x in esi_band['benefits']}
         self.assertGreater(ben['Employer ESI Contribution'], 0)
         self.assertEqual(ben['Mediclaim Charges'], 0)
-        for b in (pf_band, esi_band):
-            self.assertEqual(b['totalCtcAnnual'], b['ctcAnnual'])
+        self.assertEqual(esi_band['totalCtcAnnual'], esi_band['ctcAnnual'])
 
     def test_esi_instead_of_mediclaim_up_to_21000(self):
         small = self.calc(ctc_annual=264000, cadre='O', grade='O5', category='HO',
@@ -406,12 +400,24 @@ class Calculator(TestCase):
         self.assertEqual((ben['Employer ESI Contribution'], ben['Mediclaim Charges']), (0, 450))
         self.assertEqual(ben['Statutory Bonus'], 0)
 
-    def test_pf_is_12_percent_of_gross_less_hra_below_25000_else_3000(self):
-        small = self.calc(ctc_annual=288000, cadre='O', grade='O5', category='HO', work_location='Delhi')
-        hra = small['earnings'][1]['monthly']
-        pf = small['benefits'][0]['monthly']
-        self.assertLess(small['grossSalary'], 25000)
-        self.assertEqual(pf, round((small['grossSalary'] - hra) * 0.12))
+    def test_pf_is_12_percent_of_basic_capped_at_3000(self):
+        def pf_for(ctc):
+            b = self.calc(ctc_annual=ctc, cadre='O', grade='O3', category='HO', work_location='Delhi')
+            return b['earnings'][0]['monthly'], b['benefits'][0]
+        # P & C's example: Basic Rs 16,667 -> Rs 2,000.
+        basic, pf = pf_for(400008)
+        self.assertEqual((basic, pf['monthly']), (16667, 2000))
+        self.assertIn('of Basic', pf['note'])
+        basic, pf = pf_for(288000)
+        self.assertEqual((basic, pf['monthly']), (12000, 1440))
+        basic, pf = pf_for(576000)                                            # just under the ceiling
+        self.assertEqual((basic, pf['monthly']), (24000, 2880))
+        # From a Basic of Rs 25,000, a flat Rs 3,000 - never more.
+        for ctc in (600000, 900000):
+            basic, pf = pf_for(ctc)
+            self.assertGreaterEqual(basic, 25000)
+            self.assertEqual(pf['monthly'], 3000)
+            self.assertIn('cap', pf['note'])
         big = self.calc(ctc_annual=3500000, cadre='C', grade='C2', category='HO')
         self.assertEqual(big['benefits'][0]['monthly'], 3000)
         self.assertEqual(big['benefits'][2]['monthly'], 950)                  # mediclaim by grade
@@ -523,30 +529,28 @@ class Calculator(TestCase):
         self.assertIn('error', self.calc(cadre='Z'))
         self.assertIn('error', self.calc(ctc_annual=10000, work_location='Atlantis'))   # no minimum wage to raise to
 
-    def test_capped_pf_does_not_claim_a_gross_the_candidate_does_not_have(self):
-        # Right at the PF limit the capped PF is paid on a gross BELOW the
-        # ceiling (here Rs 24,150 against Rs 25,000). The note used to read
-        # "Gross Salary Rs 25,000 or more", which was simply untrue on the
-        # Annexure A the candidate is given.
-        b = self.calc(ctc_annual=381000, cadre='D', grade='C1', category='HO',
-                      work_location='Delhi')
-        pf = next(x for x in b['benefits'] if x['label'] == 'Employer PF Contribution')
-        self.assertLess(b['grossSalary'], self.s.pf_wage_ceiling)
-        self.assertEqual(pf['monthly'], 3000)
-        self.assertNotIn('or more', pf['note'])
-        self.assertIn('PF wage ceiling', pf['note'])
+    def test_pf_does_not_depend_on_gross(self):
+        # The old rule took 12% of (Gross - HRA), so the same Basic could give
+        # different PF depending on VPP, mediclaim and ESI. Now Basic alone
+        # decides it.
+        a = self.calc(ctc_annual=400008, cadre='O', grade='O3', category='HO', work_location='Delhi')
+        b = self.calc(ctc_annual=400008, cadre='M', grade='M4', category='Sales',
+                      department='General Trade', work_location='Delhi')
+        self.assertEqual(a['earnings'][0]['monthly'], b['earnings'][0]['monthly'])
+        self.assertNotEqual(a['grossSalary'], b['grossSalary'])
+        self.assertEqual(a['benefits'][0]['monthly'], b['benefits'][0]['monthly'])
+        for x in (a, b):
+            self.assertEqual(x['totalCtcAnnual'], x['ctcAnnual'])
 
-    def test_the_limit_note_follows_the_ceiling_in_settings(self):
-        # The capped PF is 12% of the ceiling, not a fixed Rs 3,000 -- a super
-        # admin can change the ceiling, and the note has to say the real figure.
+    def test_the_cap_follows_the_ceiling_in_settings(self):
+        # The cap is 12% of the ceiling, not a fixed Rs 3,000 -- a super admin
+        # can change the ceiling, and the figure and note follow it.
         self.s.pf_wage_ceiling = 30000
-        b = self.calc(ctc_annual=452000, cadre='D', grade='C1', category='HO',
+        b = self.calc(ctc_annual=900000, cadre='D', grade='C1', category='HO',
                       work_location='Delhi')
         pf = next(x for x in b['benefits'] if x['label'] == 'Employer PF Contribution')
         self.assertEqual(pf['monthly'], 3600)
-        note = next((n for n in b['notes'] if 'right at the' in n), '')
-        self.assertIn('Rs 3,600', note)
-        self.assertNotIn('Rs 3,000', note)
+        self.assertIn('Rs 3,600', pf['note'])
 
 
 class CtcAccessIsGranted(TestCase):
