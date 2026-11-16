@@ -53,6 +53,7 @@ urlpatterns = [
     path('api/policies/',    include('policies.urls')),
     path('api/chat/',        include('chat.urls')),
     path('api/ctc/',         include('ctc.urls')),
+    path('api/marketwatch/', include('marketwatch.urls')),
     # Before the catch-all below: see no_media.
     re_path(r'^media/(?P<path>policies/.*)$', no_media),
     # Chat attachments are read through chat.views.AttachmentView, which

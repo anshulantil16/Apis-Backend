@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
+from .. import notify
 from ..models import Room, BookingRequest
 from ..people import apply_names
 from ..handover import transfer as handover, trail_for
@@ -178,6 +179,9 @@ class BookingListView(APIView):
             reviewed_by=email if auto_approve else '',
             reviewed_at=timezone.now() if auto_approve else None,
         )
+        # The desk hears about new work, the requester hears it arrived.
+        notify.raised('booking', booking, booking.purpose_detail)
+
         return Response({
             'id': booking.id, 'status': booking.status,
             'message': (f'Booked. {room} is confirmed for you.' if auto_approve
@@ -249,6 +253,8 @@ class BookingActionView(APIView):
             booking.reviewed_at = timezone.now()
             booking.admin_remarks = str(request.data.get('remarks') or '').strip()[:300]
             booking.save()
+            notify.moved('booking', booking, booking.status, email,
+                         booking.admin_remarks)
             return Response({'message': f'Booking {booking.status}.', 'booking': _brief(booking)})
 
         if action == 'transfer':
@@ -272,6 +278,8 @@ class BookingActionView(APIView):
                              request.data.get('remarks'))
             if isinstance(moved, str):
                 return Response({'error': moved}, status=400)
+            notify.transferred('booking', booking, moved.to_email, moved.to_name,
+                               email, moved.reason)
             return Response({'message': f'Passed to {moved.to_name or moved.to_email}.',
                              'booking': _brief(booking)})
 
@@ -299,6 +307,9 @@ class BookingActionView(APIView):
             booking.released_by = email
             booking.release_reason = str(request.data.get('remarks') or '').strip()[:300]
             booking.save(update_fields=['released_at', 'released_by', 'release_reason', 'updated_at'])
+            notify.moved('booking', booking, 'released', email,
+                         booking.release_reason,
+                         extra=[('Freed at', now.strftime('%H:%M'))])
             return Response({
                 'message': (f'{booking.room} is free. The meeting by '
                             f'{booking.requested_by_name} was ended at {now.strftime("%H:%M")}.'),
@@ -318,6 +329,8 @@ class BookingActionView(APIView):
             if is_staff and not is_owner:
                 booking.admin_remarks = str(request.data.get('remarks') or '').strip()[:300]
             booking.save()
+            notify.moved('booking', booking, 'cancelled', email,
+                         booking.admin_remarks)
             return Response({'message': 'Booking cancelled.', 'booking': _brief(booking)})
 
         return Response({'error': 'Invalid action.'}, status=400)

@@ -1,5 +1,7 @@
 from django.urls import path
 
+from .assistant import (AssistantLogoutView, AssistantRequestView, AssistantTicketView,
+                        AssistantVerifyView)
 from .attachments import AttachmentView
 from .views.desk_staff import DeskStaffView, WhoAmIView
 from .views.my_tasks import MyTasksView
@@ -55,4 +57,10 @@ urlpatterns = [
     path('work-report/export/', WorkReportExportView.as_view()),
 
     path('reset/', ResetDatabaseView.as_view()),
+
+    # Ask APIS - an IT ticket or Admin request raised through the chat. See assistant.py.
+    path('assistant/verify/', AssistantVerifyView.as_view()),
+    path('assistant/ticket/', AssistantTicketView.as_view()),
+    path('assistant/request/', AssistantRequestView.as_view()),
+    path('assistant/logout/', AssistantLogoutView.as_view()),
 ]

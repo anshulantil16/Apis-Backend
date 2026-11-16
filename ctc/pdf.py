@@ -121,6 +121,9 @@ def build_pdf(candidate, b) -> bytes:
         ('Cadre', b['cadre']),
         ('Grade', b['grade']),
         ('Work Location', candidate.work_location),
+        ('In-hand / Take Home',
+         f"Rs {amount(b['takeHome'])} per month  (Rs {amount(b['takeHomeAnnual'])} per annum)"
+         if 'takeHome' in b else ''),
     ]
     for k, v in details:
         rows.append([Paragraph(k, label), Paragraph(str(v or ''), value)])
@@ -191,7 +194,7 @@ def build_pdf(candidate, b) -> bytes:
     def benefit(text, key):
         row(text, ben[key]['monthly'], ben[key]['annual'], bold=False)
 
-    benefit('Employer PF Contribution (12% of Gross less HRA / max Rs 3,000)', 'Employer PF Contribution')
+    benefit('Employer PF Contribution (12% of Basic / max Rs 3,000)', 'Employer PF Contribution')
     benefit('Employer ESI Contribution (3.25% of Gross Salary)', 'Employer ESI Contribution')
     benefit('Mediclaim Charges ( As per Grade &amp; Applicable Policy)', 'Mediclaim Charges')
     benefit('Statutory Bonus (8.33% of Basic &amp; VDA)', 'Statutory Bonus')

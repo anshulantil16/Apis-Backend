@@ -381,6 +381,12 @@ def _get_user(request):
 
 
 # ── AUTH (OTP) ────────────────────────────────────────────────────────────────
+def _dev_otp(code):
+    """On a developer's machine with no mail account the code went nowhere,
+    so hand it back for the login screen to show. See EMAIL_DEV_ONLY."""
+    return {'dev_otp': code} if getattr(settings, 'EMAIL_DEV_ONLY', False) else {}
+
+
 class SendOTPView(APIView):
     def post(self, request):
         eid = (request.data.get('employee_id') or '').strip()
@@ -403,7 +409,7 @@ class SendOTPView(APIView):
             )
         except Exception as e:
             return Response({'error': f'Could not send OTP email: {e}'}, status=500)
-        return Response({'message': 'OTP sent.', 'masked_email': _mask_email(u.email)})
+        return Response({'message': 'OTP sent.', 'masked_email': _mask_email(u.email), **_dev_otp(code)})
 
 
 class VerifyOTPView(APIView):
@@ -437,7 +443,8 @@ class AdminOTPView(APIView):
         except Exception as e:
             cache.delete(_ADMIN_OTP_KEY)
             return Response({'error': f'Failed to send email: {e}'}, status=500)
-        return Response({'message': 'OTP sent to admin email.', 'masked_email': _mask_email(ADMIN_BOOTSTRAP_EMAIL)})
+        return Response({'message': 'OTP sent to admin email.', 'masked_email': _mask_email(ADMIN_BOOTSTRAP_EMAIL),
+                         **_dev_otp(code)})
 
 
 class AdminVerifyView(APIView):

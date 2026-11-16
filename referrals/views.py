@@ -3,7 +3,7 @@ from datetime import date
 from rest_framework.response import Response
 from rest_framework import status
 
-from accounts.auth import PortalScopedAPIView, optional_user
+from accounts.auth import PortalScopedAPIView, SessionRequiredAPIView, optional_user, require_user
 from accounts.moderation import ModerationStatus, log_activity
 
 from .models import EmployeeReferral
@@ -78,3 +78,88 @@ class SubmitReferralView(PortalScopedAPIView):
 
         return Response({'id': referral.id, 'message': 'Referral submitted.'},
                         status=status.HTTP_201_CREATED)
+
+
+# ── HR review, inside the intranet's Admin Console ──────────────────────────
+
+HR_FIELDS = ['verified_by', 'verification_date', 'hr_remarks', 'status']
+
+
+def _require_reviewer(request):
+    """(user, None) for someone granted referral review, or (None, 401/403).
+
+    A superadmin always qualifies; anyone else needs `can_review_referrals`,
+    switched on per person in the Admin Console.
+    """
+    user, err = require_user(request)
+    if err:
+        return None, err
+    if not user.reviews_referrals:
+        return None, Response({'error': 'You do not have access to referrals. '
+                                        'Ask an administrator to grant it.'}, status=403)
+    return user, None
+
+
+def _referral_json(r):
+    """Everything the form collected, plus the HR section and who really sent it."""
+    out = {f.name: getattr(r, f.name) for f in EmployeeReferral._meta.fields
+           if f.name in WRITABLE_FIELDS or f.name in HR_FIELDS}
+    for k in ('employment_from', 'employment_to', 'declaration_date', 'verification_date'):
+        out[k] = out[k].isoformat() if out[k] else ''
+    out.update({
+        'id': r.id,
+        'recommendation_label': r.get_recommendation_display() if r.recommendation else '',
+        'created_at': r.created_at.isoformat(),
+        'updated_at': r.updated_at.isoformat(),
+        'submitted_by': ({'name': r.submitted_by_name, 'email': r.submitted_by_email}
+                         if r.submitted_by_email or r.submitted_by_name else None),
+    })
+    return out
+
+
+class AdminReferralsView(SessionRequiredAPIView):
+    """GET - every referral, newest first. Only for people granted referral
+    review (and superadmins): these carry candidates' and referrers' personal
+    details."""
+
+    def get(self, request):
+        _, err = _require_reviewer(request)
+        if err:
+            return err
+        rows = EmployeeReferral.objects.order_by('-created_at')
+        return Response({'referrals': [_referral_json(r) for r in rows],
+                         'statuses': [s for s, _ in EmployeeReferral.STATUS_CHOICES]})
+
+
+class AdminReferralDetailView(SessionRequiredAPIView):
+    """PATCH - the "For HR Use Only" section, and nothing else. What the
+    employee wrote on the form is never editable from here."""
+
+    def patch(self, request, referral_id):
+        user, err = _require_reviewer(request)
+        if err:
+            return err
+        r = EmployeeReferral.objects.filter(pk=referral_id).first()
+        if not r:
+            return Response({'error': 'That referral no longer exists.'}, status=404)
+        data = request.data
+        before = {f: str(getattr(r, f) or '') for f in HR_FIELDS}
+        if 'status' in data:
+            if data['status'] not in dict(EmployeeReferral.STATUS_CHOICES):
+                return Response({'error': 'Unknown status.'}, status=400)
+            r.status = data['status']
+        if 'verified_by' in data:
+            r.verified_by = str(data['verified_by'] or '')[:150]
+        if 'hr_remarks' in data:
+            r.hr_remarks = str(data['hr_remarks'] or '')
+        if 'verification_date' in data:
+            try:
+                r.verification_date = date.fromisoformat(data['verification_date']) if data['verification_date'] else None
+            except ValueError:
+                return Response({'error': 'Use a date like 2026-11-13.'}, status=400)
+        r.save(update_fields=HR_FIELDS + ['updated_at'])
+        after = {f: str(getattr(r, f) or '') for f in HR_FIELDS}
+        log_activity(user, 'updated', r, summary=f'Referral review: {r.moderation_label()}',
+                     detail={k: [before[k], after[k]] for k in HR_FIELDS if before[k] != after[k]},
+                     request=request)
+        return Response(_referral_json(r))

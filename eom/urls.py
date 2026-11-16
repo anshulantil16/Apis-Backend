@@ -11,6 +11,8 @@ from .views.hr_views import (
 )
 from .views.export_views import EOMExportView
 
+from .assistant import AssistantLogoutView, AssistantSaveView, AssistantVerifyView
+
 urlpatterns = [
     # Auth
     path('auth/send-otp/',     EOMSendOTPView.as_view()),
@@ -44,4 +46,9 @@ urlpatterns = [
     path('nominations/<int:nom_id>/hr-finalize/', EOMHRFinalizeView.as_view()),
     path('admin/reset-database/',      EOMDatabaseResetView.as_view()),
     path('export/',                    EOMExportView.as_view()),
+
+    # Ask APIS - your own nomination, filled in through the chat. See assistant.py.
+    path('assistant/verify/', AssistantVerifyView.as_view()),
+    path('assistant/save/',   AssistantSaveView.as_view()),
+    path('assistant/logout/', AssistantLogoutView.as_view()),
 ]

@@ -5,13 +5,14 @@ from .views_tree import TreeProfileDetailView, TreeProfileListView
 from .views import (AdminBulkAccessView, AdminHrmsPreviewView, AdminSessionsView, AdminSyncView,
                     CelebrationsView, TickerView,
                     AdminUserDetailView, AdminUsersView,
-                    LogoutView, MeView, MyProfileView, RequestOTPView, VerifyOTPView)
+                    LogoutView, MeView, MyProfileView, WelcomedView, RequestOTPView, VerifyOTPView)
 
 urlpatterns = [
     # Sign-in
     path('portal/request-otp/', RequestOTPView.as_view()),
     path('portal/verify-otp/',  VerifyOTPView.as_view()),
     path('portal/me/',          MeView.as_view()),
+    path('portal/me/welcomed/', WelcomedView.as_view()),
     # Your own record, as the company holds it. Only ever your own.
     path('portal/profile/',     MyProfileView.as_view()),
 

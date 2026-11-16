@@ -29,7 +29,21 @@ def _mask_email(email: str) -> str:
     return f"{masked_local}@{domain}"
 
 
-class EOMSendOTPView(APIView):
+class _EOMAuthView(APIView):
+    """The sign-in endpoints answer anyone - that is what a sign-in is for.
+
+    They must not run the project-wide JWT check. The page sends whatever
+    token it holds with every request, and inside the intranet that is the
+    portal's session token, which is not a JWT: the check rejected it with a
+    bare 401 before the view ran, so anyone already signed in to the intranet
+    was told "Failed to send OTP." and could never sign in here. The rest of
+    EOM opts out the same way (accounts.auth.PortalScopedAPIView).
+    """
+    authentication_classes = []
+    permission_classes = []
+
+
+class EOMSendOTPView(_EOMAuthView):
     """POST /api/eom/auth/send-otp/"""
 
     def post(self, request):
@@ -79,14 +93,21 @@ class EOMSendOTPView(APIView):
                 pass
         threading.Thread(target=_send, daemon=True).start()
 
-        return Response({
+        body = {
             'message': 'OTP sent successfully.',
             'masked_email': _mask_email(emp.email),
             'name': emp.name,
-        })
+        }
+        # A developer's machine has no mail account, so the code would go
+        # nowhere. Same PORTAL_DEV_LOGIN flag Goal Setting and the Help Desk
+        # use - off unless it is in that developer's own .env, absent from
+        # every deployed one.
+        if getattr(settings, 'PORTAL_DEV_LOGIN', False):
+            body['dev_otp'] = otp_code
+        return Response(body)
 
 
-class EOMVerifyOTPView(APIView):
+class EOMVerifyOTPView(_EOMAuthView):
     """POST /api/eom/auth/verify-otp/"""
 
     def post(self, request):
@@ -148,7 +169,7 @@ class EOMVerifyOTPView(APIView):
         return Response(data)
 
 
-class EOMAdminOTPView(APIView):
+class EOMAdminOTPView(_EOMAuthView):
     """POST /api/eom/auth/admin-otp/"""
 
     def post(self, request):
@@ -172,13 +193,17 @@ class EOMAdminOTPView(APIView):
             cache.delete(_ADMIN_OTP_CACHE_KEY)
             return Response({'error': f'Failed to send email: {str(e)}'}, status=500)
 
-        return Response({
+        body = {
             'message': 'OTP sent to admin email.',
             'masked_email': _mask_email(ADMIN_BOOTSTRAP_EMAIL),
-        })
+        }
+        # See EOMSendOTPView: a developer's machine only, never a server.
+        if getattr(settings, 'PORTAL_DEV_LOGIN', False):
+            body['dev_otp'] = otp_code
+        return Response(body)
 
 
-class EOMAdminVerifyView(APIView):
+class EOMAdminVerifyView(_EOMAuthView):
     """POST /api/eom/auth/admin-verify/"""
 
     def post(self, request):

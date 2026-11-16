@@ -13,6 +13,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 import os
 
+from .. import notify
 from ..attachments import url_for as attachment_url
 from ..people import apply_names
 from ..models import (ResourceRequest, SupportTicket, TicketAttachment,
@@ -287,6 +288,10 @@ class TicketListView(APIView):
             TicketAttachment.objects.create(ticket=ticket, file=f, original_name=f.name[:255])
         _log(ticket, 'created', role, email,
              'Auto-approved — raised by IT Support.' if auto_approve else '')
+        # Two mails: the person it was addressed to gets the work, the person
+        # who raised it gets told it arrived and whose desk it is on. See
+        # roompulse/notify.py -- a failure there cannot reach this view.
+        notify.raised('ticket', ticket, description)
 
         return Response({
             'id': ticket.id, 'status': ticket.status,
@@ -425,6 +430,7 @@ class TicketActionView(APIView):
             ticket.admin_remarks = remarks
             ticket.save()
             _log(ticket, ticket.status, role, email, remarks, was)
+            notify.moved('ticket', ticket, ticket.status, email, remarks)
             return Response({'message': f'Ticket {ticket.status}.', 'ticket': _brief(ticket, request)})
 
         if action == 'start':
@@ -442,6 +448,7 @@ class TicketActionView(APIView):
             # the ticket and whoever picked the work up are two different
             # facts, and the row has one slot.
             _log(ticket, 'started', role, email, remarks, was)
+            notify.moved('ticket', ticket, 'started', email, remarks)
             return Response({'message': 'Ticket marked In Progress.', 'ticket': _brief(ticket, request)})
 
         if action == 'close':
@@ -479,6 +486,8 @@ class TicketActionView(APIView):
                 ticket.performed_on = timezone.localdate()
             ticket.save()
             _log(ticket, 'closed', role, email, remarks, was)
+            notify.moved('ticket', ticket, 'closed', email, remarks,
+                         extra=[('Time spent', notify.mins_label(ticket.time_spent_minutes))])
             return Response({'message': 'Ticket closed.', 'ticket': _brief(ticket, request)})
 
         if action == 'transfer':
@@ -504,6 +513,8 @@ class TicketActionView(APIView):
             # actually read on the card.
             _log(ticket, 'transferred', role, email,
                  f'To {moved.to_name or moved.to_email} — {moved.reason}', was)
+            notify.transferred('ticket', ticket, moved.to_email, moved.to_name,
+                               email, moved.reason)
             return Response({
                 'message': f'Passed to {moved.to_name or moved.to_email}.',
                 'ticket': _brief(ticket, request),
@@ -526,6 +537,7 @@ class TicketActionView(APIView):
                                     else remarks or 'Cancelled by IT Support.')
             ticket.save()
             _log(ticket, 'cancelled', role, email, ticket.admin_remarks, was)
+            notify.moved('ticket', ticket, 'cancelled', email, ticket.admin_remarks)
             return Response({'message': 'Ticket cancelled.', 'ticket': _brief(ticket, request)})
 
         return Response({'error': 'Invalid action.'}, status=400)
