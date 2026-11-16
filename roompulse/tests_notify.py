@@ -305,13 +305,16 @@ class HowTheMailReads(Base):
         """Better no link than one pointing at the wrong server."""
         with override_settings(PORTAL_BASE_URL=''):
             self.raise_ticket()
-        self.assertNotIn('Open Help Desk', body_for(IT_STAFF).body)
+        self.assertNotIn('Open the intranet', body_for(IT_STAFF).body)
 
-    def test_the_link_is_included_once_it_is_configured(self):
+    def test_the_link_is_the_front_door_and_not_a_path(self):
+        """The frontend has no router: which tool is open is React state.
+        A /help-desk link would land on nothing."""
         with override_settings(PORTAL_BASE_URL='https://intranet.example.com/'):
             self.raise_ticket()
-        self.assertIn('https://intranet.example.com/help-desk',
-                      body_for(IT_STAFF).body)
+        body = body_for(IT_STAFF).body
+        self.assertIn('https://intranet.example.com', body)
+        self.assertNotIn('intranet.example.com/', body)
 
     def test_each_person_gets_their_own_copy(self):
         """Not one mail addressed to both: the desk roster is not public and

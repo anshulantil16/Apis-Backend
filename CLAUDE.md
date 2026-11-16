@@ -219,10 +219,12 @@ Two rules when adding a step:
 mail server that is down or slow cannot fail or stall a ticket action. That is
 the contract: **Help Desk does not depend on Gmail being up.**
 
-`PORTAL_BASE_URL` in `.env` is the "Open Help Desk" link at the foot of each
-mail. Unset, the line is left out rather than guessed — QA and Live are
-different hosts and a mail pointing at the wrong one is worse than no link.
-Sender is the same account the sign-in code comes from.
+`PORTAL_BASE_URL` in `.env` is the link at the foot of each mail, and it is
+the intranet's **front door only**: the frontend has no router — which tool is
+open is React state, not a path — so a deep link would land on nothing. Unset,
+the line is left out rather than guessed: QA and Live are different hosts and a
+mail pointing at the wrong one is worse than no link at all. Sender is the same
+account the sign-in code comes from.
 
 ## Analytics is windowed
 

@@ -61,8 +61,11 @@ def _sender():
 
 
 def _link_line():
+    """The intranet's front door, and deliberately not a deep link: the
+    frontend has no router -- which tool is open is React state, not a path
+    -- so anything after the host would land on a page that does not exist."""
     base = (getattr(settings, 'PORTAL_BASE_URL', '') or '').rstrip('/')
-    return f'Open Help Desk: {base}/help-desk' if base else ''
+    return f'Open the intranet and go to Help Desk: {base}' if base else ''
 
 
 def _in_background():
