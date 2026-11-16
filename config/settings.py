@@ -255,6 +255,12 @@ if EMAIL_DEV_ONLY:
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
     DEFAULT_FROM_EMAIL = 'no-reply@apisindia.com'
 
+# Where the Help Desk lives, for the "Open Help Desk" line at the foot of the
+# notification emails (roompulse/notify.py). Left blank the line is omitted
+# rather than guessed: QA and Live are different hosts, and a mail that sends
+# somebody to the wrong one is worse than a mail with no link at all.
+PORTAL_BASE_URL = os.getenv('PORTAL_BASE_URL', '').rstrip('/')
+
 # ── Pocket HRMS ───────────────────────────────────────────────────────────────
 # The company's hire-to-retire system, and the source of truth for who works
 # here. The intranet portal syncs its employee directory from this rather than

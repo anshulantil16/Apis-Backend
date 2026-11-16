@@ -10,6 +10,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
+from .. import notify
 from ..models import ResourceRequest
 from ..people import apply_names
 from ..assignment import admin_queue_for, raised_by, resolve as resolve_assignee
@@ -137,6 +138,10 @@ class ResourceRequestListView(APIView):
             reviewed_by=email if auto_approve else '',
             reviewed_at=timezone.now() if auto_approve else None,
         )
+        # The desk hears about new work, the requester hears that it
+        # arrived. See roompulse/notify.py.
+        notify.raised('resource', req, req.reason)
+
         return Response({
             'id': req.id, 'status': req.status,
             'message': ('Recorded and approved.' if auto_approve
@@ -181,6 +186,7 @@ class ResourceRequestActionView(APIView):
             req.reviewed_at = timezone.now()
             req.admin_remarks = str(request.data.get('remarks') or '').strip()[:300]
             req.save()
+            notify.moved('resource', req, req.status, email, req.admin_remarks)
             return Response({'message': f'Request {req.status}.', 'request': _brief(req)})
 
         if action == 'transfer':
@@ -203,6 +209,8 @@ class ResourceRequestActionView(APIView):
                              request.data.get('remarks'))
             if isinstance(moved, str):
                 return Response({'error': moved}, status=400)
+            notify.transferred('resource', req, moved.to_email, moved.to_name,
+                               email, moved.reason)
             return Response({'message': f'Passed to {moved.to_name or moved.to_email}.',
                              'request': _brief(req)})
 
@@ -215,6 +223,8 @@ class ResourceRequestActionView(APIView):
             req.fulfilled_by = email
             req.fulfilled_at = timezone.now()
             req.save()
+            notify.moved('resource', req, 'fulfilled', email,
+                         str(request.data.get('remarks') or '').strip()[:300])
             return Response({'message': 'Marked as fulfilled.', 'request': _brief(req)})
 
         if action == 'cancel':
@@ -229,6 +239,7 @@ class ResourceRequestActionView(APIView):
             if is_staff and not is_owner:
                 req.admin_remarks = str(request.data.get('remarks') or '').strip()[:300]
             req.save()
+            notify.moved('resource', req, 'cancelled', email, req.admin_remarks)
             return Response({'message': 'Request cancelled.', 'request': _brief(req)})
 
         return Response({'error': 'Invalid action.'}, status=400)

@@ -195,6 +195,35 @@ Attachments are allowlisted by extension (`ALLOWED_ATTACHMENT_EXTS`) because
 they are served back from `MEDIA_URL` — an `.html` or `.svg` attachment is a
 script on our own origin.
 
+## Help Desk tells people what happened (`roompulse/notify.py`)
+
+Every step a ticket, item request or room booking takes sends **one short
+plain-text email to the one side that did not take it**. Approving mails the
+requester, not the approver; the requester withdrawing their own ticket mails
+the desk, not themselves. Raising something sends two: work to the person it
+was addressed to, an acknowledgement to the person who raised it.
+
+Work logged after the fact (`origin='logged'`) sends nothing — nobody is
+waiting on it, and it is the one thing that would arrive every day.
+
+Two rules when adding a step:
+
+- Call `notify.moved(kind, obj, action, actor_email, remarks)` **after** the
+  save and the `_log()`, never before. A mail about a step that then fails to
+  commit is worse than no mail.
+- Add the wording to `OWN` (what the requester is told) — and to `DESK` only
+  if the requester can be the one who takes that step. An action with no
+  entry in either sends nothing, silently and by design.
+
+`_safe` wraps every entry point and the send goes on a thread over SMTP, so a
+mail server that is down or slow cannot fail or stall a ticket action. That is
+the contract: **Help Desk does not depend on Gmail being up.**
+
+`PORTAL_BASE_URL` in `.env` is the "Open Help Desk" link at the foot of each
+mail. Unset, the line is left out rather than guessed — QA and Live are
+different hosts and a mail pointing at the wrong one is worse than no link.
+Sender is the same account the sign-in code comes from.
+
 ## Analytics is windowed
 
 `views/analytics.py` measures everything over `?days=` (default 30) and also
