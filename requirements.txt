@@ -26,3 +26,9 @@ pypdf>=4.0.0
 
 # Pocket HRMS employee-master sync (accounts/services/hrms.py)
 requests>=2.31
+
+# Attendance photo check (user_management/photo_check.py). Both ship with
+# weasyprint/pandas already, but this module imports them directly, so they
+# are named here rather than relied on as somebody else's transitive dependency.
+Pillow>=10.0
+numpy>=1.26

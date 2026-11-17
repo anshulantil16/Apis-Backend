@@ -226,6 +226,34 @@ the line is left out rather than guessed: QA and Live are different hosts and a
 mail pointing at the wrong one is worse than no link at all. Sender is the same
 account the sign-in code comes from.
 
+## Attendance photos are checked on the server (`user_management/photo_check.py`)
+
+The field attendance tool flags punch-in photos that are black, blown out,
+featureless, or appear to have nobody in them. **It is on the server because
+it cannot be anywhere else:** reading a photo's pixels out of a canvas needs
+the host serving it to send `Access-Control-Allow-Origin`, and BIZOM's does
+not — the image displays in an `<img>` and is unreadable to every line of
+code on the page.
+
+It measures brightness, detail and skin-tone share. Brightness and detail are
+solid. **The skin share is a hint and must stay labelled as one** — it is a
+colour range, not a face detector, and a mask, gloves, coloured light or a
+dark room all push it down on a photo of a present human being. It reports
+`no_person` ("may not be a person"), never an accusation. Detail is measured
+across the colour channels as well as luma, because two colours can share a
+brightness almost exactly and a luma-only test calls a picture full of things
+a flat grey card.
+
+**`url_problem()` is load-bearing.** This endpoint fetches URLs out of a
+spreadsheet column, which is an SSRF hole done naively — `http://127.0.0.1:8000/`
+in that column would have the server fetch its own API and hand back the
+answer. Every URL and every redirect hop is resolved and every address it
+answers with must be public. Do not relax it to a host-name match: a name
+somebody else controls can point at 127.0.0.1.
+
+Verdicts are cached for a day by URL hash; `unreadable` is deliberately not
+cached, because a host being down is not a fact about the photo.
+
 ## Analytics is windowed
 
 `views/analytics.py` measures everything over `?days=` (default 30) and also

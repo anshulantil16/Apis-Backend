@@ -9,6 +9,24 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
+import hashlib
+
+from django.core.cache import cache
+
+from accounts.auth import SessionRequiredAPIView
+
+from . import photo_check
+
+# A verdict is a fact about an image that does not change, so it is held for
+# a day: re-opening the same report must not re-download six hundred photos.
+PHOTO_TTL = 24 * 60 * 60
+
+
+def _photo_key(url):
+    # Hashed, because the cache key has a length limit and these are long
+    # signed URLs -- and memcached refuses a key with a space in it.
+    return 'attphoto_' + hashlib.sha256(url.encode('utf-8', 'ignore')).hexdigest()
+
 
 def _format_cell(val):
     """Convert any pandas/Excel cell value to a clean string."""
@@ -660,3 +678,50 @@ class ExcelExportView(APIView):
             
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class PhotoCheckView(SessionRequiredAPIView):
+    """POST { urls: [...] } -> { results: { url: {verdict, reason, ...} } }
+
+    Signed in only, and not because the verdicts are secret: this endpoint
+    fetches whatever URL it is handed, and an open one is a way to make the
+    server knock on doors on somebody's behalf. photo_check.url_problem()
+    is the real guard -- this is the lock on the outside of it.
+
+    The other two views in this file take no session at all. That is not an
+    endorsement; it predates the portal's sign-in and is a separate change.
+    A new endpoint does not get to inherit it.
+    """
+
+    def post(self, request):
+        urls = request.data.get('urls')
+        if not isinstance(urls, list):
+            return Response({'error': 'Send a list of image URLs.'}, status=400)
+        urls = [u for u in urls if isinstance(u, str)]
+        if not urls:
+            return Response({'results': {}})
+        if len(urls) > photo_check.MAX_URLS:
+            return Response(
+                {'error': f'{len(urls)} photos at once is too many. '
+                          f'Send at most {photo_check.MAX_URLS}.'}, status=400)
+
+        # Already answered once? The same photo appears on more than one row
+        # and a second look at the same day should cost nothing.
+        results, to_fetch = {}, []
+        for u in urls:
+            hit = cache.get(_photo_key(u))
+            if hit is not None:
+                results[u] = hit
+            else:
+                to_fetch.append(u)
+
+        if to_fetch:
+            fresh = photo_check.check_urls(to_fetch)
+            for u, verdict in fresh.items():
+                # A failure to reach the host is not a fact about the photo,
+                # so it is not remembered -- the next attempt tries again.
+                if verdict.get('verdict') != 'unreadable':
+                    cache.set(_photo_key(u), verdict, timeout=PHOTO_TTL)
+            results.update(fresh)
+
+        return Response({'results': results})
