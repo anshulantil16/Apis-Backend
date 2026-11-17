@@ -2004,3 +2004,42 @@ class WorkCanBePassedOn(HelpdeskBase):
                         'remarks': 'you have the key to the cupboard'}, ADMIN_STAFF)
         self.assertEqual(r.status_code, 200, r.json())
         self.assertEqual(ResourceRequest.objects.get(id=i).status, 'approved')
+
+
+class AssistantMyRequestsTests(TestCase):
+    """Ask APIS "check the status of my requests": the signed-in person's own,
+    and nobody else's, whatever the body says."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        from .views.auth import _SESSION_PREFIX
+        self.token = 'chat-token-for-tests'
+        cache.set(_SESSION_PREFIX + self.token, 'me@apisindia.com', timeout=60)
+        room = Room.objects.create(name='Conference Room - 1', floor='1st Floor')
+        SupportTicket.objects.create(requested_by_name='Me', requested_by_email='me@apisindia.com',
+                                     subject='Laptop will not start')
+        SupportTicket.objects.create(requested_by_name='Other', requested_by_email='other@apisindia.com',
+                                     subject='Someone else’s VPN')
+        ResourceRequest.objects.create(requested_by_name='Me', requested_by_email='ME@apisindia.com',
+                                       item_name='A4 paper', quantity=2)
+        BookingRequest.objects.create(room=room, requested_by_name='Me', requested_by_email='me@apisindia.com',
+                                      date=date(2026, 11, 20), start_time=time(11), end_time=time(12))
+
+    def post(self, **body):
+        return self.client.post('/api/roompulse/assistant/my-requests/', body, content_type='application/json')
+
+    def test_lists_only_my_own_requests(self):
+        r = self.post(token=self.token)
+        self.assertEqual(r.status_code, 200)
+        titles = [x['title'] for x in r.json()['results']]
+        self.assertEqual(len(titles), 3)
+        self.assertIn('Laptop will not start', titles)
+        self.assertIn('A4 paper × 2', titles)
+        self.assertNotIn('Someone else’s VPN', titles)
+        self.assertEqual({x['status_label'] for x in r.json()['results']}, {'Pending'})
+
+    def test_naming_someone_else_in_the_body_changes_nothing(self):
+        r = self.post(token=self.token, email='other@apisindia.com', mine='other@apisindia.com')
+        titles = [x['title'] for x in r.json()['results']]
+        self.assertNotIn('Someone else’s VPN', titles)
+        self.assertEqual(r.json()['email'], 'me@apisindia.com')

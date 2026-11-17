@@ -22,6 +22,7 @@ issued to (TicketListView takes identity from the session, never the body).
   POST assistant/verify/   {email, otp}            -> {token, name, role, staff, admin_staff}
   POST assistant/ticket/   {token, subject, ...}   -> the Help Desk's answer
   POST assistant/request/  {token, item_name, ...} -> the Help Desk's answer
+  POST assistant/my-requests/ {token}             -> the person's own requests, newest first
   POST assistant/logout/   {token}                 -> ends the session now
 
 The code itself is sent by the Help Desk's own login/ {action: 'send_otp'}.
@@ -33,7 +34,8 @@ from django.utils.datastructures import MultiValueDict
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .assignment import staff_for
+from .assignment import raised_by, staff_for
+from .models import BookingRequest, ResourceRequest, SupportTicket
 from .people import name_for, name_map
 from .views.auth import _SESSION_PREFIX, RoomPulseLoginView
 from .views.resource_requests import ResourceRequestListView
@@ -136,3 +138,39 @@ class AssistantLogoutView(APIView):
         if token:
             cache.delete(_SESSION_PREFIX + token)
         return Response({'success': True})
+
+
+class AssistantMyRequestsView(APIView):
+    """"Check the status of my requests", answered in the chat.
+
+    Whose requests is decided by the token alone - the email it was issued
+    to, proven by the emailed code. The body cannot name anybody else, so a
+    chat can only ever show the signed-in person their own.
+    """
+    authentication_classes = ()
+    permission_classes = ()
+    LIMIT = 10
+
+    def post(self, request):
+        token = str(request.data.get('token') or '').strip()
+        email = _email_for(token)
+        if not email:
+            return Response({'error': 'Your Help Desk sign-in has expired. Please sign in again.'},
+                            status=401)
+        rows = []
+        for t in raised_by(SupportTicket.objects.all(), email).exclude(origin='logged')[:self.LIMIT]:
+            rows.append({'kind': 'IT ticket', 'id': t.id, 'title': t.subject, 'status': t.status,
+                         'status_label': t.get_status_display(), 'assigned_to': t.assigned_to_name,
+                         'created': t.created_at.isoformat()})
+        for r in raised_by(ResourceRequest.objects.all(), email).order_by('-created_at')[:self.LIMIT]:
+            rows.append({'kind': 'Admin request', 'id': r.id, 'title': f'{r.item_name} × {r.quantity}',
+                         'status': r.status, 'status_label': r.get_status_display(),
+                         'assigned_to': r.assigned_to_name, 'created': r.created_at.isoformat()})
+        for b in (raised_by(BookingRequest.objects.select_related('room'), email)
+                  .order_by('-created_at')[:self.LIMIT]):
+            rows.append({'kind': 'Room booking', 'id': b.id,
+                         'title': f'{b.room.name} · {b.date:%d %b} {b.start_time:%H:%M}',
+                         'status': b.status, 'status_label': b.get_status_display(),
+                         'assigned_to': b.assigned_to_name, 'created': b.created_at.isoformat()})
+        rows.sort(key=lambda x: x['created'], reverse=True)
+        return Response({'email': email, 'results': rows[:self.LIMIT]})

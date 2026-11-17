@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .assistant import (AssistantLogoutView, AssistantRequestView, AssistantTicketView,
+from .assistant import (AssistantLogoutView, AssistantMyRequestsView, AssistantRequestView, AssistantTicketView,
                         AssistantVerifyView)
 from .attachments import AttachmentView
 from .views.desk_staff import DeskStaffView, WhoAmIView
@@ -62,5 +62,6 @@ urlpatterns = [
     path('assistant/verify/', AssistantVerifyView.as_view()),
     path('assistant/ticket/', AssistantTicketView.as_view()),
     path('assistant/request/', AssistantRequestView.as_view()),
+    path('assistant/my-requests/', AssistantMyRequestsView.as_view()),
     path('assistant/logout/', AssistantLogoutView.as_view()),
 ]
