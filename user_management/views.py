@@ -28,6 +28,10 @@ def _photo_key(url):
     return 'attphoto_' + hashlib.sha256(url.encode('utf-8', 'ignore')).hexdigest()
 
 
+def _thumb_key(url):
+    return 'attthumb_' + hashlib.sha256(url.encode('utf-8', 'ignore')).hexdigest()
+
+
 def _format_cell(val):
     """Convert any pandas/Excel cell value to a clean string."""
     if val is None:
@@ -725,3 +729,41 @@ class PhotoCheckView(SessionRequiredAPIView):
             results.update(fresh)
 
         return Response({'results': results})
+
+
+class PhotoThumbView(SessionRequiredAPIView):
+    """POST { urls: [...] } -> { thumbs: { url: 'data:image/jpeg;base64,...' } }
+
+    For the shareable JPG sheets. The page cannot read these images itself
+    -- drawing one onto a canvas taints it and toBlob then refuses -- so the
+    server fetches them and hands back data URIs, which have no origin.
+
+    A URL that cannot be fetched is simply absent from the answer rather
+    than an error: one missing face is a grey square on the sheet, not a
+    reason to deny somebody the sheet.
+    """
+
+    def post(self, request):
+        urls = request.data.get('urls')
+        if not isinstance(urls, list):
+            return Response({'error': 'Send a list of image URLs.'}, status=400)
+        urls = [u for u in urls if isinstance(u, str)]
+        if len(urls) > photo_check.MAX_THUMBS:
+            return Response({'error': f'At most {photo_check.MAX_THUMBS} photos at a time.'},
+                            status=400)
+        if not urls:
+            return Response({'thumbs': {}})
+
+        thumbs, missing = {}, []
+        for u in urls:
+            hit = cache.get(_thumb_key(u))
+            if hit:
+                thumbs[u] = hit
+            else:
+                missing.append(u)
+        if missing:
+            fresh = photo_check.fetch_thumbs(missing)
+            for u, d in fresh.items():
+                cache.set(_thumb_key(u), d, timeout=PHOTO_TTL)
+            thumbs.update(fresh)
+        return Response({'thumbs': thumbs})

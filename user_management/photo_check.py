@@ -266,3 +266,74 @@ def check_urls(urls):
         for part in pool.map(run, batches):
             out.update(dict(part))
     return out
+
+
+# ── the same images, small enough to draw into a shareable sheet ─────────
+
+THUMB_BOX = 96
+MAX_THUMBS = 120
+
+
+def thumb_data_uri(raw, box=THUMB_BOX):
+    """-> a small JPEG of the image as a data: URI, or an error string.
+
+    The browser cannot do this for itself. Drawing one of these photos onto
+    a canvas taints it, and a tainted canvas refuses toBlob -- so a sheet
+    built in the page comes out either blank or not at all. A data URI has
+    no origin, so once the server has handed one over the canvas stays
+    clean. Same reason the check itself lives here.
+    """
+    from io import BytesIO
+    import base64
+    try:
+        img = Image.open(BytesIO(raw))
+        img.draft('RGB', (box, box))
+        img = img.convert('RGB')
+    except Exception:
+        return 'not an image we can read'
+    img.thumbnail((box, box))
+    out = BytesIO()
+    try:
+        img.save(out, 'JPEG', quality=78, optimize=True)
+    except Exception:
+        return 'could not re-encode the image'
+    return 'data:image/jpeg;base64,' + base64.b64encode(out.getvalue()).decode('ascii')
+
+
+def _thumb_one(url, session):
+    problem = url_problem(url)
+    if problem:
+        return ''
+    raw = _fetch(url, session)
+    if isinstance(raw, str):
+        return ''
+    got = thumb_data_uri(raw)
+    # A missing face is a gap in the sheet, not a reason to refuse the
+    # sheet: the caller draws a grey square and carries on.
+    return '' if isinstance(got, str) and not got.startswith('data:') else got
+
+
+def fetch_thumbs(urls):
+    """-> {url: data URI} for the ones that came back; missing keys mean no
+    picture, which the caller is expected to cope with."""
+    wanted, seen = [], set()
+    for u in urls:
+        u = (u or '').strip()
+        if u and u not in seen:
+            seen.add(u)
+            wanted.append(u)
+        if len(wanted) >= MAX_THUMBS:
+            break
+    if not wanted:
+        return {}
+
+    def run(batch):
+        with requests.Session() as s:
+            return [(u, _thumb_one(u, s)) for u in batch]
+
+    n = min(WORKERS, len(wanted))
+    out = {}
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        for part in pool.map(run, [wanted[i::n] for i in range(n)]):
+            out.update({u: d for u, d in part if d})
+    return out
