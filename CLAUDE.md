@@ -415,3 +415,39 @@ Without it, non-PDF uploads are refused with "save it as a PDF" — never
 stored as-is. `original_name` keeps the name of the file that was sent.
 Documents filed before this change: `manage.py convert_policies_to_pdf`
 (`--dry-run` first).
+
+## Medical Insurance (`insurance/`) — we are the partner, not the portal
+
+The insurer's "SSO Auto Login — Partner Integration Guide v1.0" describes
+**one** thing: a redirect that signs an employee in to the insurer's own
+Employee Portal. We encrypt the person's details with a shared secret and
+send their browser to `/sso/login/<token>`.
+
+**There is no data API in that document.** No endpoint returns the e-card,
+the sum insured, the members covered or a claim's status. So the intranet
+cannot render any of it — this tool takes a person to the insurer's page and
+holds no medical information of its own. If those details are ever to appear
+inside the intranet, that is a second, separate ask of the insurer.
+
+- `sso.make_token()` is AES-256-GCM, key = `SHA256(secret)`, fresh 12-byte IV
+  every call, full 16-byte tag, `b64url(iv).b64url(ct).b64url(tag)` with the
+  padding stripped. `AESGCM.encrypt` appends the tag to the ciphertext, which
+  is NOT the shape the insurer wants — it is split back off.
+- **The secret never leaves this process.** Anyone holding it can mint a
+  token for any employee's address and read that person's medical records, so
+  there is no endpoint here that takes an employee id: a token is minted for
+  the caller's own session and nothing else.
+- Unset `INSURANCE_SSO_SECRET` / `INSURANCE_SSO_BASE_URL` means the tool
+  reports itself as not connected. It never mints a token nobody can decrypt.
+- Section 3 allows the employee code when a person has no email, which is the
+  ~50 directory entries HRMS has no address for, so both are always sent.
+- `INSURANCE_SSO_EMPLOYEE_ID_FIELD` exists because the guide writes that one
+  field as prose ("Employee ID") while writing the rest as identifiers — its
+  real spelling is not actually pinned down and needs confirming with the
+  insurer. Settable so that is an `.env` change, not a release.
+- A launch is written to `ActivityLog`; **the URL is not**, because it carries
+  the token and section 10 says not to log it.
+- `cryptography` is now named in `requirements.txt`. It was already installed
+  on both servers as somebody else's transitive dependency — an accident that
+  would take this tool down with an ImportError the day pip resolved
+  differently.

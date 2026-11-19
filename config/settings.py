@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     'ctc',
     'chat',
     'marketwatch',
+    'insurance',
 ]
 
 MIDDLEWARE = [
@@ -260,6 +261,29 @@ if EMAIL_DEV_ONLY:
 # rather than guessed: QA and Live are different hosts, and a mail that sends
 # somebody to the wrong one is worse than a mail with no link at all.
 PORTAL_BASE_URL = os.getenv('PORTAL_BASE_URL', '').rstrip('/')
+
+# ── Medical insurance SSO (insurance/) ───────────────────────────────────────
+# We are the PARTNER in the insurer's "SSO Auto Login" integration: we encrypt
+# an employee's details with a secret both sides hold and redirect them into
+# the insurer's Employee Portal already signed in.
+#
+# The secret is the entire security model -- anyone holding it can mint a
+# token for any employee's address and read that person's medical records --
+# so it lives in .env on the server and nowhere else. Unset, the tool says it
+# is not connected yet rather than minting tokens nobody can decrypt.
+#
+#   INSURANCE_SSO_SECRET      the shared secret, from the insurer
+#   INSURANCE_SSO_BASE_URL    e.g. https://portal.theinsurer.example  (no path)
+#   INSURANCE_PORTAL_NAME     what to call it on screen
+INSURANCE_SSO_SECRET   = os.getenv('INSURANCE_SSO_SECRET', '')
+INSURANCE_SSO_BASE_URL = os.getenv('INSURANCE_SSO_BASE_URL', '').rstrip('/')
+INSURANCE_PORTAL_NAME  = os.getenv('INSURANCE_PORTAL_NAME', '')
+
+# The guide's field table writes the employee-code field as prose ("Employee
+# ID") while writing every other field as an identifier, so the document does
+# not actually pin its spelling down. Settable so that confirming it with the
+# insurer is an .env change rather than a release.
+INSURANCE_SSO_EMPLOYEE_ID_FIELD = os.getenv('INSURANCE_SSO_EMPLOYEE_ID_FIELD', 'employee_id')
 
 # ── Pocket HRMS ───────────────────────────────────────────────────────────────
 # The company's hire-to-retire system, and the source of truth for who works

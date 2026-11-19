@@ -32,3 +32,9 @@ requests>=2.31
 # are named here rather than relied on as somebody else's transitive dependency.
 Pillow>=10.0
 numpy>=1.26
+
+# AES-256-GCM for the insurance SSO token (insurance/sso.py). Present on both
+# servers already as a transitive dependency, but named here because that is
+# an accident we would not notice breaking: a pip resolution that drops it
+# takes the Medical Insurance tool down with an ImportError at startup.
+cryptography>=42.0
