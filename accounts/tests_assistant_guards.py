@@ -29,6 +29,9 @@ GUARDED = [
       'category': 'hardware', 'priority': 'high'}),
     ('Help Desk request',   '/api/roompulse/assistant/request/',
      {'item_name': 'office chair', 'quantity': '1', 'urgency': 'normal'}),
+    # Reads, not writes - but somebody else's tickets are just as private.
+    ('Help Desk my requests', '/api/roompulse/assistant/my-requests/',
+     {'email': 'someone.else@apisindia.com'}),
 ]
 
 
