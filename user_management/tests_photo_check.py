@@ -18,7 +18,8 @@ import numpy as np
 from django.test import TestCase
 from PIL import Image
 
-from .photo_check import (MAX_URLS, check_urls, measure, url_problem, verdict_for)
+from .photo_check import (MAX_THUMBS, MAX_URLS, _thumb_one, check_urls, fetch_thumbs,
+                          measure, thumb_data_uri, url_problem, verdict_for)
 
 
 def png(arr):
@@ -201,3 +202,48 @@ class TheBatch(TestCase):
                    return_value={'verdict': 'ok', 'reason': 'x'}):
             out = check_urls([f'http://a/{i}.jpg' for i in range(MAX_URLS + 50)])
         self.assertEqual(len(out), MAX_URLS)
+
+
+class TheThumbnailsForASharedSheet(TestCase):
+    """The JPG sheets draw these. The browser cannot fetch them itself --
+    a BIZOM-hosted image taints the canvas and toBlob then refuses -- so
+    if this comes back wrong the sheet is not produced at all."""
+
+    def test_a_photo_comes_back_as_a_data_uri(self):
+        got = thumb_data_uri(half_and_half(SKIN, SHIRT))
+        self.assertTrue(got.startswith('data:image/jpeg;base64,'), got[:40])
+
+    def test_it_is_small_enough_to_put_a_hundred_in_one_response(self):
+        got = thumb_data_uri(noisy((120, 90, 70), size=1200, seed=5))
+        self.assertLess(len(got), 20_000, 'a thumbnail should be a few KB, not a photo')
+
+    def test_a_big_photo_is_scaled_down_not_sent_whole(self):
+        small = thumb_data_uri(noisy((120, 90, 70), size=200, seed=6))
+        huge = thumb_data_uri(noisy((120, 90, 70), size=1600, seed=6))
+        self.assertLess(abs(len(huge) - len(small)) / max(len(small), 1), 3.0,
+                        'both should land at the same thumbnail size')
+
+    def test_something_that_is_not_an_image_says_so(self):
+        self.assertIsInstance(thumb_data_uri(b'nope'), str)
+        self.assertFalse(thumb_data_uri(b'nope').startswith('data:'))
+
+    def test_a_face_we_cannot_fetch_is_simply_absent(self):
+        """One missing photo is a grey square on the sheet, not a reason to
+        deny somebody the sheet."""
+        with patch('user_management.photo_check._thumb_one',
+                   side_effect=lambda u, s: '' if '2' in u else 'data:image/jpeg;base64,AAA'):
+            out = fetch_thumbs(['http://a/1.jpg', 'http://a/2.jpg'])
+        self.assertEqual(list(out), ['http://a/1.jpg'])
+
+    def test_it_stops_at_the_cap(self):
+        with patch('user_management.photo_check._thumb_one',
+                   return_value='data:image/jpeg;base64,AAA'):
+            out = fetch_thumbs([f'http://a/{i}.jpg' for i in range(MAX_THUMBS + 40)])
+        self.assertEqual(len(out), MAX_THUMBS)
+
+    def test_an_inward_pointing_url_is_never_fetched(self):
+        """Same guard as the check itself -- this endpoint takes URLs from
+        the same untrusted spreadsheet column."""
+        import requests
+        with requests.Session() as s:
+            self.assertEqual(_thumb_one('http://127.0.0.1:8000/api/accounts/', s), '')

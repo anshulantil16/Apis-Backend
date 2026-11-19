@@ -251,6 +251,13 @@ answer. Every URL and every redirect hop is resolved and every address it
 answers with must be public. Do not relax it to a host-name match: a name
 somebody else controls can point at 127.0.0.1.
 
+`/photo-thumbs/` is the same fetcher re-encoding each photo to a ~96px JPEG
+data URI, for the shareable JPG sheets the frontend draws. Same reason it is
+server-side: a BIZOM-hosted image drawn onto a canvas taints it and `toBlob`
+then refuses, so the sheet is not produced at all. A data URI has no origin.
+A photo it cannot fetch is simply absent from the answer — one grey square on
+a sheet, not a failed download.
+
 Verdicts are cached for a day by URL hash; `unreadable` is deliberately not
 cached, because a host being down is not a fact about the photo.
 
