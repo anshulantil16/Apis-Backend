@@ -501,3 +501,20 @@ different questions and the screen says so next to the figures.
 
 A fetch is cached ten minutes by range (`?refresh=1` bypasses). 31 days of
 the whole company is ~22,000 rows and ~6 MB.
+
+### "Delhi HO" is an employee code, not a location
+
+The Attendance tool opens scoped to head office, and that scope is
+`ATTENDANCE_HO_CODE_PREFIX` (`HO`) matched against the employee code —
+**not** `PortalUser.location`. Checked on 20-11-2026:
+
+- 83 people carry an `HO` code
+- only **40** of them have location `DELHI-HO`
+- the rest are `DELHI` (13), **blank (29)** and one `DEOGHAR`
+- and location `DELHI` is mostly **field sales** — 20 of its 33 are `SL` codes
+
+So filtering on the location column would hide half of head office and add
+twenty people who have never sat in it. If HR ever fills the location column
+in properly this can be revisited; until then the code prefix is the only
+thing right for all 83. One record is coded lower-case `ho`, so the match is
+case-insensitive.

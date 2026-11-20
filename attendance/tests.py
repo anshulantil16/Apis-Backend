@@ -203,3 +203,26 @@ class EndpointTests(TestCase):
 
     def test_the_app_key_exists(self):
         self.assertEqual(AppKey.ATTENDANCE, 'attendance')
+
+
+class HomeOfficeScopeTests(TestCase):
+    """Delhi HO is matched on the employee CODE, not the location column.
+
+    On 20-11-2026 the directory held 83 people with an HO code and only 40
+    filed under location 'DELHI-HO'; the rest were 'DELHI' (13), blank (29)
+    and one 'DEOGHAR'. Matching on location would have hidden half of head
+    office and added twenty field-sales people who sit under 'DELHI'.
+    """
+
+    def test_the_prefix_and_label_are_configurable(self):
+        from django.conf import settings
+        self.assertEqual(getattr(settings, 'ATTENDANCE_HO_CODE_PREFIX', ''), 'HO')
+        self.assertEqual(getattr(settings, 'ATTENDANCE_HO_LABEL', ''), 'Delhi HO')
+
+    def test_ho_codes_are_matched_case_insensitively(self):
+        """One record in the directory is coded lower-case 'ho'."""
+        prefix = 'HO'
+        for code in ('HO0014', 'ho0231', 'Ho0999'):
+            self.assertTrue(code.upper().startswith(prefix), code)
+        for code in ('SL03839', 'CAND-0011', 'RK0007', 'A001'):
+            self.assertFalse(code.upper().startswith(prefix), code)
