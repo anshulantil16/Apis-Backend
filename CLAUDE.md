@@ -415,3 +415,89 @@ Without it, non-PDF uploads are refused with "save it as a PDF" — never
 stored as-is. `original_name` keeps the name of the file that was sent.
 Documents filed before this change: `manage.py convert_policies_to_pdf`
 (`--dry-run` first).
+
+## Medical Insurance (`insurance/`) — we are the partner, not the portal
+
+The insurer's "SSO Auto Login — Partner Integration Guide v1.0" describes
+**one** thing: a redirect that signs an employee in to the insurer's own
+Employee Portal. We encrypt the person's details with a shared secret and
+send their browser to `/sso/login/<token>`.
+
+**There is no data API in that document.** No endpoint returns the e-card,
+the sum insured, the members covered or a claim's status. So the intranet
+cannot render any of it — this tool takes a person to the insurer's page and
+holds no medical information of its own. If those details are ever to appear
+inside the intranet, that is a second, separate ask of the insurer.
+
+- `sso.make_token()` is AES-256-GCM, key = `SHA256(secret)`, fresh 12-byte IV
+  every call, full 16-byte tag, `b64url(iv).b64url(ct).b64url(tag)` with the
+  padding stripped. `AESGCM.encrypt` appends the tag to the ciphertext, which
+  is NOT the shape the insurer wants — it is split back off.
+- **The secret never leaves this process.** Anyone holding it can mint a
+  token for any employee's address and read that person's medical records, so
+  there is no endpoint here that takes an employee id: a token is minted for
+  the caller's own session and nothing else.
+- Unset `INSURANCE_SSO_SECRET` / `INSURANCE_SSO_BASE_URL` means the tool
+  reports itself as not connected. It never mints a token nobody can decrypt.
+- Section 3 allows the employee code when a person has no email, which is the
+  ~50 directory entries HRMS has no address for, so both are always sent.
+- `INSURANCE_SSO_EMPLOYEE_ID_FIELD` exists because the guide writes that one
+  field as prose ("Employee ID") while writing the rest as identifiers — its
+  real spelling is not actually pinned down and needs confirming with the
+  insurer. Settable so that is an `.env` change, not a release.
+- A launch is written to `ActivityLog`; **the URL is not**, because it carries
+  the token and section 10 says not to log it.
+- `cryptography` is now named in `requirements.txt`. It was already installed
+  on both servers as somebody else's transitive dependency — an accident that
+  would take this tool down with an ImportError the day pip resolved
+  differently.
+
+## Attendance (`attendance/`) — live from Pocket HRMS
+
+`GetAttendanceAPI`, read on demand for a date or a range. A separate tool from
+the Data Extractor, with its own grant (`AppKey.ATTENDANCE`), because it
+carries every employee's working hours for any day with nobody exporting
+anything first.
+
+Everything below was confirmed against the live tenant on 19-11-2026 by
+fetching 01/11–10/11 (718 employees, 7,180 rows). The vendor's document is
+right about the shape and wrong or silent about most of this:
+
+- **Dates go in as `yyyy-MM-dd` and come back as `dd/MM/yyyy`.** Nothing warns
+  you; `_iso()` handles the asymmetry.
+- **The range limit is 31 days inclusive, not the documented 30.**
+  `01/10 → 01/11` is refused; `02/10 → 01/11` is fine. Longer spans are split
+  by `windows()` and stitched.
+- **`InTime` and `OutTime` can be the literal word `Unswiped`** — 649 out of
+  7,180 in ten days. It is a punch that was never made, not a time, and
+  `TotalWorkingHrs` is `-` on those rows. **No duration is derived from one**;
+  `workedMins` stays `None` rather than being guessed, for the same reason
+  BIZOM's 23:59 auto-close is not counted as a fifteen-hour day.
+- **`-` is the empty value for every field.**
+- `EarlyTime` / `LateTime` are **durations against that employee's own shift**,
+  not clock times. `LateTime: 00:25` is twenty-five minutes late.
+- `TotalWorkingHrs` is the raw punch-to-punch span (seen up to 16:07);
+  `NormalWorkingHours` is that capped at the shift (never above 08:00). They
+  answer different questions and both are kept.
+- **`OTHours` was `-` on all 7,180 rows** — this tenant does not compute
+  overtime. `overtimeTracked: false` is returned so no screen draws a column
+  of dashes.
+- **A row exists for every employee on every date, future dates included** —
+  a future range answers 200 with a full set of blanks. So `noRecord` means
+  "nothing recorded", **not** absent. The feed has no leave, week-off or
+  holiday column, so a day off, an approved leave and a missed punch are
+  indistinguishable. `holidays()` (GetHolidays) recovers the one piece of that
+  the API will give us; a failure to fetch it does not fail the request.
+- The feed has **no location, department or manager**, so "Delhi HO" is
+  impossible to ask of this API. Those are joined on from `accounts.PortalUser`
+  by employee code in `views.py`, and a code not on the directory is marked
+  `offDirectory` rather than dropped (candidate codes appear in the feed).
+
+**Two different "late" numbers, on purpose.** `late` is HRMS against the
+person's shift; `afterCutoff` is an in-punch later than
+`ATTENDANCE_LATE_CUTOFF` (11:00, strict `>`) on the clock. On one real
+two-day sample they were 502 and 49. Do not collapse them — they answer
+different questions and the screen says so next to the figures.
+
+A fetch is cached ten minutes by range (`?refresh=1` bypasses). 31 days of
+the whole company is ~22,000 rows and ~6 MB.
