@@ -54,6 +54,7 @@ class AppKey(models.TextChoices):
     TALENT_MATCH   = 'talent-match',   'TalentMatch'
     CHAT           = 'chat',           'Messages'
     INSURANCE      = 'insurance',      'Medical Insurance'
+    ATTENDANCE     = 'attendance',     'Attendance'
 
 
 # What a brand-new employee can open before anyone grants them more. The

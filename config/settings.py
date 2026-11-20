@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     'chat',
     'marketwatch',
     'insurance',
+    'attendance',
 ]
 
 MIDDLEWARE = [
@@ -310,6 +311,12 @@ POCKET_HRMS_TOKEN = os.getenv('POCKET_HRMS_TOKEN', '')
 # the quirks in that module's docstring first, because the raw/String column
 # pairs are load-bearing and an "obvious" tidy-up silently blanks the data.
 POCKET_HRMS_EMPLOYEE_FIELDS = os.getenv('POCKET_HRMS_EMPLOYEE_FIELDS', '')
+
+# The Delhi HO late rule, as a clock time, for the Attendance tool. This is
+# NOT the same question as Pocket HRMS's own LateTime column, which measures
+# each employee against their own shift -- both are shown, and they can
+# legitimately disagree. Strict: 11:00 sharp is on time.
+ATTENDANCE_LATE_CUTOFF = os.getenv('ATTENDANCE_LATE_CUTOFF', '11:00')
 
 # Local development sign-in. When on, the portal will register any company
 # address on first use and hand the sign-in code straight back in the response

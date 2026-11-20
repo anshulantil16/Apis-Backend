@@ -451,3 +451,53 @@ inside the intranet, that is a second, separate ask of the insurer.
   on both servers as somebody else's transitive dependency — an accident that
   would take this tool down with an ImportError the day pip resolved
   differently.
+
+## Attendance (`attendance/`) — live from Pocket HRMS
+
+`GetAttendanceAPI`, read on demand for a date or a range. A separate tool from
+the Data Extractor, with its own grant (`AppKey.ATTENDANCE`), because it
+carries every employee's working hours for any day with nobody exporting
+anything first.
+
+Everything below was confirmed against the live tenant on 19-11-2026 by
+fetching 01/11–10/11 (718 employees, 7,180 rows). The vendor's document is
+right about the shape and wrong or silent about most of this:
+
+- **Dates go in as `yyyy-MM-dd` and come back as `dd/MM/yyyy`.** Nothing warns
+  you; `_iso()` handles the asymmetry.
+- **The range limit is 31 days inclusive, not the documented 30.**
+  `01/10 → 01/11` is refused; `02/10 → 01/11` is fine. Longer spans are split
+  by `windows()` and stitched.
+- **`InTime` and `OutTime` can be the literal word `Unswiped`** — 649 out of
+  7,180 in ten days. It is a punch that was never made, not a time, and
+  `TotalWorkingHrs` is `-` on those rows. **No duration is derived from one**;
+  `workedMins` stays `None` rather than being guessed, for the same reason
+  BIZOM's 23:59 auto-close is not counted as a fifteen-hour day.
+- **`-` is the empty value for every field.**
+- `EarlyTime` / `LateTime` are **durations against that employee's own shift**,
+  not clock times. `LateTime: 00:25` is twenty-five minutes late.
+- `TotalWorkingHrs` is the raw punch-to-punch span (seen up to 16:07);
+  `NormalWorkingHours` is that capped at the shift (never above 08:00). They
+  answer different questions and both are kept.
+- **`OTHours` was `-` on all 7,180 rows** — this tenant does not compute
+  overtime. `overtimeTracked: false` is returned so no screen draws a column
+  of dashes.
+- **A row exists for every employee on every date, future dates included** —
+  a future range answers 200 with a full set of blanks. So `noRecord` means
+  "nothing recorded", **not** absent. The feed has no leave, week-off or
+  holiday column, so a day off, an approved leave and a missed punch are
+  indistinguishable. `holidays()` (GetHolidays) recovers the one piece of that
+  the API will give us; a failure to fetch it does not fail the request.
+- The feed has **no location, department or manager**, so "Delhi HO" is
+  impossible to ask of this API. Those are joined on from `accounts.PortalUser`
+  by employee code in `views.py`, and a code not on the directory is marked
+  `offDirectory` rather than dropped (candidate codes appear in the feed).
+
+**Two different "late" numbers, on purpose.** `late` is HRMS against the
+person's shift; `afterCutoff` is an in-punch later than
+`ATTENDANCE_LATE_CUTOFF` (11:00, strict `>`) on the clock. On one real
+two-day sample they were 502 and 49. Do not collapse them — they answer
+different questions and the screen says so next to the figures.
+
+A fetch is cached ten minutes by range (`?refresh=1` bypasses). 31 days of
+the whole company is ~22,000 rows and ~6 MB.
