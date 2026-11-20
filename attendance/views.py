@@ -107,6 +107,13 @@ class MetaView(SessionRequiredAPIView):
             'locations':   locations,
             'departments': departments,
             'directorySize': len(people),
+            # Which employees count as head office. Matched on the employee
+            # CODE rather than the directory's location column -- see the
+            # setting's comment for the counts that forced that.
+            'homeOffice': {
+                'label':      str(getattr(settings, 'ATTENDANCE_HO_LABEL', 'Delhi HO')),
+                'codePrefix': str(getattr(settings, 'ATTENDANCE_HO_CODE_PREFIX', 'HO')),
+            },
             # Said out loud so no screen draws a column of dashes: this
             # tenant does not compute overtime at all.
             'overtimeTracked': False,
@@ -197,5 +204,9 @@ class RecordsView(SessionRequiredAPIView):
             'lateCutoff': str(getattr(settings, 'ATTENDANCE_LATE_CUTOFF', '11:00')),
             'holidays': marks,
             'overtimeTracked': False,
+            'homeOffice': {
+                'label':      str(getattr(settings, 'ATTENDANCE_HO_LABEL', 'Delhi HO')),
+                'codePrefix': str(getattr(settings, 'ATTENDANCE_HO_CODE_PREFIX', 'HO')),
+            },
             'fetchedAt': timezone.localtime().isoformat(timespec='seconds'),
         })

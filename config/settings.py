@@ -318,6 +318,18 @@ POCKET_HRMS_EMPLOYEE_FIELDS = os.getenv('POCKET_HRMS_EMPLOYEE_FIELDS', '')
 # legitimately disagree. Strict: 11:00 sharp is on time.
 ATTENDANCE_LATE_CUTOFF = os.getenv('ATTENDANCE_LATE_CUTOFF', '11:00')
 
+# Which employees are "Delhi HO", which the Attendance tool opens on.
+#
+# Defined by the EMPLOYEE CODE, not the directory's location column, and that
+# is deliberate. On 20-11-2026 the directory held 83 people with an HO code
+# and only 40 of them had location 'DELHI-HO' -- the other 43 were 'DELHI'
+# (13), blank (29) and one 'DEOGHAR'. Worse, location 'DELHI' is mostly field
+# sales (20 SL codes), so matching on it would hide half of head office and
+# add twenty people who have never sat in it. The code prefix is the one
+# thing that is right for all 83.
+ATTENDANCE_HO_CODE_PREFIX = os.getenv('ATTENDANCE_HO_CODE_PREFIX', 'HO')
+ATTENDANCE_HO_LABEL = os.getenv('ATTENDANCE_HO_LABEL', 'Delhi HO')
+
 # Local development sign-in. When on, the portal will register any company
 # address on first use and hand the sign-in code straight back in the response
 # instead of emailing it — because a developer's machine has no SMTP
