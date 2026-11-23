@@ -286,9 +286,15 @@ INSURANCE_PORTAL_NAME  = os.getenv('INSURANCE_PORTAL_NAME', '')
 # insurer is an .env change rather than a release.
 INSURANCE_SSO_EMPLOYEE_ID_FIELD = os.getenv('INSURANCE_SSO_EMPLOYEE_ID_FIELD', 'employee_id')
 
-# Unix seconds ('unix', the default and their documented first choice) or
-# ISO 8601 ('iso'). Both are proven to work against the live endpoint.
-INSURANCE_SSO_TIMESTAMP = os.getenv('INSURANCE_SSO_TIMESTAMP', 'unix')
+# ISO 8601 ('iso', the default) or Unix seconds ('unix').
+#
+# ISO because it is the only form OBSERVED to work. Their section 3 says
+# "Use a Unix timestamp in seconds" and names ISO as merely also accepted,
+# but against the live endpoint on 23-11-2026 an integer timestamp returned
+# a bare HTTP 500 and the same payload with an ISO string reached their own
+# SSO error page. Shipped as 'unix' once on the strength of their document
+# and it 500'd in production within the hour.
+INSURANCE_SSO_TIMESTAMP = os.getenv('INSURANCE_SSO_TIMESTAMP', 'iso')
 
 # Whether the employee code is sent even when an email is present. ON since
 # 23-11-2026: the live variants that reached the insurer's own SSO error page

@@ -105,16 +105,17 @@ class TokenShapeTests(TestCase):
 @override_settings(INSURANCE_SSO_SECRET=SECRET, INSURANCE_SSO_BASE_URL=BASE)
 class PayloadTests(TestCase):
 
-    def test_timestamp_is_unix_seconds_and_is_now(self):
+    def test_timestamp_is_now_and_not_in_the_future(self):
         """Section 7: not in the future, and recent enough to be inside the
         three-hour window. A server reading its clock in UTC while believing
         it is IST would be five and a half hours out, which is the failure
         mode most likely to go unnoticed until the insurer rejects it."""
-        payload = sso.payload_for(_user())
+        with override_settings(INSURANCE_SSO_TIMESTAMP='unix'):
+            stamp = sso.payload_for(_user())['timestamp']
         now = int(timezone.now().timestamp())
-        self.assertIsInstance(payload['timestamp'], int)
-        self.assertLessEqual(payload['timestamp'], now)
-        self.assertGreater(payload['timestamp'], now - 5)
+        self.assertIsInstance(stamp, int)
+        self.assertLessEqual(stamp, now)
+        self.assertGreater(stamp, now - 5)
 
     def test_employee_code_is_sent_when_there_is_no_email(self):
         """Roughly fifty people in the directory have no address at all.
@@ -195,22 +196,24 @@ class LiveFindingsTests(TestCase):
     pin the behaviour that finding settled.
     """
 
-    def test_the_timestamp_is_unix_seconds_by_default(self):
-        """Their section 3 names it first, and it is proven to work."""
-        self.assertIsInstance(sso.payload_for(_user())['timestamp'], int)
-
-    def test_iso_is_available_and_also_proven(self):
-        with override_settings(INSURANCE_SSO_TIMESTAMP='iso'):
-            stamp = sso.payload_for(_user())['timestamp']
+    def test_the_timestamp_is_iso_by_default(self):
+        """The ONLY form observed to work. Their document says Unix seconds;
+        the live endpoint answers an integer with a bare HTTP 500 and an ISO
+        string with its own SSO error page. Shipping the documented form
+        broke production on 23-11-2026."""
+        stamp = sso.payload_for(_user())['timestamp']
         self.assertIsInstance(stamp, str)
         self.assertTrue(stamp.endswith('Z'), stamp)
+
+    def test_unix_is_still_reachable_if_they_ever_fix_it(self):
+        with override_settings(INSURANCE_SSO_TIMESTAMP='unix'):
+            self.assertIsInstance(sso.payload_for(_user())['timestamp'], int)
 
     def test_the_clock_is_sent_as_utc(self):
         """Their 180-minute check passed and the answer came back about the
         email, which their section 8 validates afterwards. So UTC is right
         and nothing needs shifting to IST."""
-        with override_settings(INSURANCE_SSO_TIMESTAMP='iso'):
-            stamp = sso.payload_for(_user())['timestamp']
+        stamp = sso.payload_for(_user())['timestamp']
         parsed = datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt_timezone.utc)
         self.assertLess(abs((timezone.now() - parsed).total_seconds()), 5)
 

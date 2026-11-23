@@ -462,9 +462,14 @@ inside the intranet, that is a second, separate ask of the insurer.
   confirmed, and their parser is far more forgiving about the payload than
   the document suggests — `employee_id`, `employeeId` and `Employee ID` all
   got through, as did both timestamp formats and an absent destination.
-- `INSURANCE_SSO_TIMESTAMP` is `unix` (their documented first choice) or
-  `iso`; both are proven. UTC is correct and needs no IST shift — their
-  180-minute check passed and section 8 validates it *before* the email.
+- `INSURANCE_SSO_TIMESTAMP` is **`iso`**, and that is not a preference.
+  Their section 3 says "Use a Unix timestamp in seconds" and offers ISO as
+  merely also accepted; the live endpoint does the opposite — an integer
+  returns a bare HTTP 500, the identical payload with an ISO string reaches
+  their own SSO error page. **Shipped as `unix` on the strength of the
+  document and it 500'd in production within the hour.** Trust the endpoint.
+  UTC is correct and needs no IST shift — their 180-minute check passes and
+  section 8 validates it *before* the email.
 - `INSURANCE_SSO_ALWAYS_SEND_CODE` is now **on**: the variants that reached
   their error page all carried the code beside the email, so the extra key is
   demonstrably not what their parser objects to. Whether they *read* it is
