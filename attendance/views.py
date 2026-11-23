@@ -84,6 +84,148 @@ def _directory():
     return people
 
 
+def _home_office():
+    """Who counts as head office, as a LIST of code prefixes.
+
+    One prefix was not enough: NA0001-NA0007 appear in the attendance feed,
+    have never been in the portal directory, and were silently dropped from
+    the default view. `codePrefixes` is the list; `codePrefix` is kept
+    alongside it so an older frontend bundle keeps working.
+    """
+    raw = str(getattr(settings, 'ATTENDANCE_HO_CODE_PREFIX', 'HO,NA'))
+    prefixes = [p.strip().upper() for p in raw.split(',') if p.strip()]
+    return {
+        'label':        str(getattr(settings, 'ATTENDANCE_HO_LABEL', 'Delhi HO')),
+        'codePrefixes': prefixes,
+        'codePrefix':   prefixes[0] if prefixes else 'HO',
+    }
+
+
+def _norm_place(value):
+    """Letters only, upper case -- for comparing a holiday's location with
+    an employee's. The two lists are typed by different people: the holiday
+    calendar says 'Delhi', 'UTTAR PRADESH' and 'Utrtar Pradesh' (sic), while
+    the directory says 'DELHI-HO' and 'UTTAR PRADESH'."""
+    return ''.join(ch for ch in str(value or '').upper() if ch.isalpha())
+
+
+# A holiday row whose location is one of these applies to the whole company
+# rather than to one state.
+COMPANY_WIDE = {'COMPANY', 'ALL', 'ALLLOCATION', 'ALLLOCATIONS', 'HEADOFFICE'}
+
+# Places the directory names by city while the holiday calendar names them by
+# state. Containment cannot bridge these -- "ROORKEE" shares no letters with
+# "UTTARAKHAND" -- and Roorkee alone is 88 people in the feed, so without
+# this the plant reads as absent on every state holiday it actually took.
+PLACE_ALIASES = {
+    'ROORKEE': 'UTTARAKHAND',
+    'NOIDA': 'UTTARPRADESH',
+    'GURGAON': 'HARYANA',
+    'GURUGRAM': 'HARYANA',
+    'KOLKATA': 'WESTBENGAL',
+    'HYDERABAD': 'TELANGANA',
+    'BANGALORE': 'KARNATAKA',
+    'BENGALURU': 'KARNATAKA',
+    'CHENNAI': 'TAMILNADU',
+    'MUMBAI': 'MAHARASHTRA',
+    'PUNE': 'MAHARASHTRA',
+    'AHMEDABAD': 'GUJARAT',
+    'JAIPUR': 'RAJASTHAN',
+    'LUCKNOW': 'UTTARPRADESH',
+    'PATNA': 'BIHAR',
+}
+
+
+def _holiday_here(mark, location):
+    """Does this holiday apply to somebody working at `location`?
+
+    **Holidays are state-wise and must not be applied globally.** The 2026
+    calendar has 08-11 across most of India, 11-11 in Assam and West Bengal
+    only, and 09/10-11 across the north. Marking everybody "on holiday"
+    because one state was would hide a day of real absence.
+
+    An employee with no location on record only gets the company-wide ones:
+    guessing a state for them would be inventing the answer.
+    """
+    if not mark:
+        return False
+    places = mark.get('locations') or []
+    if any(_norm_place(p) in COMPANY_WIDE for p in places):
+        return True
+    mine = _norm_place(location)
+    if not mine:
+        return False
+    # A city in the directory, a state in the calendar.
+    mine_alias = PLACE_ALIASES.get(mine, '')
+    for p in places:
+        theirs = _norm_place(p)
+        if not theirs:
+            continue
+        # Containment either way: 'DELHI-HO' holds 'DELHI'.
+        if theirs in mine or mine in theirs:
+            return True
+        if mine_alias and (theirs in mine_alias or mine_alias in theirs):
+            return True
+    return False
+
+
+def _classify(row, marks, today):
+    """Turn a blank row into something a human can act on.
+
+    The feed returns a row for every employee on every date and carries no
+    leave, week-off or holiday column, so a blank row alone says nothing.
+    Between the calendar, the weekday and the date we can still separate the
+    four cases, and only one of them is worth anybody's attention:
+
+      notYet   the date has not happened yet
+      holiday  a company holiday AT THAT PERSON'S LOCATION
+      weekOff  a Sunday
+      absent   a working day with nothing recorded -- the one that matters
+
+    `absent` is deliberately the fallback, and it is NOT proof of absence:
+    an approved leave arrives looking exactly the same, because the feed has
+    no column to tell them apart. Every screen that shows it has to say so.
+    """
+    iso = row.get('date') or ''
+    if not iso:
+        return
+    mark = marks.get(iso)
+    optional = bool(mark and mark.get('optional'))
+
+    # Head office staff with no location on record still sit in Delhi. 29 of
+    # the 83 HO-coded people have a blank location, and without this they
+    # match no state holiday and fall through to "absent" -- 30 false
+    # absences on every Delhi holiday.
+    place = row.get('location') or ''
+    if not place:
+        prefixes = _home_office()['codePrefixes']
+        if any(str(row.get('code', '')).upper().startswith(p) for p in prefixes):
+            place = str(getattr(settings, 'ATTENDANCE_HO_LOCATION', 'Delhi'))
+    here = _holiday_here(mark, place)
+
+    extra = []
+    if here:
+        extra.append('optionalHoliday' if optional else 'holiday')
+    try:
+        if date.fromisoformat(iso).weekday() == 6:
+            # Sunday is the week off; Saturday is a working day here.
+            extra.append('sunday')
+    except ValueError:
+        pass
+
+    if row.get('noRecord'):
+        if iso > today.isoformat():
+            extra.append('notYet')
+        elif here and not optional:
+            extra.append('holiday') if 'holiday' not in extra else None
+        elif 'sunday' in extra:
+            extra.append('weekOff')
+        else:
+            extra.append('absent')
+
+    row['flags'] = row['flags'] + [f for f in extra if f and f not in row['flags']]
+
+
 class MetaView(SessionRequiredAPIView):
     """What this tool can do, before anybody asks it for a day's data."""
 
@@ -110,10 +252,7 @@ class MetaView(SessionRequiredAPIView):
             # Which employees count as head office. Matched on the employee
             # CODE rather than the directory's location column -- see the
             # setting's comment for the counts that forced that.
-            'homeOffice': {
-                'label':      str(getattr(settings, 'ATTENDANCE_HO_LABEL', 'Delhi HO')),
-                'codePrefix': str(getattr(settings, 'ATTENDANCE_HO_CODE_PREFIX', 'HO')),
-            },
+            'homeOffice': _home_office(),
             # Said out loud so no screen draws a column of dashes: this
             # tenant does not compute overtime at all.
             'overtimeTracked': False,
@@ -182,17 +321,10 @@ class RecordsView(SessionRequiredAPIView):
             row['location'] = who['location'] if who else ''
             row['manager'] = who['manager'] if who else ''
             # Somebody in the attendance feed but not in our directory --
-            # a candidate code, or a joiner the last sync has not seen.
+            # a candidate code, a joiner the last sync has not seen, or one
+            # of the NA-coded staff the directory has never held.
             row['offDirectory'] = who is None
-            mark = marks.get(row['date'])
-            if mark:
-                row['flags'] = row['flags'] + (
-                    ['optionalHoliday'] if mark['optional'] else ['holiday'])
-            if row['date']:
-                # Sunday is the company's week-off; Saturday is a working day
-                # here, so only Sunday is marked.
-                if date.fromisoformat(row['date']).weekday() == 6:
-                    row['flags'] = row['flags'] + ['sunday']
+            _classify(row, marks, today)
 
         return Response({
             'from':   start.isoformat(),
@@ -204,9 +336,6 @@ class RecordsView(SessionRequiredAPIView):
             'lateCutoff': str(getattr(settings, 'ATTENDANCE_LATE_CUTOFF', '11:00')),
             'holidays': marks,
             'overtimeTracked': False,
-            'homeOffice': {
-                'label':      str(getattr(settings, 'ATTENDANCE_HO_LABEL', 'Delhi HO')),
-                'codePrefix': str(getattr(settings, 'ATTENDANCE_HO_CODE_PREFIX', 'HO')),
-            },
+            'homeOffice': _home_office(),
             'fetchedAt': timezone.localtime().isoformat(timespec='seconds'),
         })
