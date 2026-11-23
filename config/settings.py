@@ -286,12 +286,16 @@ INSURANCE_PORTAL_NAME  = os.getenv('INSURANCE_PORTAL_NAME', '')
 # insurer is an .env change rather than a release.
 INSURANCE_SSO_EMPLOYEE_ID_FIELD = os.getenv('INSURANCE_SSO_EMPLOYEE_ID_FIELD', 'employee_id')
 
-# Whether the employee code is sent even when an email is present. Off until
-# the insurer confirms that field's exact JSON key -- a guessed key sent to
-# everybody breaks sign-in for everybody if their parser is strict, whereas
-# sent only to the people with no email it risks fifty logins and tells us
-# the answer. See insurance/sso.py's payload_for().
-INSURANCE_SSO_ALWAYS_SEND_CODE = os.getenv('INSURANCE_SSO_ALWAYS_SEND_CODE', '')
+# Unix seconds ('unix', the default and their documented first choice) or
+# ISO 8601 ('iso'). Both are proven to work against the live endpoint.
+INSURANCE_SSO_TIMESTAMP = os.getenv('INSURANCE_SSO_TIMESTAMP', 'unix')
+
+# Whether the employee code is sent even when an email is present. ON since
+# 23-11-2026: the live variants that reached the insurer's own SSO error page
+# all carried it beside the email, so the extra key is demonstrably not what
+# their parser objects to. Set to '' to send it only to the ~50 people who
+# have no email at all. See insurance/sso.py's payload_for().
+INSURANCE_SSO_ALWAYS_SEND_CODE = os.getenv('INSURANCE_SSO_ALWAYS_SEND_CODE', '1')
 
 # ── Pocket HRMS ───────────────────────────────────────────────────────────────
 # The company's hire-to-retire system, and the source of truth for who works

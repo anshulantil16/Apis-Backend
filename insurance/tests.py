@@ -13,6 +13,7 @@ it is testing proves only that the code agrees with itself.
 import base64
 import hashlib
 import json
+from datetime import datetime, timezone as dt_timezone
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from django.test import TestCase, override_settings
@@ -128,12 +129,10 @@ class PayloadTests(TestCase):
                                INSURANCE_SSO_ALWAYS_SEND_CODE='1'):
             self.assertIn('employeeId', sso.payload_for(_user()))
 
-    def test_the_guessed_field_is_held_back_when_an_email_exists(self):
-        """Asked to confirm this field's key the insurer answered a different
-        question, so the name is still a guess. Sending a guessed key to all
-        664 people risks the whole company's sign-in; sending it only to the
-        ~50 with no email risks fifty and tells us the right name."""
-        self.assertNotIn('employee_id', sso.payload_for(_user()))
+    def test_the_guessed_field_can_be_held_back_when_an_email_exists(self):
+        """The cautious mode, kept for the day their parser turns strict."""
+        with override_settings(INSURANCE_SSO_ALWAYS_SEND_CODE=''):
+            self.assertNotIn('employee_id', sso.payload_for(_user()))
 
     def test_the_code_is_still_sent_when_there_is_no_other_identity(self):
         payload = sso.payload_for(_user(email=None, employee_code='NA0007'))
@@ -183,3 +182,39 @@ class EndpointTests(TestCase):
     @override_settings(INSURANCE_SSO_SECRET='', INSURANCE_SSO_BASE_URL='')
     def test_unconfigured_is_reported_not_crashed(self):
         self.assertFalse(sso.configured())
+
+
+@override_settings(INSURANCE_SSO_SECRET=SECRET, INSURANCE_SSO_BASE_URL=BASE)
+class LiveFindingsTests(TestCase):
+    """What the live endpoint actually told us on 23-11-2026.
+
+    Nine variants were sent to their real /sso/login/. The three carrying a
+    different key derivation returned a bare HTTP 500; the six carrying
+    SHA-256 of the secret as issued all reached their own SSO error page,
+    regardless of field names, timestamp format or destination. These tests
+    pin the behaviour that finding settled.
+    """
+
+    def test_the_timestamp_is_unix_seconds_by_default(self):
+        """Their section 3 names it first, and it is proven to work."""
+        self.assertIsInstance(sso.payload_for(_user())['timestamp'], int)
+
+    def test_iso_is_available_and_also_proven(self):
+        with override_settings(INSURANCE_SSO_TIMESTAMP='iso'):
+            stamp = sso.payload_for(_user())['timestamp']
+        self.assertIsInstance(stamp, str)
+        self.assertTrue(stamp.endswith('Z'), stamp)
+
+    def test_the_clock_is_sent_as_utc(self):
+        """Their 180-minute check passed and the answer came back about the
+        email, which their section 8 validates afterwards. So UTC is right
+        and nothing needs shifting to IST."""
+        with override_settings(INSURANCE_SSO_TIMESTAMP='iso'):
+            stamp = sso.payload_for(_user())['timestamp']
+        parsed = datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt_timezone.utc)
+        self.assertLess(abs((timezone.now() - parsed).total_seconds()), 5)
+
+    def test_the_employee_code_now_rides_along_by_default(self):
+        """Proven harmless: the variants that reached their error page all
+        carried it next to the email."""
+        self.assertIn('employee_id', sso.payload_for(_user()))
