@@ -107,12 +107,14 @@ def _key():
 
 
 def _timestamp():
-    """The request time. Unix seconds, their documented default.
+    """The request time. **ISO 8601 UTC, not Unix seconds.**
 
-    Both forms are accepted -- proved against the live endpoint on
-    23-11-2026, an integer timestamp and an ISO 8601 string both decrypt,
-    parse and pass their 180-minute check. The integer is kept because it is
-    what their section 3 names first; INSURANCE_SSO_TIMESTAMP=iso switches.
+    Their section 3 says "Use a Unix timestamp in seconds" and offers ISO as
+    merely also accepted. Observed behaviour against the live endpoint is the
+    reverse: an integer timestamp returns a bare HTTP 500, and the identical
+    payload carrying an ISO string reaches their own SSO error page. Trust
+    the endpoint over the document -- shipping the documented form cost a
+    broken production deploy on 23-11-2026.
 
     That the 180-minute check passes at all settles the timezone question:
     we send UTC, their answer came back about the EMAIL, and their section 8
@@ -120,9 +122,9 @@ def _timestamp():
     shifting to IST.
     """
     now = timezone.now().astimezone(dt_timezone.utc)
-    if str(getattr(settings, 'INSURANCE_SSO_TIMESTAMP', 'unix')).lower() == 'iso':
-        return now.strftime('%Y-%m-%dT%H:%M:%SZ')
-    return int(now.timestamp())
+    if str(getattr(settings, 'INSURANCE_SSO_TIMESTAMP', 'iso')).lower() == 'unix':
+        return int(now.timestamp())
+    return now.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def payload_for(user, destination=''):
