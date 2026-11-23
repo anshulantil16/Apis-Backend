@@ -11,6 +11,7 @@ from django.test import TestCase, override_settings
 from accounts.models import AppKey, PortalUser
 
 from . import hrms_attendance as hrms
+from . import views
 
 CUTOFF = 11 * 60
 
@@ -214,9 +215,11 @@ class HomeOfficeScopeTests(TestCase):
     office and added twenty field-sales people who sit under 'DELHI'.
     """
 
-    def test_the_prefix_and_label_are_configurable(self):
+    def test_the_prefixes_and_label_are_configurable(self):
+        """Comma-separated since 23-11-2026 — one prefix dropped the seven
+        NA-coded staff out of the view entirely."""
         from django.conf import settings
-        self.assertEqual(getattr(settings, 'ATTENDANCE_HO_CODE_PREFIX', ''), 'HO')
+        self.assertEqual(getattr(settings, 'ATTENDANCE_HO_CODE_PREFIX', ''), 'HO,NA')
         self.assertEqual(getattr(settings, 'ATTENDANCE_HO_LABEL', ''), 'Delhi HO')
 
     def test_ho_codes_are_matched_case_insensitively(self):
@@ -226,3 +229,116 @@ class HomeOfficeScopeTests(TestCase):
             self.assertTrue(code.upper().startswith(prefix), code)
         for code in ('SL03839', 'CAND-0011', 'RK0007', 'A001'):
             self.assertFalse(code.upper().startswith(prefix), code)
+
+
+class ClassifyTests(TestCase):
+    """What a blank row MEANS.
+
+    The feed returns a row for every employee on every date and carries no
+    leave, week-off or holiday column. Left unclassified, every one of those
+    blanks looked identical and the screen hid them -- which hid every
+    absence on a screen whose job is to show them.
+    """
+    maxDiff = None
+
+    def _row(self, iso, code='HO0014', location='DELHI-HO', blank=True):
+        return {
+            'code': code, 'date': iso, 'location': location,
+            'noRecord': blank, 'flags': [] if blank else ['present'],
+        }
+
+    DELHI = {'2026-11-09': {'optional': False, 'locations': ['Delhi', 'Haryana']}}
+    BENGAL = {'2026-11-11': {'optional': False, 'locations': ['ASSAM', 'WEST BENGAL']}}
+    TODAY = date(2026, 11, 23)
+
+    def test_a_working_day_with_nothing_on_it_is_absent(self):
+        row = self._row('2026-11-17')          # a Tuesday, no holiday
+        views._classify(row, {}, self.TODAY)
+        self.assertIn('absent', row['flags'])
+
+    def test_sunday_is_a_week_off_not_an_absence(self):
+        row = self._row('2026-11-22')          # a Sunday
+        views._classify(row, {}, self.TODAY)
+        self.assertIn('weekOff', row['flags'])
+        self.assertNotIn('absent', row['flags'])
+
+    def test_a_future_date_is_not_an_absence(self):
+        """The API answers a future range with a full set of blanks. Counting
+        those as absences marks the whole company absent for next month."""
+        row = self._row('2026-12-25')
+        views._classify(row, {}, self.TODAY)
+        self.assertIn('notYet', row['flags'])
+        self.assertNotIn('absent', row['flags'])
+
+    def test_a_holiday_at_their_location_is_not_an_absence(self):
+        row = self._row('2026-11-09')
+        views._classify(row, self.DELHI, self.TODAY)
+        self.assertIn('holiday', row['flags'])
+        self.assertNotIn('absent', row['flags'])
+
+    def test_another_states_holiday_is_still_an_absence(self):
+        """**The calendar is state-wise.** 11-11 is Assam and West Bengal
+        only; marking Delhi off that day would hide a real absence."""
+        row = self._row('2026-11-11', location='DELHI-HO')
+        views._classify(row, self.BENGAL, self.TODAY)
+        self.assertNotIn('holiday', row['flags'])
+        self.assertIn('absent', row['flags'])
+
+    def test_that_states_own_staff_do_get_it(self):
+        row = self._row('2026-11-11', code='SL01234', location='WEST BENGAL')
+        views._classify(row, self.BENGAL, self.TODAY)
+        self.assertIn('holiday', row['flags'])
+
+    def test_a_city_matches_its_state(self):
+        """The directory says ROORKEE, the calendar says UTTARAKHAND. Roorkee
+        alone is 88 people in the feed."""
+        row = self._row('2026-11-09', code='RK0007', location='ROORKEE')
+        views._classify(row, {'2026-11-09': {'optional': False,
+                                             'locations': ['UTTARAKHAND']}}, self.TODAY)
+        self.assertIn('holiday', row['flags'])
+
+    def test_head_office_with_no_location_still_gets_delhi(self):
+        """29 of the 83 HO-coded staff have a blank location. Without the
+        fallback they matched no holiday and produced 30 false absences on
+        every Delhi holiday."""
+        row = self._row('2026-11-09', location='')
+        views._classify(row, self.DELHI, self.TODAY)
+        self.assertIn('holiday', row['flags'])
+        self.assertNotIn('absent', row['flags'])
+
+    def test_a_stranger_with_no_location_is_not_given_one(self):
+        """Guessing a state for somebody who is not head office would be
+        inventing the answer."""
+        row = self._row('2026-11-09', code='SL09999', location='')
+        views._classify(row, self.DELHI, self.TODAY)
+        self.assertNotIn('holiday', row['flags'])
+        self.assertIn('absent', row['flags'])
+
+    def test_a_day_that_was_worked_is_never_called_absent(self):
+        row = self._row('2026-11-17', blank=False)
+        views._classify(row, {}, self.TODAY)
+        self.assertNotIn('absent', row['flags'])
+        self.assertIn('present', row['flags'])
+
+    def test_every_blank_gets_exactly_one_meaning(self):
+        meanings = {'absent', 'weekOff', 'holiday', 'notYet'}
+        for iso in ('2026-11-17', '2026-11-22', '2026-11-09', '2026-12-25'):
+            row = self._row(iso)
+            views._classify(row, self.DELHI, self.TODAY)
+            self.assertEqual(len(meanings & set(row['flags'])), 1,
+                             f'{iso} -> {row["flags"]}')
+
+
+class HomeOfficeScopeListTests(TestCase):
+
+    def test_na_codes_are_inside_the_scope(self):
+        """NA0001-NA0007 are in the HRMS feed, have never been in the portal
+        directory, and a single 'HO' prefix dropped them from the default
+        view entirely."""
+        prefixes = views._home_office()['codePrefixes']
+        self.assertIn('NA', prefixes)
+        self.assertIn('HO', prefixes)
+        for code in ('HO0239', 'NA0007'):
+            self.assertTrue(any(code.startswith(p) for p in prefixes), code)
+        for code in ('SL03839', 'RK0007', 'CAND-0011'):
+            self.assertFalse(any(code.startswith(p) for p in prefixes), code)

@@ -344,8 +344,18 @@ ATTENDANCE_LATE_CUTOFF = os.getenv('ATTENDANCE_LATE_CUTOFF', '11:00')
 # sales (20 SL codes), so matching on it would hide half of head office and
 # add twenty people who have never sat in it. The code prefix is the one
 # thing that is right for all 83.
-ATTENDANCE_HO_CODE_PREFIX = os.getenv('ATTENDANCE_HO_CODE_PREFIX', 'HO')
+# Comma-separated, because one prefix was not enough. HO is head office.
+# NA is the seven NA0001-NA0007 staff who appear in the HRMS attendance feed
+# but have never existed in the portal directory -- they were being dropped
+# from the Delhi HO view entirely and nobody could see them.
+ATTENDANCE_HO_CODE_PREFIX = os.getenv('ATTENDANCE_HO_CODE_PREFIX', 'HO,NA')
 ATTENDANCE_HO_LABEL = os.getenv('ATTENDANCE_HO_LABEL', 'Delhi HO')
+
+# Where head office is, for the holiday calendar. 29 of the 83 HO-coded staff
+# have no location in the directory, and without this they matched no state
+# holiday and fell through to "absent" -- 30 false absences on every Delhi
+# holiday, which is exactly the figure anybody would query first.
+ATTENDANCE_HO_LOCATION = os.getenv('ATTENDANCE_HO_LOCATION', 'Delhi')
 
 # Local development sign-in. When on, the portal will register any company
 # address on first use and hand the sign-in code straight back in the response

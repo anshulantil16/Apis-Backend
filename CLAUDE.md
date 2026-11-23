@@ -545,3 +545,38 @@ twenty people who have never sat in it. If HR ever fills the location column
 in properly this can be revisited; until then the code prefix is the only
 thing right for all 83. One record is coded lower-case `ho`, so the match is
 case-insensitive.
+
+### A blank row has a meaning — `_classify()` works it out
+
+The feed returns a row for every employee on every date with no leave,
+week-off or holiday column, so a blank alone says nothing. Between the
+calendar, the weekday and the date, `views._classify()` separates four cases
+and only one deserves attention:
+
+| flag | when |
+|---|---|
+| `notYet` | the date has not happened |
+| `holiday` | a company holiday **at that person's location** |
+| `weekOff` | a Sunday (Saturday is a working day here) |
+| `absent` | a working day with nothing recorded — **the one that matters** |
+
+**`absent` is not proof of absence.** An approved leave arrives looking
+exactly the same, because the feed has no column to tell them apart. Every
+screen showing it says so, and that line must stay.
+
+**Holidays are state-wise and must never be applied globally.** The 2026
+calendar has 08-11 across most of India, **11-11 in Assam and West Bengal
+only**, and 09/10-11 across the north. `_holiday_here()` matches the
+calendar's location against the employee's, with `PLACE_ALIASES` bridging
+the city/state gap (the directory says `ROORKEE`, the calendar says
+`UTTARAKHAND` — and Roorkee alone is 88 people). A person with no location
+gets only company-wide holidays, **except** head-office staff, who fall back
+to `ATTENDANCE_HO_LOCATION` — 29 of the 83 HO-coded people have a blank
+location and without that fallback they produced 30 false absences on every
+Delhi holiday.
+
+### `ATTENDANCE_HO_CODE_PREFIX` is a LIST
+
+`HO,NA`. One prefix silently dropped `NA0001`–`NA0007`, who are in the HRMS
+attendance feed and have **never** existed in the portal directory — so they
+were invisible in the default view and missing from every count.
