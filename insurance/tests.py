@@ -124,8 +124,26 @@ class PayloadTests(TestCase):
 
     def test_employee_code_field_name_is_settable(self):
         """The guide does not pin this field's spelling down -- see settings."""
-        with override_settings(INSURANCE_SSO_EMPLOYEE_ID_FIELD='employeeId'):
+        with override_settings(INSURANCE_SSO_EMPLOYEE_ID_FIELD='employeeId',
+                               INSURANCE_SSO_ALWAYS_SEND_CODE='1'):
             self.assertIn('employeeId', sso.payload_for(_user()))
+
+    def test_the_guessed_field_is_held_back_when_an_email_exists(self):
+        """Asked to confirm this field's key the insurer answered a different
+        question, so the name is still a guess. Sending a guessed key to all
+        664 people risks the whole company's sign-in; sending it only to the
+        ~50 with no email risks fifty and tells us the right name."""
+        self.assertNotIn('employee_id', sso.payload_for(_user()))
+
+    def test_the_code_is_still_sent_when_there_is_no_other_identity(self):
+        payload = sso.payload_for(_user(email=None, employee_code='NA0007'))
+        self.assertEqual(payload['employee_id'], 'NA0007')
+
+    def test_it_can_be_turned_on_once_the_insurer_confirms(self):
+        with override_settings(INSURANCE_SSO_ALWAYS_SEND_CODE='1'):
+            payload = sso.payload_for(_user())
+            self.assertEqual(payload['employee_id'], 'HO0235')
+            self.assertEqual(payload['email'], 'test.person@apisindia.com')
 
     def test_no_destination_means_no_destination_key(self):
         """Section 3: omitted, the insurer uses their own default page.
