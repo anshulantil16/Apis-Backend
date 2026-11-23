@@ -29,6 +29,7 @@ import base64
 import hashlib
 import json
 import os
+from datetime import timezone as dt_timezone
 from urllib.parse import quote
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -62,6 +63,25 @@ TAG_BYTES = 16   # section 4: the full 128-bit tag, never truncated
 VALIDITY_MINUTES = 180
 
 
+# How to read their responses, learned by trying nine variants against the
+# live endpoint on 23-11-2026:
+#
+#   bare HTTP 500          -> THE KEY IS WRONG. Decryption threw and their
+#                             application did not catch it. Nothing about the
+#                             payload can cause this.
+#   their SSO error page   -> the key is right. The token decrypted, parsed
+#                             and passed their checks; whatever the page says
+#                             is a real answer about the DATA.
+#
+# That distinction is the whole diagnostic. Three wrong-key variants (raw
+# secret as key, SHA of the lowercased secret, SHA of the secret's hex
+# string) all returned 500; six variants carrying SHA-256 of the secret as
+# issued -- differing in field names, timestamp format and destination --
+# all reached the error page. So SHA-256 over the secret exactly as issued
+# is confirmed, and their parser is far more forgiving about the payload
+# than the document suggests.
+
+
 class NotConfigured(RuntimeError):
     """The secret or the base URL is missing, so nothing can be minted."""
 
@@ -86,6 +106,25 @@ def _key():
     return hashlib.sha256(settings.INSURANCE_SSO_SECRET.encode('utf-8')).digest()
 
 
+def _timestamp():
+    """The request time. Unix seconds, their documented default.
+
+    Both forms are accepted -- proved against the live endpoint on
+    23-11-2026, an integer timestamp and an ISO 8601 string both decrypt,
+    parse and pass their 180-minute check. The integer is kept because it is
+    what their section 3 names first; INSURANCE_SSO_TIMESTAMP=iso switches.
+
+    That the 180-minute check passes at all settles the timezone question:
+    we send UTC, their answer came back about the EMAIL, and their section 8
+    validates the timestamp before it looks the email up. Nothing needs
+    shifting to IST.
+    """
+    now = timezone.now().astimezone(dt_timezone.utc)
+    if str(getattr(settings, 'INSURANCE_SSO_TIMESTAMP', 'unix')).lower() == 'iso':
+        return now.strftime('%Y-%m-%dT%H:%M:%SZ')
+    return int(now.timestamp())
+
+
 def payload_for(user, destination=''):
     """The JSON body described in section 3, for one employee.
 
@@ -95,7 +134,7 @@ def payload_for(user, destination=''):
     well, which costs nothing and is the only thing that will work for them.
     """
     body = {
-        'timestamp': int(timezone.now().timestamp()),
+        'timestamp': _timestamp(),
     }
     if user.email:
         body['email'] = user.email
@@ -115,7 +154,11 @@ def payload_for(user, destination=''):
     # the right name.
     #
     # Set INSURANCE_SSO_ALWAYS_SEND_CODE=1 once the insurer confirms the key.
-    always = str(getattr(settings, 'INSURANCE_SSO_ALWAYS_SEND_CODE', '')).lower() in ('1', 'true', 'yes')
+    # Default ON since 23-11-2026: the live test that reached their error page
+    # carried employee_id alongside the email, so the extra key is demonstrably
+    # not what their parser objects to. Whether they READ it is still untested
+    # -- that needs one of the ~50 people who have no email at all.
+    always = str(getattr(settings, 'INSURANCE_SSO_ALWAYS_SEND_CODE', '1')).lower() in ('1', 'true', 'yes')
     if user.employee_code and (always or not user.email):
         body[settings.INSURANCE_SSO_EMPLOYEE_ID_FIELD] = user.employee_code
 

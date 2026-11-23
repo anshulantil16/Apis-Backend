@@ -447,15 +447,28 @@ inside the intranet, that is a second, separate ask of the insurer.
   insurer. Settable so that is an `.env` change, not a release.
 - A launch is written to `ActivityLog`; **the URL is not**, because it carries
   the token and section 10 says not to log it.
-- **The employee code is held back when an email exists**
-  (`INSURANCE_SSO_ALWAYS_SEND_CODE`, off). Asked on 23-11-2026 to confirm
-  that field's exact JSON key, the insurer answered "we need all the
-  parameters in the JSON encrypted format" — which does not say whether it is
-  `employee_id`, `employeeId` or something else. The name is therefore still
-  a guess. Sent to all 664 people a wrong guess breaks sign-in for the whole
-  company if their parser is strict; sent only to the ~50 with no email it
-  risks fifty logins **and that group's first failure tells us the answer**.
-  Turn the setting on once they confirm.
+- **How to read their responses** — the single most useful thing learned,
+  from sending nine variants to the live endpoint on 23-11-2026:
+
+  | Response | Means |
+  |---|---|
+  | bare HTTP 500 | **the key is wrong.** Decryption threw and their app did not catch it. Nothing in the payload causes this. |
+  | their SSO error page | **the key is right.** It decrypted, parsed and passed their checks — whatever the page says is a real answer about the data. |
+
+  Three wrong-key variants (raw secret as key, SHA of the lowercased secret,
+  SHA of the secret's hex string) all returned 500. Six variants carrying
+  SHA-256 of the secret **as issued** all reached the error page, differing
+  in field names, timestamp format and destination. So the key derivation is
+  confirmed, and their parser is far more forgiving about the payload than
+  the document suggests — `employee_id`, `employeeId` and `Employee ID` all
+  got through, as did both timestamp formats and an absent destination.
+- `INSURANCE_SSO_TIMESTAMP` is `unix` (their documented first choice) or
+  `iso`; both are proven. UTC is correct and needs no IST shift — their
+  180-minute check passed and section 8 validates it *before* the email.
+- `INSURANCE_SSO_ALWAYS_SEND_CODE` is now **on**: the variants that reached
+  their error page all carried the code beside the email, so the extra key is
+  demonstrably not what their parser objects to. Whether they *read* it is
+  still untested — that needs one of the ~50 people with no email.
 - `cryptography` is now named in `requirements.txt`. It was already installed
   on both servers as somebody else's transitive dependency — an accident that
   would take this tool down with an ImportError the day pip resolved
