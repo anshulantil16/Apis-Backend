@@ -286,6 +286,13 @@ INSURANCE_PORTAL_NAME  = os.getenv('INSURANCE_PORTAL_NAME', '')
 # insurer is an .env change rather than a release.
 INSURANCE_SSO_EMPLOYEE_ID_FIELD = os.getenv('INSURANCE_SSO_EMPLOYEE_ID_FIELD', 'employee_id')
 
+# Whether the employee code is sent even when an email is present. Off until
+# the insurer confirms that field's exact JSON key -- a guessed key sent to
+# everybody breaks sign-in for everybody if their parser is strict, whereas
+# sent only to the people with no email it risks fifty logins and tells us
+# the answer. See insurance/sso.py's payload_for().
+INSURANCE_SSO_ALWAYS_SEND_CODE = os.getenv('INSURANCE_SSO_ALWAYS_SEND_CODE', '')
+
 # ── Pocket HRMS ───────────────────────────────────────────────────────────────
 # The company's hire-to-retire system, and the source of truth for who works
 # here. The intranet portal syncs its employee directory from this rather than

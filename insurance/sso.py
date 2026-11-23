@@ -99,13 +99,26 @@ def payload_for(user, destination=''):
     }
     if user.email:
         body['email'] = user.email
-    if user.employee_code:
-        # The guide's field table writes this one as prose ("Employee ID")
-        # while writing the others as identifiers, so its real spelling is
-        # not actually pinned down by the document. It is settable rather
-        # than hard-coded so that confirming it with the insurer is an .env
-        # change, not a release.
+
+    # The employee code goes in only when there is no email -- which is the
+    # case section 3 allows it for, and the ~50 directory entries HRMS has no
+    # address for.
+    #
+    # It is held back otherwise ON PURPOSE. Asked to confirm this field's
+    # exact JSON key, the insurer answered "we need all the parameters in the
+    # JSON encrypted format", which does not say whether it is employee_id,
+    # employeeId or something else. So the name is still a guess, and sending
+    # a guessed key to everybody risks breaking sign-in for the whole company
+    # if their parser is strict. Sent only to the people who cannot be
+    # identified any other way, a wrong guess costs those fifty their login
+    # and nobody else's -- and that is the group whose first failure tells us
+    # the right name.
+    #
+    # Set INSURANCE_SSO_ALWAYS_SEND_CODE=1 once the insurer confirms the key.
+    always = str(getattr(settings, 'INSURANCE_SSO_ALWAYS_SEND_CODE', '')).lower() in ('1', 'true', 'yes')
+    if user.employee_code and (always or not user.email):
         body[settings.INSURANCE_SSO_EMPLOYEE_ID_FIELD] = user.employee_code
+
     if destination:
         body['destination'] = destination
     return body

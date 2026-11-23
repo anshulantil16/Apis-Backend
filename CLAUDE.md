@@ -447,6 +447,15 @@ inside the intranet, that is a second, separate ask of the insurer.
   insurer. Settable so that is an `.env` change, not a release.
 - A launch is written to `ActivityLog`; **the URL is not**, because it carries
   the token and section 10 says not to log it.
+- **The employee code is held back when an email exists**
+  (`INSURANCE_SSO_ALWAYS_SEND_CODE`, off). Asked on 23-11-2026 to confirm
+  that field's exact JSON key, the insurer answered "we need all the
+  parameters in the JSON encrypted format" — which does not say whether it is
+  `employee_id`, `employeeId` or something else. The name is therefore still
+  a guess. Sent to all 664 people a wrong guess breaks sign-in for the whole
+  company if their parser is strict; sent only to the ~50 with no email it
+  risks fifty logins **and that group's first failure tells us the answer**.
+  Turn the setting on once they confirm.
 - `cryptography` is now named in `requirements.txt`. It was already installed
   on both servers as somebody else's transitive dependency — an accident that
   would take this tool down with an ImportError the day pip resolved
