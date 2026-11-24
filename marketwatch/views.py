@@ -44,8 +44,16 @@ def product_of(value):
     return value if value in sources.PRODUCTS else DEFAULT_PRODUCT
 
 
-def sizes(product=DEFAULT_PRODUCT):
-    return sources.PRODUCTS[product]['sizes']
+def sizes(product=DEFAULT_PRODUCT, listings=None):
+    """The pack sizes compared. Given that day's listings, only the sizes
+    APIS sells a pack near (SIZE_BAND): a size APIS has no pack at is not a
+    comparison for APIS, so it is left out. If APIS is not listed at all,
+    every size is kept so the page is not empty."""
+    every = sources.PRODUCTS[product]['sizes']
+    if listings is None:
+        return every
+    mine = tuple(s for s in every if _pick(listings, HOME, s))
+    return mine or every
 
 
 def brand_names(product=DEFAULT_PRODUCT):
@@ -144,7 +152,7 @@ def _matrix(listings, product=DEFAULT_PRODUCT):
     to it, marked as such - but only a pack near enough to be the same kind
     of buy (SIZE_BAND); otherwise the cell is empty and says so."""
     rows = []
-    for size in sizes(product):
+    for size in sizes(product, listings):
         cells = {}
         for b in brand_names(product):
             l = _nearest(listings, b, size)
@@ -310,9 +318,6 @@ class DashboardView(SessionRequiredAPIView):
             size = int(q.get('size') or 500)
         except ValueError:
             size = 500
-        if size not in spec['sizes']:
-            size = 500 if 500 in spec['sizes'] else spec['sizes'][0]
-
         live = cache.get(live_key(product))
         note = ''
         if q.get('refresh') == '1' and live:
@@ -339,6 +344,9 @@ class DashboardView(SessionRequiredAPIView):
             else:
                 day = today
 
+        shown = sizes(product, listings)
+        if size not in shown:
+            size = 500 if 500 in shown else shown[0]
         rows, home = _compare(listings, size, product)
         # The days with saved prices, per product: the Download report list
         # offers every product, not only the one on screen.
@@ -352,7 +360,7 @@ class DashboardView(SessionRequiredAPIView):
             'product': product, 'product_label': spec['label'], 'product_noun': spec['noun'],
             'products': [{'key': k, 'label': v['label']} for k, v in sources.PRODUCTS.items()],
             'day': day.isoformat(), 'is_live': day == today, 'fetched_at': fetched_at, 'note': note,
-            'size': size, 'sizes': spec['sizes'], 'days': days, 'days_by_product': days_by_product,
+            'size': size, 'sizes': shown, 'days': days, 'days_by_product': days_by_product,
             'comparison': rows, 'insights': _insights(rows, home, size, product),
             'matrix': _matrix(listings, product), 'all_listings': _all_listings(listings, product),
             'spotlight': _spotlight(rows, home),

@@ -157,7 +157,7 @@ def _verdict(found, size):
 def _changes(listings, prev_listings, product=DEFAULT_PRODUCT):
     """[(brand, size, then, now, change)] per brand and size, both days."""
     out = []
-    for size in sizes(product):
+    for size in sizes(product, listings):
         now, _ = _ranked(listings, size, product)
         then = {r['brand']: r for r in _ranked(prev_listings, size, product)[0]}
         for r in now:
@@ -267,7 +267,7 @@ def build(day, product=DEFAULT_PRODUCT):
 
     # -- 1. at a glance ------------------------------------------------------------
     glance = [_p('<b>Today at a glance</b>', _st('g', 11, True, GREEN)), Spacer(1, 2)]
-    for size in sizes(product):
+    for size in sizes(product, listings):
         found, _ = _ranked(listings, size, product)
         glance.append(_p(f'&bull; <b>Around {_size(size)}:</b> {_verdict(found, size)}', BODY))
     if prev_listings:
@@ -290,7 +290,7 @@ def build(day, product=DEFAULT_PRODUCT):
 
     # -- 2. each size, ranked -----------------------------------------------------
     widths = [12 * mm, 25 * mm, 42 * mm, 18 * mm, 16 * mm, 15 * mm, 11 * mm, 18 * mm, WIDTH - 157 * mm]
-    for n, size in enumerate(sizes(product), 1):
+    for n, size in enumerate(sizes(product, listings), 1):
         found, absent = _ranked(listings, size, product)
         block = [_p(f'{n}. Around {_size(size)} - who offers the best price?', H2), Spacer(1, 1.5 * mm),
                  _p(_verdict(found, size), BODY), Spacer(1, 2 * mm)]
@@ -335,7 +335,7 @@ def build(day, product=DEFAULT_PRODUCT):
         story += [KeepTogether(block), Spacer(1, 5 * mm)]
 
     # -- 3. what changed -----------------------------------------------------------
-    n = len(sizes(product)) + 1
+    n = len(sizes(product, listings)) + 1
     if prev_listings:
         ch = _changes(listings, prev_listings, product)
         block = [_p(f'{n}. What changed since {prev.strftime("%A, %d %B")}', H2), Spacer(1, 1.5 * mm),

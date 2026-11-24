@@ -51,6 +51,7 @@ class AppKey(models.TextChoices):
     POLICIES       = 'policies',       'Policies'
     APIS_WALL      = 'apis-wall',      'APIS Wall'
     CTC            = 'ctc-calculator', 'CTC Calculator'
+    NPD_TRACKER    = 'npd-tracker',    'NPD Master Tracker'
     TALENT_MATCH   = 'talent-match',   'TalentMatch'
     CHAT           = 'chat',           'Messages'
     INSURANCE      = 'insurance',      'Medical Insurance'

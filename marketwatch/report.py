@@ -285,7 +285,7 @@ def _easy_sheet(wb, listings, when, at, product=DEFAULT_PRODUCT):
     headers = ['Position', 'Brand', 'Product', 'Pack', 'You pay', 'MRP', 'You save', 'Off %',
                'Cost of 100 g', 'Extra vs best price', 'In stock', 'Store']
     fmts = {5: RUPEE, 6: RUPEE, 7: RUPEE, 8: PCT, 9: RUPEE2, 10: EXTRA}
-    for size in sizes(product):
+    for size in sizes(product, listings):
         comp, _ = _compare(listings, size, product)
         found = sorted((x for x in comp if not x.get('missing')), key=lambda x: x['per_100g'])
         _section(ws, r, f'Around {_size(size)}')
@@ -365,7 +365,7 @@ def build(day, product=DEFAULT_PRODUCT):
     _title(ws, 'APIS Market Watch — Daily price comparison',
            f'{when} · prices read from Flipkart at {at} IST · every figure is a live listing price')
     rows, fills = [], {}
-    for size in sizes(product):
+    for size in sizes(product, listings):
         comp, home = _compare(listings, size, product)
         found = [r for r in comp if not r.get('missing')]
         rivals = [r for r in found if r['brand'] != HOME]
