@@ -83,9 +83,16 @@ class CtcUploads(TestCase):
         self.assertEqual([regimes.cell(row=i, column=4).value for i in (1, 2, 3)],
                          ['Old Regime', 'New Regime', None])
         # Gross Earnings: Yes/No, but an empty list (and greyed out) for O and W.
-        self.assertIn('IF(OR(INDEX($F:$F,ROW())="O",INDEX($F:$F,ROW())="W",N(INDEX($I:$I,ROW()))<=1200000),'
+        self.assertIn('IF(OR(INDEX($D:$D,ROW())="O",INDEX($D:$D,ROW())="W",N(INDEX($I:$I,ROW()))<=1200000),'
                       'Lists!$C$1,Lists!$B$1:$B$2)', lists)
         self.assertTrue(ws.conditional_formatting)
+        # Designation: a Sales row lists the designations of its Grade.
+        self.assertIn('IF(AND(INDEX($B:$B,ROW())="Sales",COUNTIF(Lists!$G$1:$G$9,INDEX($E:$E,ROW()))>0),'
+                      'OFFSET(Lists!$H$1,MATCH(INDEX($E:$E,ROW()),Lists!$G$1:$G$9,0)-1,0,'
+                      'COUNTIF(Lists!$G$1:$G$9,INDEX($E:$E,ROW())),1),Lists!$C$1)', lists)
+        depts = load_workbook(io.BytesIO(r.content))['Lists']
+        m1 = [depts.cell(row=i, column=8).value for i in range(1, 10) if depts.cell(row=i, column=7).value == 'M1']
+        self.assertEqual(m1, ['Area Sales Manager', 'Key Account Manager', 'Territory Sales Manager'])
 
     def test_gross_earnings_choices_are_stored_and_ignored_for_o_w_and_up_to_12_lakh(self):
         heads = HEADINGS + OPTION_HEADINGS
@@ -163,15 +170,15 @@ class CtcUploads(TestCase):
         self.assertEqual(self._upload(self.alice, _xlsx([row], headings=heads)).status_code, 201)
 
     def test_headings_are_matched_loosely(self):
-        loose = ['candidate name ', 'CATEGORY', 'department', 'designation', 'Grade',
-                 'cadre', 'number of children', 'work_location', 'ctc', 'TAX_REGIME']
+        loose = ['candidate name ', 'CATEGORY', 'department', 'cadre', 'Grade',
+                 'designation', 'number of children', 'work_location', 'ctc', 'TAX_REGIME']
         self.assertEqual(self._upload(self.alice, _xlsx([ROW], headings=loose)).status_code, 201)
 
     def test_a_missing_column_is_named(self):
         keep = HEADINGS[:5]
         r = self._upload(self.alice, _xlsx([ROW[:5]], headings=keep))
         self.assertEqual(r.status_code, 400)
-        for heading in ('Cadre', 'Work Location', 'CTC'):
+        for heading in ('Designation', 'Work Location', 'CTC'):
             self.assertIn(heading, r.json()['error'])
 
     def test_any_bad_row_and_nothing_is_stored(self):
@@ -375,6 +382,28 @@ class Calculator(TestCase):
             self.assertIn('excluded', why)
         # "Deputy General Manager" is not a Deputy Manager.
         self.assertEqual(vpp_percent('Plant', 'C1', 'Ops', 'Deputy General Manager')[0], 8)
+
+    def test_sales_vpp_by_designation_and_grade(self):
+        # P & C's Sales VPP list: the designation and grade decide it,
+        # whatever department was picked.
+        cases = [('M1', 'Area Sales Manager', 10), ('M1', 'Key Account Manager', 12),
+                 ('M2', 'Senior Area Sales Manager', 10), ('M3', 'Deputy Regional Sales Manager', 10),
+                 ('M3', 'Customer Development Manager', 12), ('M4', 'Regional Sales Manager', 12),
+                 ('M5', 'Assistant General Manager', 15), ('C2', 'National Sales Head', 15)]
+        for grade, desig, pct in cases:
+            self.assertEqual(vpp_percent('Sales', grade, 'Both', desig)[0], pct, (grade, desig))
+        self.assertEqual(vpp_percent('Sales', 'M1', 'GT', 'KEY ACCOUNT MANAGER')[0], 12)
+        self.assertIn('Key Account Manager', vpp_percent('Sales', 'M1', 'GT', 'Key Account Manager')[1])
+        # Territory Sales Manager (M1): no VPP, whatever the department.
+        for dept in ('General Trade', 'Alternate Channels', 'Both'):
+            pct, why = vpp_percent('Sales', 'M1', dept, 'TERRITORY SALES MANAGER')
+            self.assertEqual(pct, 0, dept)
+            self.assertIn('Territory Sales Manager', why)
+        # A designation not on the list for its grade: the grade-and-department rule.
+        self.assertEqual(vpp_percent('Sales', 'M1', 'Alternate Channels', 'Sales Executive')[0], 12)
+        self.assertEqual(vpp_percent('Sales', 'M2', 'General Trade', 'Area Sales Manager')[0], 10)
+        # HO and Plant are untouched.
+        self.assertEqual(vpp_percent('HO', 'M1', 'Finance', 'Area Sales Manager')[0], 0)
 
     def test_salaries_right_at_the_esi_limit(self):
         # Where switching Mediclaim to ESI would jump Gross back across the

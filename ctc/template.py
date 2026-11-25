@@ -17,11 +17,11 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from .columns import CHOICES, COLUMNS, DEPARTMENTS, OPTION_COLUMNS, SALES_DEPARTMENTS, TAX_REGIMES
-from .rules import MIN_WAGES, REIMBURSEMENT_MIN_CTC, REIMBURSEMENTS
+from .rules import MIN_WAGES, REIMBURSEMENT_MIN_CTC, REIMBURSEMENTS, SALES_DESIGNATIONS
 
 SHEET_NAME = 'Candidates'
 
-EXAMPLE = ['Rahul Sharma', 'Sales', 'GENERAL TRADE', 'Area Sales Manager', 'M1', 'M', 2,
+EXAMPLE = ['Rahul Sharma', 'Sales', 'GENERAL TRADE', 'M', 'M1', 'Area Sales Manager', 2,
            'Delhi', 1500000, 'New Regime', 'Yes', 'Yes', 'Yes', 'No', 'No', 'Yes', 'No', 'No',
            'No']
 
@@ -87,6 +87,28 @@ def _option_columns(ws, lists):
                         prompt='Pick from the list.\nSales: General Trade, Alternate Channels or Both.')
     dd.add(f'{dept}2:{dept}2001')
     ws.add_data_validation(dd)
+
+    # Designation: on a Sales row, a dropdown of the designations for the
+    # row's Grade (P & C's Sales VPP list, kept on Lists!G:H sorted by grade,
+    # so OFFSET can cut out one grade's block). HO and Plant rows - and a
+    # grade with no Sales designations - get no list and type the title.
+    # Not enforced: the upload falls back to the grade's VPP for a title
+    # that isn't on the list.
+    for r, (g, desig, _d, _p) in enumerate(sorted(SALES_DESIGNATIONS, key=lambda x: x[0]), start=1):
+        lists.cell(row=r, column=7, value=g)
+        lists.cell(row=r, column=8, value=desig)
+    n = len(SALES_DESIGNATIONS)
+    desig_col, grade = _col('designation'), _col('grade')
+    count = f'COUNTIF(Lists!$G$1:$G${n},{own(grade)})'
+    sv = DataValidation(type='list',
+                        formula1=f'IF(AND({own(category)}="Sales",{count}>0),'
+                                 f'OFFSET(Lists!$H$1,MATCH({own(grade)},Lists!$G$1:$G${n},0)-1,0,{count},1),'
+                                 f'Lists!$C$1)',
+                        allow_blank=True, showErrorMessage=False, showInputMessage=True,
+                        promptTitle='Designation',
+                        prompt='Sales: pick the designation for the Grade.\nHO / Plant: type the job title.')
+    sv.add(f'{desig_col}2:{desig_col}2001')
+    ws.add_data_validation(sv)
 
     a, b = get_column_letter(first), get_column_letter(last)
     off = f'OR({own(cadre)}="O",{own(cadre)}="W",{small})'
