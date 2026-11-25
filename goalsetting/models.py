@@ -55,6 +55,17 @@ class EmployeeProfile(models.Model):
     user_type = models.CharField(max_length=20, choices=USER_TYPE_CHOICES, default='employee')
     is_active = models.BooleanField(default=True)
     joined_date = models.DateField(null=True, blank=True)
+
+    # Where this row came from. 'directory' rows are refreshed from
+    # accounts.PortalUser by goalsetting/directory.py; 'manual' rows were
+    # typed in or uploaded here, which is how somebody gets a goal sheet
+    # before HRMS knows about them, and a sync must never touch one.
+    # Default 'manual' so every row that existed before the sync keeps its
+    # hand-entered data.
+    SOURCE_CHOICES = [('manual', 'Added here'), ('directory', 'Company directory')]
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='manual')
+    synced_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

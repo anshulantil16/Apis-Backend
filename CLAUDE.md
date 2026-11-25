@@ -131,6 +131,46 @@ admin endpoints with `require_admin(request)`.
 there — no manager on file, an id naming nobody, someone who has left. Without
 it a sheet lands at a stage nobody can act at and only the admin can free it.
 
+### Its people come from the directory now
+
+`goalsetting/directory.py` fills `EmployeeProfile` from `accounts.PortalUser`,
+the same way Help Desk does, instead of an admin uploading a spreadsheet of
+people the intranet already knows. `POST /api/goalsetting/employees/sync/`,
+admin only. The upload and the template stay, for somebody HRMS has not heard
+of yet.
+
+`EmployeeProfile.source` is `manual` or `directory` and decides what a sync
+may touch. **A manual row is never modified or deactivated** — people are
+added by hand precisely because they are not in HRMS. A directory row whose
+person has left is marked inactive, never deleted: their name is on goal
+sheets, versions and the activity trail.
+
+Measured against the live tenant on 25-11-2026, 697 current employees:
+
+- **The reporting manager is clean.** It arrives as `(CODE)NAME`, so the code
+  is explicit — 634 of 697 carry one and every one of those points at somebody
+  who currently works here. Six people are listed as their own manager; those
+  are blanked, because a sheet that routes to its own owner can never be
+  signed off.
+- **The HOD is a bare NAME with no code**, so it has to be matched back by
+  name. Of 20 distinct HOD names, 9 match exactly one person, 2 are ambiguous
+  (two "Sunil Kumar"s) and 9 match nobody because of how they are spelt —
+  "PANKAJ TRIPATHII", "Rahul Dutta Sharma", "Irshad Alam" and "Ershad Alam"
+  for one man. That covers 562 of the 637 people who have an HOD at all.
+
+**The unmatched names are reported, never guessed.** The matching is exact on
+letters only (`_norm`) — not fuzzy — and the sync returns `unresolved_hods`
+for the admin screen to show. A fuzzy match that is wrong does not look wrong:
+it routes somebody's goals to the wrong head of department, who approves them.
+Fixing the spelling in HRMS fixes every tool at once.
+
+`user_type` is derived, not read: an HOD is somebody named as one, a manager
+is somebody who has reports. **An existing `admin` is never downgraded** — that
+grant was made inside this tool and the directory knows nothing about it.
+
+`zone` and `subzone` are left alone. HRMS has no such column; they only ever
+came from the sheet.
+
 ## The Super Admin's overview
 
 `views/overview.py` is one call answering three questions: what is waiting on

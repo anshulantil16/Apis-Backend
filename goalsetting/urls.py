@@ -27,6 +27,7 @@ urlpatterns = [
     path('hod/<str:hod_id>/team/', views.HODTeamView.as_view()),
 
     # admin
+    path('employees/sync/', views.EmployeeSyncView.as_view()),
     path('employees/import/', views.EmployeeImportView.as_view()),
     path('employees/template/', views.EmployeeTemplateView.as_view()),
     path('employees/', views.EmployeeListView.as_view()),
