@@ -3,7 +3,7 @@ from django.urls import path
 from .views_moderation import AdminActivityView, AdminModerationView
 from .views_tree import TreeProfileDetailView, TreeProfileListView
 from .views import (AdminBulkAccessView, AdminHrmsPreviewView, AdminSessionsView, AdminSyncView,
-                    CelebrationsView, TickerView,
+                    CelebrationsView, TickerView, WishesView, WishesSeenView,
                     AdminUserDetailView, AdminUsersView,
                     LogoutView, MeView, MyProfileView, WelcomedView, RequestOTPView, VerifyOTPView)
 
@@ -18,6 +18,11 @@ urlpatterns = [
 
     # Birthdays, anniversaries and new joiners - any signed-in employee.
     path('portal/celebrations/', CelebrationsView.as_view()),
+    # Wishes on those birthdays and anniversaries. GET is "what arrived for me
+    # today"; POST sends one. Open to every signed-in employee, like the
+    # celebrations feed it hangs off - see WishesView.
+    path('portal/wishes/',       WishesView.as_view()),
+    path('portal/wishes/seen/',  WishesSeenView.as_view()),
 
     # Live BSE share price for the dashboard banner.
     path('portal/ticker/',       TickerView.as_view()),

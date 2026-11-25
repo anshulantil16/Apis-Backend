@@ -647,3 +647,57 @@ Delhi holiday.
 `HO,NA`. One prefix silently dropped `NA0001`–`NA0007`, who are in the HRMS
 attendance feed and have **never** existed in the portal directory — so they
 were invisible in the default view and missing from every count.
+
+## Wishes (`accounts/wishes.py`) — the expiry rule is a WHERE clause
+
+Colleagues can wish each other on a birthday or work anniversary from the
+dashboard cards. The whole of the feature's "it disappears the next day" is
+this: `Wish.occasion_date` holds the day the wish is FOR, and the recipient's
+feed asks for rows dated today. A wish sent five days early is invisible until
+the day; the morning after, the same query returns nothing.
+
+**There is no cleanup job, and do not add one.** Nothing deletes a wish. The
+feed empties itself when the date rolls over, which is the only kind of expiry
+that cannot break by failing to run — a cron that stops would otherwise leave
+last month's greetings on somebody's dashboard.
+
+`occasion_date` is computed on the server from the recipient's own
+`date_of_birth` / `date_of_joining` and **never read from the request**, or a
+caller could file a wish against an arbitrary day and park it on a colleague's
+dashboard permanently.
+
+`next_occurrence()` is shared with `CelebrationsView`, and so is `today_ist()`.
+That is deliberate: if the card said 15 March and this module filed the wish
+for the 16th, every wish sent from that card would land on a day the recipient
+is not celebrating, and nothing would reveal it until somebody's birthday.
+Leave them shared.
+
+Other rules the tests pin down (`accounts/test_wishes.py`):
+
+* **Only people actually celebrating can be wished** — within `WINDOW_DAYS`
+  (31, which covers the furthest row "View all" can show). This is not a
+  general message channel; Messages is, and it keeps a thread.
+* **Never anonymous.** `sender_name` is snapshotted beside the FK and always
+  shown. A free-text box that reaches a colleague stays civil because it has
+  your name on it.
+* **One wish per sender, per person, per occasion, per year**, by unique
+  constraint. Pressing the button again edits the message instead of adding a
+  row.
+* A first anniversary has not happened yet — same rule as the card.
+* Marking seen clears the bell's dot and does **not** hide the wish. It is
+  yours for the rest of your birthday.
+
+**Deliberately not gated behind an `AppKey`.** Wishing a colleague is not a
+tool somebody is granted; it belongs with the celebrations feed it hangs off,
+which has always been open to every signed-in employee. This is the standing
+"new tools go in AppKey + require_app" rule being consciously not applied, not
+forgotten.
+
+The celebrations payload gained `id`, `is_me` and `wished`. It still carries
+**no employee code and no birth year** — it is the one piece of directory data
+every employee sees about everybody, and `id` is a surrogate key, not a
+company identifier.
+
+Known gap: the 45 employees with no email address cannot sign in, so a wish
+sent to one of them is recorded and never read. The button is still offered,
+because they are on the card and the sender's intent is real.
