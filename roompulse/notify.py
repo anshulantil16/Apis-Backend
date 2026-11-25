@@ -44,6 +44,7 @@ from django.conf import settings
 from django.core.mail import EmailMessage
 
 from .people import name_map
+from .timefmt import span
 
 log = logging.getLogger(__name__)
 
@@ -182,7 +183,7 @@ def _booking_facts(b):
         ('Booking',   f'#{b.id}'),
         ('Room',      str(b.room)),
         ('When',      f'{b.date:%a %d %b %Y}, '
-                      f'{b.start_time:%H:%M}-{b.end_time:%H:%M}'),
+                      f'{span(b.start_time, b.end_time)}'),
         ('Purpose',   b.get_purpose_display()),
         ('Attendees', b.attendees),
         ('Raised by', _who(b.requested_by_email, b.requested_by_name)),
