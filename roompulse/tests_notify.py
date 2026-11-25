@@ -244,7 +244,10 @@ class RoomBookings(Base):
         self.assertEqual(addressees(), sorted([EMPLOYEE, ADMIN_STAFF]))
         m = body_for(ADMIN_STAFF)
         self.assertIn('Board Room', m.body)
-        self.assertIn('10:00-11:00', m.body)
+        # The mail reads the 12-hour clock now (roompulse/timefmt.py);
+        # the API itself still carries 24-hour HH:MM.
+        self.assertIn('10:00 AM', m.body)
+        self.assertIn('11:00 AM', m.body)
 
     def test_approving_one_confirms_it_to_whoever_booked(self):
         bid = self.book()
