@@ -685,6 +685,30 @@ class EmployeeImportView(GSView):
                          'errors': errors[:50], 'error_count': len(errors)})
 
 
+class EmployeeSyncView(GSView):
+    """Fill the employee master from the company directory, instead of a sheet.
+
+    The directory (accounts.PortalUser) is synced nightly from Pocket HRMS and
+    already carries everybody's department, designation, reporting manager and
+    HOD. Uploading a spreadsheet of the same people means maintaining a second
+    copy that goes stale the day somebody moves team.
+
+    Rows added by hand here are never touched -- see goalsetting/directory.py,
+    which also explains why some HODs cannot be resolved and are reported back
+    rather than guessed at.
+    """
+
+    def post(self, request):
+        if (err := require_admin(request)):
+            return err
+        from .directory import sync_from_directory
+        try:
+            return Response(sync_from_directory())
+        except Exception as e:  # noqa: BLE001 - the admin needs the reason
+            return Response({'error': f'Could not sync from the directory: {e}'},
+                            status=500)
+
+
 class EmployeeTemplateView(GSView):
     """Hand back a filled-in-shape .xlsx for the admin to complete.
 

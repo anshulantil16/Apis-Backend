@@ -33,11 +33,25 @@ clarify by hand:
     settings.py. This is STAGING; production is api.pockethrms.com, confirmed
     working 09-09-2026.
 
-Not available on APIS's tenant as of 09-09-2026: the reporting-manager link.
-PocketReportingManager, POCKETREPORTINGMANAGERstring, ManagerNames, LeaderId
-and Employeeleaderstring are all empty for all 2,365 employees, so who reports
-to whom cannot be synced yet and still has to be maintained by hand. They are
-requested anyway, so the day HR fills them in this starts working on its own.
+**HR has since filled the reporting line in, and it now works.** It was empty
+for all 2,365 employees on 09-09-2026, written off as "not on this tenant",
+and requested anyway on the grounds that the day somebody filled it in this
+would start working by itself. Re-measured 25-11-2026 over 697 current staff:
+
+  * `PocketReportingManager` is populated for 634 of them, as `(CODE)NAME`,
+    and every one of those 634 codes points at somebody still employed. Six
+    people are listed as their own manager -- the top of the tree, plus some
+    data entry -- so anything building a reporting tree has to drop a
+    self-reference or it loops.
+  * `HOD` is populated for 683, but as a **bare name with no code**, so it
+    cannot be joined on directly and `hod_code` stays empty for everybody.
+    Whoever needs the HOD as a person has to match the name back themselves
+    and cope with the ones that do not match -- see goalsetting/directory.py,
+    which does exactly that and reports its failures rather than guessing.
+  * `LEAVERE` (55) and `LEAVEAPP` (7) are still mostly empty.
+  * `POCKETREPORTINGMANAGERstring` and `Grade`/`GradeString` return nothing on
+    the filtered endpoint; `PocketReportingManager` and `GRADE` are the
+    spellings that carry the values.
 
 Employee master data is read-only to us. Nothing in this module writes back.
 """
