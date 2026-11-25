@@ -9,6 +9,7 @@ from ..models import Room, BookingRequest
 from ..people import apply_names
 from ..handover import transfer as handover, trail_for
 from ..status import expire_stale_bookings, find_conflicts
+from ..timefmt import ampm, span
 from ..assignment import admin_queue_for, raised_by, resolve as resolve_assignee
 from .perms import require_role, actor_role, require_signed_in
 
@@ -155,8 +156,8 @@ class BookingListView(APIView):
             if conflicts:
                 c = conflicts[0]
                 return Response({
-                    'error': f'{room} is already booked {c.start_time.strftime("%H:%M")}–'
-                             f'{c.end_time.strftime("%H:%M")} by {c.requested_by_name} '
+                    'error': f'{room} is already booked {span(c.start_time, c.end_time)}'
+                             f' by {c.requested_by_name} '
                              f'for "{c.get_purpose_display()}".',
                     'conflict': _brief(c),
                 }, status=409)
@@ -242,8 +243,7 @@ class BookingActionView(APIView):
                     c = conflicts[0]
                     return Response({
                         'error': f'Cannot approve — conflicts with an existing booking by '
-                                 f'{c.requested_by_name} ({c.start_time.strftime("%H:%M")}–'
-                                 f'{c.end_time.strftime("%H:%M")}).',
+                                 f'{c.requested_by_name} ({span(c.start_time, c.end_time)}).',
                         'conflict': _brief(c),
                     }, status=409)
                 booking.status = 'approved'
@@ -309,10 +309,10 @@ class BookingActionView(APIView):
             booking.save(update_fields=['released_at', 'released_by', 'release_reason', 'updated_at'])
             notify.moved('booking', booking, 'released', email,
                          booking.release_reason,
-                         extra=[('Freed at', now.strftime('%H:%M'))])
+                         extra=[('Freed at', ampm(now))])
             return Response({
                 'message': (f'{booking.room} is free. The meeting by '
-                            f'{booking.requested_by_name} was ended at {now.strftime("%H:%M")}.'),
+                            f'{booking.requested_by_name} was ended at {ampm(now)}.'),
                 'booking': _brief(booking),
             })
 

@@ -17,6 +17,7 @@ from ..assignment import desk_of
 from ..models import BookingRequest, ResourceRequest, SupportTicket
 from ..people import name_map
 from ..status import expire_stale_bookings
+from ..timefmt import span
 from .perms import actor_role, require_role
 
 OPEN_TICKET = ('pending', 'approved', 'in_progress')
@@ -107,7 +108,7 @@ class MyTasksView(APIView):
                 'id': b.id, 'kind': 'room',
                 'mine': bool(b.assigned_to_email),
                 'what': f'{b.room} — {b.date:%d %b}, '
-                        f'{b.start_time:%H:%M}–{b.end_time:%H:%M}',
+                        f'{span(b.start_time, b.end_time)}',
                 'detail': b.get_purpose_display(),
                 'from_email': b.requested_by_email,
                 'from': b.requested_by_name or b.requested_by_email,

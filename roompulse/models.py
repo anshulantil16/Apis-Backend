@@ -56,6 +56,7 @@ class BookingRequest(models.Model):
         ('board_meeting',    'Board Meeting'),
         ('presentation',     'Presentation'),
         ('vendor_meeting',   'Vendor Meeting'),
+        ('erp_meeting',      'ERP Meeting'),
         ('other',            'Other'),
     ]
 

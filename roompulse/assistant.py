@@ -37,6 +37,7 @@ from rest_framework.views import APIView
 from .assignment import raised_by, staff_for
 from .models import BookingRequest, ResourceRequest, SupportTicket
 from .people import name_for, name_map
+from .timefmt import ampm
 from .views.auth import _SESSION_PREFIX, RoomPulseLoginView
 from .views.resource_requests import ResourceRequestListView
 from .views.tickets import TicketListView
@@ -169,7 +170,7 @@ class AssistantMyRequestsView(APIView):
         for b in (raised_by(BookingRequest.objects.select_related('room'), email)
                   .order_by('-created_at')[:self.LIMIT]):
             rows.append({'kind': 'Room booking', 'id': b.id,
-                         'title': f'{b.room.name} · {b.date:%d %b} {b.start_time:%H:%M}',
+                         'title': f'{b.room.name} · {b.date:%d %b} {ampm(b.start_time)}',
                          'status': b.status, 'status_label': b.get_status_display(),
                          'assigned_to': b.assigned_to_name, 'created': b.created_at.isoformat()})
         rows.sort(key=lambda x: x['created'], reverse=True)
