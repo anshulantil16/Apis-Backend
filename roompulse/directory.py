@@ -18,15 +18,29 @@ from accounts.models import PortalUser
 from .models import AdminUser, Employee
 
 
-def sync_from_directory():
+def sync_from_directory(only_active=True):
     """Refresh every directory-sourced row from PortalUser.
+
+    **Only people who currently work here are imported**, which is what TADA
+    has always done (`tada.sync.sync_from_master`). The directory keeps a row
+    for somebody who has left -- marked inactive, because their name is on
+    tickets they raised -- and copying those in gave every people-picker and
+    every count a tail of ex-employees nobody can assign anything to.
+
+    Someone who leaves is still deactivated here rather than deleted: they
+    simply stop arriving in the sync, so the pass at the end no longer sees
+    them and marks the row inactive, which is the same outcome by a shorter
+    route.
 
     -> {'created', 'updated', 'deactivated', 'skipped_no_email'}
     """
     seen = set()
     created = updated = skipped = 0
 
-    people = PortalUser.objects.all().only(
+    people = PortalUser.objects.all()
+    if only_active:
+        people = people.filter(is_active=True)
+    people = people.only(
         'employee_code', 'name', 'email', 'department', 'designation',
         'location', 'is_active')
 

@@ -177,6 +177,54 @@ class HandEnteredRows(TestCase):
         self.assertEqual(row.source, 'directory')
 
 
+class OnlyPeopleWhoWorkHere(TestCase):
+    """Ex-employees are in the directory and must not reach the goal master.
+
+    They are kept in accounts.PortalUser, marked inactive, because their name
+    is on things they did. Copying them in gave the People tab a tail of
+    people who can never fill in a sheet. TADA has always filtered them out;
+    this does now too.
+    """
+
+    def setUp(self):
+        person('HO0001', 'Arun Mishra')
+        person('HO0002', 'Shakil Ahmed', reporting_manager_code='HO0001',
+               hod_name='Arun Mishra')
+        self.gone = person('HO0003', 'Someone Who Left',
+                           reporting_manager_code='HO0001',
+                           hod_name='Arun Mishra', is_active=False)
+
+    def test_somebody_who_has_left_is_not_imported(self):
+        r = sync_from_directory()
+        self.assertEqual(r['total'], 2)
+        self.assertFalse(
+            EmployeeProfile.objects.filter(employee_id='HO0003').exists())
+
+    def test_somebody_who_leaves_later_is_deactivated_not_deleted(self):
+        PortalUser.objects.filter(employee_code='HO0003').update(is_active=True)
+        sync_from_directory()
+        self.assertTrue(EmployeeProfile.objects.get(employee_id='HO0003').is_active)
+
+        PortalUser.objects.filter(employee_code='HO0003').update(is_active=False)
+        r = sync_from_directory()
+        self.assertEqual(r['deactivated'], 1)
+        row = EmployeeProfile.objects.get(employee_id='HO0003')
+        self.assertFalse(row.is_active)
+
+    def test_a_manager_who_has_left_does_not_stay_on_their_reports(self):
+        # HO0001 leaves. HO0002 reported to them, and a sheet routed to
+        # somebody who does not work here waits forever.
+        PortalUser.objects.filter(employee_code='HO0001').update(is_active=False)
+        sync_from_directory()
+        row = EmployeeProfile.objects.get(employee_id='HO0002')
+        self.assertEqual(row.reporting_manager_id, '')
+        self.assertEqual(row.hod_id, '')
+
+    def test_it_can_still_be_asked_for_everybody(self):
+        r = sync_from_directory(only_active=False)
+        self.assertEqual(r['total'], 3)
+
+
 class Endpoint(TestCase):
     def setUp(self):
         person('HO0001', 'Arun Mishra')

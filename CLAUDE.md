@@ -182,6 +182,33 @@ five tabs, which is fine for doing a job and useless for noticing one.
 Anything actionable carries the number that makes it actionable: a queue's
 depth means little, `oldest_days` and `stale` are what someone acts on.
 
+## Only people who currently work here are synced
+
+`accounts.PortalUser` is itself active-only at source: `sync_employees` asks
+HRMS with `EmpStatus: Active` (`ACTIVE_ONLY`), which is also what stops a
+rehired person arriving twice under two codes. People who then leave are kept
+and marked `is_active=False`, never deleted, because their name is on tickets,
+goal sheets and work done for them.
+
+**Every tool that copies the directory into its own master takes active people
+only.** `tada.sync.sync_from_master`, `roompulse.directory.sync_from_directory`
+and `goalsetting.directory.sync_from_directory` all default
+`only_active=True`. Copying leavers in gave every people-picker and every
+count a tail of ex-employees nobody can assign anything to.
+
+Somebody who leaves is still deactivated rather than deleted: they stop
+arriving in the sync, so the pass at the end of each one no longer sees them
+and marks the local row inactive — the same outcome by a shorter route.
+
+**Attendance is the deliberate exception.** `attendance.views._directory()`
+reads `PortalUser.objects.all()`, because it only joins department, location
+and manager onto rows that already exist in the HRMS attendance feed, and a
+person who left on the 10th still has real punches on the 1st. Checked on
+25-11-2026: the attendance feed returns no leavers anyway — 696 rows for one
+day against 697 current staff — so there is nothing to filter. What it does
+carry is a couple of `CAND-` codes and one `TEST`, which are marked
+`offDirectory` and are not worth excluding by name.
+
 ## The employee master comes from the directory
 
 `accounts.PortalUser` is the company directory, synced from HRMS. AdminPulse
