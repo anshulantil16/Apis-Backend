@@ -88,13 +88,29 @@ def _user_type(code, reports_to, heads):
     return 'employee'
 
 
-def sync_from_directory():
+def sync_from_directory(only_active=True):
     """Refresh every directory-sourced profile from ``accounts.PortalUser``.
+
+    **Only people who currently work here are imported**, the same rule TADA
+    has always applied (`tada.sync.sync_from_master`). The directory keeps a
+    row for somebody who has left, marked inactive; importing those gave the
+    People tab a tail of ex-employees who can never fill in a goal sheet.
+
+    It also means a manager or an HOD who has left no longer resolves, so
+    their reports end up with that field empty and visible to the admin --
+    which is the honest answer. A goal sheet routed to somebody who does not
+    work here waits forever and only the admin can free it.
+
+    Somebody who leaves is still deactivated rather than deleted: they stop
+    arriving in the sync, and the pass at the end marks the row inactive.
 
     -> a dict the admin screen reports verbatim, including the HOD names that
        could not be placed.
     """
-    people = list(PortalUser.objects.all().only(
+    rows = PortalUser.objects.all()
+    if only_active:
+        rows = rows.filter(is_active=True)
+    people = list(rows.only(
         'employee_code', 'name', 'email', 'designation', 'department',
         'reporting_manager_code', 'hod_code', 'hod_name', 'is_active'))
     people = [p for p in people if (p.employee_code or '').strip()]

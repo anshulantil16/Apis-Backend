@@ -693,9 +693,15 @@ class TheEmployeeMaster(HelpdeskBase):
                                           **auth(EMPLOYEE)).status_code, 403)
 
     def test_it_brings_people_in(self):
+        # Two of the four: one has no email to be identified by, and one has
+        # left the company. Only people who work here are imported.
         d = self.sync().json()
-        self.assertEqual(d['created'], 3)
+        self.assertEqual(d['created'], 2)
         self.assertEqual(d['skipped_no_email'], 1)
+
+    def test_somebody_who_has_already_left_is_never_imported(self):
+        self.sync()
+        self.assertFalse(Employee.objects.filter(email='gone@gmail.com').exists())
 
     def test_somebody_with_no_email_is_skipped_not_invented(self):
         """Identity here IS the email address — a row without one could never
@@ -705,14 +711,23 @@ class TheEmployeeMaster(HelpdeskBase):
 
     def test_a_leaver_is_marked_not_deleted(self):
         """Their name is on tickets they raised; a directory that forgets them
-        makes that history unreadable."""
+        makes that history unreadable.
+
+        They are here because they were here while they worked here -- the
+        sync stops returning them, it does not remove them.
+        """
+        PortalUser.objects.filter(employee_code='E003').update(is_active=True)
+        self.sync()
+        self.assertTrue(Employee.objects.get(email='gone@gmail.com').is_active)
+
+        PortalUser.objects.filter(employee_code='E003').update(is_active=False)
         self.sync()
         self.assertFalse(Employee.objects.get(email='gone@gmail.com').is_active)
 
     def test_running_it_twice_duplicates_nobody(self):
         self.sync()
         self.assertEqual(self.sync().json()['created'], 0)
-        self.assertEqual(Employee.objects.count(), 3)
+        self.assertEqual(Employee.objects.count(), 2)
 
     def test_somebody_added_by_hand_survives_a_sync(self):
         """They are here BECAUSE they are not in HRMS, so a sync can never
