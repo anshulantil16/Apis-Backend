@@ -98,6 +98,24 @@ VPP_SALES = [
     ('M5', 'Alternate Channels',  15),
 ]
 
+# Sales: each designation, its grade, its department and its VPP % (P & C's
+# VPP list for the Sales category). On the template, a Sales row's
+# Designation dropdown shows the designations of the Grade picked, and the
+# VPP comes from the row here that matches both. A designation not listed
+# for its grade falls back to the grade-and-department table above.
+SALES_DESIGNATIONS = [
+    # grade, designation,                     department,           %
+    ('M1', 'Area Sales Manager',              'General Trade',      10),
+    ('M1', 'Key Account Manager',             'Alternate Channels', 12),
+    ('M1', 'Territory Sales Manager',         'Both',                0),   # no VPP
+    ('M2', 'Senior Area Sales Manager',       'General Trade',      10),
+    ('M3', 'Deputy Regional Sales Manager',   'General Trade',      10),
+    ('M3', 'Customer Development Manager',    'Alternate Channels', 12),
+    ('M4', 'Regional Sales Manager',          'Both',               12),
+    ('M5', 'Assistant General Manager',       'Alternate Channels', 15),
+    ('C2', 'National Sales Head',             'General Trade',      15),
+]
+
 # Corporate (HO) and Factory (Plant): 8%, M3 grade and above, except Deputy
 # and Assistant Managers (Variable Pay Policy Ver. 1.0.0 2024).
 VPP_NON_SALES = 8

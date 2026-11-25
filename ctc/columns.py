@@ -10,10 +10,12 @@ COLUMNS = [
     ('Department',     'department',     24, False,
      'Sales: pick GENERAL TRADE, ALTERNATE CHANNELS or BOTH from the list - with the '
      'Grade it sets the Variable Pay %.\n\nHO and Plant: pick the department from the list, e.g. Finance & Accounts.'),
-    ('Designation',    'designation',    30, False,
-     'Job title being offered, e.g. Area Sales Manager.'),
-    ('Grade',          'grade',          10, True,  'e.g. M1, M3, O5, C2. Required.'),
     ('Cadre',          'cadre',          10, True,  'D, C, M, O or W. Required.'),
+    ('Grade',          'grade',          10, True,  'e.g. M1, M3, O5, C2. Required.'),
+    ('Designation',    'designation',    32, False,
+     'Job title being offered, e.g. Area Sales Manager.\n\nSales: pick from the list - it shows '
+     'the designations for the Grade picked, and with the Grade sets the Variable Pay %.\n\n'
+     'HO and Plant: type the job title.'),
     ('Number of Children', 'number_of_children', 12, False,
      'Optional - 0, 1 or 2, picked from the list. Leave blank for none.\n\nChild Education Allowance is '
      'Rs 3,000 a month per child, for up to 2 children (cadres D, C, M).'),

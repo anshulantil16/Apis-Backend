@@ -3,4 +3,7 @@ __pycache__/
 *.pyc
 db.sqlite3
 .env
+# ...and every copy of it. A .env.bak made during a deploy holds the same
+# secrets and was not covered by the line above.
+.env.*
 media/

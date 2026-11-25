@@ -149,6 +149,13 @@ def vpp_percent(category, grade, department, designation, date_of_joining=None):
     if category not in ('Sales', 'HO', 'Plant'):
         return 0, ''
     if category == 'Sales':
+        # The designation and grade, as on P & C's Sales VPP list.
+        words = _words(designation)
+        for r_grade, r_desig, _dept, pct in rules.SALES_DESIGNATIONS:
+            if r_grade == g and _words(r_desig) == words:
+                if not pct:
+                    return 0, f'No VPP: {r_desig} (grade {g}) has no Variable Pay in Sales.'
+                return pct, f'Sales · {r_desig} · grade {g}'
         if rank is not None and rank >= _grade_rank(rules.VPP_SALES_SENIOR_FROM_GRADE):
             return rules.VPP_SALES_SENIOR, f'Sales · grade {rules.VPP_SALES_SENIOR_FROM_GRADE} and above'
         dept = _sales_department(department)
