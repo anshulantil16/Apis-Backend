@@ -674,9 +674,16 @@ Leave them shared.
 
 Other rules the tests pin down (`accounts/test_wishes.py`):
 
-* **Only people actually celebrating can be wished** — within `WINDOW_DAYS`
-  (31, which covers the furthest row "View all" can show). This is not a
-  general message channel; Messages is, and it keeps a thread.
+* **Only people whose day is TODAY can be wished**, and that is a hard server
+  check, not a frontend convenience: `occasion_date_for()` returns None unless
+  the next occurrence of their date *is* today. The cards list the week ahead
+  and "View all" the rest of the month, so most rows on screen are not
+  wishable — the button is hidden on those (`is_today` on the payload) and
+  this check is what makes hiding it more than a decoration. It was built with
+  a 31-day window and wishes queued for the day; that was wrong, because a
+  wish is something you send on the day, the way you would say it across the
+  office. This is also not a general message channel; Messages is, and it
+  keeps a thread.
 * **Never anonymous.** `sender_name` is snapshotted beside the FK and always
   shown. A free-text box that reaches a colleague stays civil because it has
   your name on it.

@@ -12,11 +12,12 @@ The recipient's feed asks for rows dated today, so a wish sent early waits and
 a wish from yesterday is already gone. No expiry task exists, because the one
 that cannot fail is the one that does not have to run.
 
-**You may only wish somebody who is actually celebrating.** Not a general
-message channel wearing a party hat: the recipient must have a birthday or an
-anniversary within ``WINDOW_DAYS``, and the server checks it on every send.
-Messages between colleagues for any other reason belong in Messages, which is
-built for it and keeps a thread.
+**You may only wish somebody whose day it is TODAY.** Not a general message
+channel wearing a party hat, and not a scheduler either: the recipient's
+birthday or anniversary must fall on today's date, and the server checks it on
+every send. A wish is something you send on the day, the way you would say it
+across the office. Messages between colleagues for any other reason belong in
+Messages, which is built for it and keeps a thread.
 
 ``next_occurrence`` is shared with ``accounts.views.CelebrationsView`` on
 purpose. If the card said 5 January and this module computed 6 January, every
@@ -32,10 +33,6 @@ from config.tz import IST
 
 from .models import PortalUser, Wish
 
-# How far ahead you may wish somebody. The card shows a week; "View all" runs
-# to the end of the month, which is at most 30 days out, so 31 covers every
-# row either of them can show. A row you can see is a row you can wish.
-WINDOW_DAYS = 31
 
 # A ceiling on one person's sends in a day. The real limit is the number of
 # people celebrating -- a dozen on a normal day -- so this never touches
@@ -80,19 +77,21 @@ def occasion_field(occasion):
 
 
 def occasion_date_for(person, occasion, today):
-    """The day this person's next birthday/anniversary falls on, or None.
+    """``today`` if this person is celebrating it today, otherwise None.
 
-    None means there is nothing to wish them for: the date is missing from the
-    directory, it is further off than ``WINDOW_DAYS``, or -- for an
-    anniversary -- they have not completed a year yet, which is the same rule
-    the celebrations card applies ("1 year" is the point of an anniversary, and
-    a first one has not happened).
+    None means there is nothing to wish them for right now: the date is missing
+    from the directory, their day is not today, or -- for an anniversary --
+    they have not completed a year yet, which is the same rule the celebrations
+    card applies ("1 year" is the point of an anniversary, and a first one has
+    not happened).
+
+    The cards list the week, and the month behind "View all", so most rows on
+    screen are NOT wishable. The button is hidden on those rows; this is the
+    check that makes hiding it more than a decoration.
     """
     original = getattr(person, occasion_field(occasion), None)
     nxt = next_occurrence(original, today)
-    if not nxt:
-        return None
-    if (nxt - today).days > WINDOW_DAYS:
+    if nxt != today:
         return None
     if occasion == Wish.Occasion.ANNIVERSARY and nxt.year - original.year < 1:
         return None
@@ -122,7 +121,7 @@ def send(sender, recipient_id, occasion, message, today=None):
     occasion_date = occasion_date_for(recipient, occasion, today)
     if not occasion_date:
         label = 'birthday' if occasion == Wish.Occasion.BIRTHDAY else 'work anniversary'
-        return None, (f'{recipient.name} has no {label} coming up to wish them for.', 400)
+        return None, (f'It is not {recipient.name}’s {label} today.', 400)
 
     message = ' '.join((message or '').split())[:280]
 
@@ -150,10 +149,10 @@ def send(sender, recipient_id, occasion, message, today=None):
         'to': recipient.name,
         'occasion': occasion,
         'wish_id': wish.id,
-        # So the sender is told the truth about when it arrives rather than
-        # being left to assume it has already landed.
+        # Always today now, and kept in the payload because the sender is
+        # entitled to be told when it lands rather than left to assume.
         'arrives_on': occasion_date.strftime('%d %b').lstrip('0'),
-        'arrives_today': occasion_date == today,
+        'arrives_today': True,
     }, None
 
 
@@ -202,7 +201,7 @@ def my_occasions(user, today=None):
 
 
 def wished_by(user, today=None):
-    """``{(recipient_id, occasion)}`` this person has already wished.
+    """``{(recipient_id, occasion)}`` this person has already wished today.
 
     Lets each row on the cards show "Wished" instead of offering the button a
     second time -- the alternative being that you tap, nothing visibly changes,
@@ -211,6 +210,6 @@ def wished_by(user, today=None):
     today = today or today_ist()
     return {
         (r_id, occ) for r_id, occ in
-        Wish.objects.filter(sender=user, occasion_date__gte=today)
+        Wish.objects.filter(sender=user, occasion_date=today)
                     .values_list('recipient_id', 'occasion')
     }

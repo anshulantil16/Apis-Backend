@@ -48,8 +48,9 @@ def frozen(d=TODAY):
 class Sending(TestCase):
     def setUp(self):
         self.me = person('HO0001', 'Arun Mishra', dob=date(1990, 6, 1))
-        # Birthday 5 days away from TODAY.
-        self.her = person('HO0002', 'Priya Shah', dob=date(1992, 3, 15))
+        # Her birthday is TODAY. It has to be: a wish can only be sent on the
+        # day, so every ordinary send test needs a recipient celebrating now.
+        self.her = person('HO0002', 'Priya Shah', dob=date(1992, 3, 10))
         self.auth = auth(self.me)
 
     def post(self, **body):
@@ -61,15 +62,16 @@ class Sending(TestCase):
         r = self.post(to=self.her.id, occasion='birthday', message='Have a great one')
         self.assertEqual(r.status_code, 201)
         w = Wish.objects.get()
-        # Not the day it was typed on -- the day it is FOR.
-        self.assertEqual(w.occasion_date, date(2027, 3, 15))
+        # The day it is FOR, computed on the server from her own record and
+        # never taken from the request.
+        self.assertEqual(w.occasion_date, TODAY)
         self.assertEqual(w.message, 'Have a great one')
         self.assertEqual(w.recipient_id, self.her.id)
 
-    def test_the_sender_is_told_when_it_will_arrive(self):
+    def test_the_sender_is_told_it_lands_today(self):
         r = self.post(to=self.her.id, occasion='birthday')
-        self.assertEqual(r.json()['arrives_on'], '15 Mar')
-        self.assertFalse(r.json()['arrives_today'])
+        self.assertEqual(r.json()['arrives_on'], '10 Mar')
+        self.assertTrue(r.json()['arrives_today'])
 
     def test_a_wish_with_no_message_still_sends(self):
         self.assertEqual(self.post(to=self.her.id, occasion='birthday').status_code, 201)
@@ -129,7 +131,7 @@ class OnlyPeopleActuallyCelebrating(TestCase):
             return self.client.post(WISHES, {'to': target.id, 'occasion': occasion},
                                     content_type='application/json', **self.auth)
 
-    def test_somebody_with_no_birthday_in_the_window_cannot_be_wished(self):
+    def test_somebody_whose_birthday_is_months_away_cannot_be_wished(self):
         far = person('HO0003', 'Far Away', dob=date(1990, 9, 20))   # ~6 months off
         self.assertEqual(self.post(far).status_code, 400)
         self.assertEqual(Wish.objects.count(), 0)
@@ -139,31 +141,44 @@ class OnlyPeopleActuallyCelebrating(TestCase):
         self.assertEqual(self.post(blank).status_code, 400)
 
     def test_a_leaver_cannot_be_wished(self):
-        gone = person('HO0005', 'Someone Who Left', dob=date(1990, 3, 15), is_active=False)
+        gone = person('HO0005', 'Someone Who Left', dob=date(1990, 3, 10), is_active=False)
         self.assertEqual(self.post(gone).status_code, 404)
         self.assertEqual(Wish.objects.count(), 0)
 
-    def test_the_whole_window_is_wishable(self):
-        # 31 days covers every row "View all" can show, which runs to month end.
-        edge = person('HO0006', 'Month End', dob=date(1990, 4, 10))   # exactly 31 days
-        self.assertEqual(self.post(edge).status_code, 201)
-        past = person('HO0007', 'Just Past', dob=date(1990, 4, 11))   # 32 days
-        self.assertEqual(self.post(past).status_code, 400)
+    def test_only_today_is_wishable(self):
+        """The rule the whole feature turns on.
+
+        The cards show the week ahead and "View all" the rest of the month, so
+        most rows on screen are not wishable. The button is hidden on those;
+        this is the check that makes hiding it more than a decoration.
+        """
+        today = person('HO0006', 'Today', dob=date(1990, 3, 10))
+        self.assertEqual(self.post(today).status_code, 201)
+
+        tomorrow = person('HO0007', 'Tomorrow', dob=date(1990, 3, 11))
+        self.assertEqual(self.post(tomorrow).status_code, 400)
+
+        # Yesterday is not "a day late", it is eleven months early.
+        yesterday = person('HO0008', 'Yesterday', dob=date(1990, 3, 9))
+        self.assertEqual(self.post(yesterday).status_code, 400)
+
+        self.assertEqual(Wish.objects.count(), 1)
 
     def test_a_first_anniversary_has_not_happened_yet(self):
-        # Joined 3 months ago. The date comes round in March next year, not now.
-        new = person('HO0008', 'New Joiner', doj=date(2026, 12, 20))
+        # Joined today. The date matches and it is still not an anniversary --
+        # "1 year" is the point of one, and this is day zero.
+        new = person('HO0009', 'Joined Today', doj=date(2027, 3, 10))
         self.assertEqual(self.post(new, 'anniversary').status_code, 400)
 
     def test_a_real_anniversary_can_be_wished(self):
-        old = person('HO0009', 'Five Years', doj=date(2022, 3, 15))
+        old = person('HO0010', 'Five Years', doj=date(2022, 3, 10))
         self.assertEqual(self.post(old, 'anniversary').status_code, 201)
-        self.assertEqual(Wish.objects.get().occasion_date, date(2027, 3, 15))
+        self.assertEqual(Wish.objects.get().occasion_date, TODAY)
 
     def test_a_birthday_wish_cannot_be_sent_as_an_anniversary(self):
         # Date of birth filled in, date of joining empty: there is no
         # anniversary to address, whatever the caller asks for.
-        her = person('HO0010', 'Priya Shah', dob=date(1992, 3, 15))
+        her = person('HO0011', 'Priya Shah', dob=date(1992, 3, 10))
         self.assertEqual(self.post(her, 'anniversary').status_code, 400)
 
 
@@ -171,7 +186,7 @@ class ItArrivesOnTheDay(TestCase):
     """The expiry rule, which is the whole point: the feed asks for today."""
 
     def setUp(self):
-        self.her = person('HO0002', 'Priya Shah', dob=date(1992, 3, 15))
+        self.her = person('HO0002', 'Priya Shah', dob=date(1992, 3, 10))
         self.me = person('HO0001', 'Arun Mishra')
         with frozen():
             self.client.post(WISHES, {'to': self.her.id, 'occasion': 'birthday',
@@ -182,35 +197,29 @@ class ItArrivesOnTheDay(TestCase):
         with frozen(on):
             return self.client.get(WISHES, **auth(self.her)).json()
 
-    def test_an_early_wish_is_invisible_before_the_day(self):
-        self.assertEqual(self.feed(TODAY)['wishes'], [])
-        self.assertEqual(self.feed(date(2027, 3, 14))['wishes'], [])
-        # It exists, it is simply not due.
-        self.assertEqual(Wish.objects.count(), 1)
-
     def test_it_is_there_on_the_day(self):
-        got = self.feed(date(2027, 3, 15))
+        got = self.feed(TODAY)
         self.assertEqual(len(got['wishes']), 1)
         self.assertEqual(got['wishes'][0]['from'], 'Arun Mishra')
         self.assertEqual(got['wishes'][0]['message'], 'Have a great one')
         self.assertEqual(got['unseen'], 1)
 
     def test_it_is_gone_the_next_day_with_nothing_having_run(self):
-        self.assertEqual(len(self.feed(date(2027, 3, 15))['wishes']), 1)
-        self.assertEqual(self.feed(date(2027, 3, 16))['wishes'], [])
+        self.assertEqual(len(self.feed(TODAY)['wishes']), 1)
+        self.assertEqual(self.feed(date(2027, 3, 11))['wishes'], [])
         # Nothing was deleted. No job ran. The row simply stopped matching,
         # which is the one kind of expiry that cannot break by not running.
         self.assertEqual(Wish.objects.count(), 1)
 
     def test_a_wish_with_no_message_reads_as_the_plain_wish(self):
         Wish.objects.update(message='')
-        got = self.feed(date(2027, 3, 15))['wishes'][0]
+        got = self.feed(TODAY)['wishes'][0]
         self.assertEqual(got['message'], 'Happy birthday!')
         self.assertFalse(got['has_message'])
 
     def test_only_my_own_wishes_reach_me(self):
-        someone = person('HO0003', 'Somebody Else', dob=date(1992, 3, 15))
-        with frozen(date(2027, 3, 15)):
+        someone = person('HO0003', 'Somebody Else', dob=date(1992, 3, 10))
+        with frozen():
             got = self.client.get(WISHES, **auth(someone)).json()
         self.assertEqual(got['wishes'], [])
 
@@ -281,8 +290,8 @@ class TheCelebrationsCards(TestCase):
 
     def setUp(self):
         self.me = person('HO0001', 'Arun Mishra', dob=date(1990, 3, 12))
-        self.her = person('HO0002', 'Priya Shah', dob=date(1992, 3, 15))
-        self.old = person('HO0003', 'Five Years', doj=date(2022, 3, 14))
+        self.her = person('HO0002', 'Priya Shah', dob=date(1992, 3, 10))
+        self.old = person('HO0003', 'Five Years', doj=date(2022, 3, 10))
 
     def get(self):
         with frozen():
@@ -306,7 +315,7 @@ class TheCelebrationsCards(TestCase):
 
     def test_wishing_a_birthday_does_not_tick_the_anniversary(self):
         # Same person could be on both cards; the two are wished separately.
-        both = person('HO0004', 'Both Days', dob=date(1990, 3, 16), doj=date(2022, 3, 16))
+        both = person('HO0004', 'Both Days', dob=date(1990, 3, 10), doj=date(2022, 3, 10))
         with frozen():
             self.client.post(WISHES, {'to': both.id, 'occasion': 'birthday'},
                              content_type='application/json', **auth(self.me))
@@ -342,16 +351,16 @@ class TheDateMaths(TestCase):
         self.assertIsNone(wishes.next_occurrence(None, TODAY))
 
     def test_the_card_and_the_wish_agree_on_the_day(self):
-        # The bug this guards: the card says 15 Mar, the wish is filed for the
-        # 16th, and nobody finds out until somebody's birthday.
-        her = person('HO0002', 'Priya Shah', dob=date(1992, 3, 15))
+        # The bug this guards: the card says 10 Mar, the wish is filed for the
+        # 11th, and nobody finds out until somebody's birthday.
+        her = person('HO0002', 'Priya Shah', dob=date(1992, 3, 10))
         me = person('HO0001', 'Arun Mishra')
         with frozen():
             card = self.client.get(CELEBRATIONS, **auth(me)).json()
             self.client.post(WISHES, {'to': her.id, 'occasion': 'birthday'},
                              content_type='application/json', **auth(me))
         row = next(b for b in card['birthdays'] if b['id'] == her.id)
-        self.assertEqual(row['date'], '15 Mar')
+        self.assertEqual(row['date'], '10 Mar')
         self.assertEqual(Wish.objects.get().occasion_date.strftime('%d %b').lstrip('0'),
                          row['date'])
 
@@ -359,11 +368,11 @@ class TheDateMaths(TestCase):
 class TooManyWishes(TestCase):
     def test_a_daily_ceiling_exists(self):
         me = person('HO0001', 'Arun Mishra')
-        her = person('HO0002', 'Priya Shah', dob=date(1992, 3, 15))
+        her = person('HO0002', 'Priya Shah', dob=date(1992, 3, 10))
         with mock.patch.object(wishes, 'MAX_PER_DAY', 1), frozen():
             first = self.client.post(WISHES, {'to': her.id, 'occasion': 'birthday'},
                                      content_type='application/json', **auth(me))
-            other = person('HO0003', 'Someone', dob=date(1992, 3, 16))
+            other = person('HO0003', 'Someone', dob=date(1992, 3, 10))
             second = self.client.post(WISHES, {'to': other.id, 'occasion': 'birthday'},
                                       content_type='application/json', **auth(me))
         self.assertEqual(first.status_code, 201)
