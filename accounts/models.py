@@ -574,3 +574,76 @@ class TreeProfile(models.Model):
 
     def __str__(self):
         return self.person_id
+
+
+class Wish(models.Model):
+    """One colleague wishing another a happy birthday or work anniversary.
+
+    The intranet already knew everybody's birthday and anniversary and showed
+    them on the home dashboard, where they were read and nothing happened.
+    This is the other half: a row here is somebody having pressed the button.
+
+    Three things about the shape of this table are deliberate.
+
+    **It is addressed to a DATE, not to a notification.** ``occasion_date`` is
+    the day the wish is FOR -- the next 5 January, not the 2 January it was
+    typed on -- and the recipient's feed asks for rows whose occasion_date is
+    today. So a wish sent five days early stays invisible and lands on the
+    morning it is meant to, and the day after the celebration the same query
+    returns nothing. There is no expiry job and nothing to delete: the feed
+    empties itself when the date rolls over, which is the one way of clearing
+    it that cannot break by not running.
+
+    The date is computed on the server from the recipient's own date of birth
+    or joining (see ``accounts.wishes``) and never read from the request, so a
+    caller cannot address a wish to an arbitrary day and have it sit on
+    somebody's dashboard forever.
+
+    **A wish is never anonymous.** The sender is shown to the recipient every
+    time. This is a free-text box that reaches a colleague, and the only thing
+    that reliably keeps such a box civil is that it has your name on it.
+    ``sender_name`` is snapshotted alongside the FK for the same reason
+    ActivityLog snapshots its actor: a leaver's row should still read.
+
+    **One wish per sender, per person, per occasion, per year.** Enforced by
+    the unique constraint. Pressing the button again edits what you said
+    rather than adding a second row, so nobody can fill a colleague's feed,
+    and an accidental double-tap is not two notifications.
+    """
+
+    class Occasion(models.TextChoices):
+        BIRTHDAY    = 'birthday',    'Birthday'
+        ANNIVERSARY = 'anniversary', 'Work anniversary'
+
+    # Both FKs are nullable so deactivating a leaver never erases a wish that
+    # was really sent; the snapshot below is what a screen renders.
+    sender      = models.ForeignKey(PortalUser, null=True, blank=True,
+                                    on_delete=models.SET_NULL, related_name='wishes_sent')
+    sender_name = models.CharField(max_length=200, blank=True)
+    recipient   = models.ForeignKey(PortalUser, null=True, blank=True,
+                                    on_delete=models.CASCADE, related_name='wishes_received')
+
+    occasion = models.CharField(max_length=20, choices=Occasion.choices)
+    # The day this wish is for. See the class docstring: this is what makes
+    # the feed self-clearing.
+    occasion_date = models.DateField(db_index=True)
+    # Optional. Blank means the sender tapped the button and said nothing,
+    # which the frontend renders as the plain wish for the occasion.
+    message = models.CharField(max_length=280, blank=True)
+    # Only for the unread dot on the bell. It deliberately does NOT control
+    # whether a wish is shown -- a wish you have already looked at is still
+    # yours for the rest of your birthday.
+    seen_at    = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['sender', 'recipient', 'occasion', 'occasion_date'],
+                name='one_wish_per_sender_per_occasion'),
+        ]
+        indexes = [models.Index(fields=['recipient', 'occasion_date'])]
+
+    def __str__(self):
+        return f'{self.sender_name} -> {self.recipient_id} ({self.occasion} {self.occasion_date})'

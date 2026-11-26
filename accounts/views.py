@@ -19,7 +19,8 @@ from rest_framework.views import APIView
 
 from config.tz import IST, local_str
 from .models import (AppKey, DEFAULT_APPS, SUPERADMIN_BOOTSTRAP_EMAIL,
-                     HrmsSyncLog, PortalOTP, PortalSession, PortalUser)
+                     HrmsSyncLog, PortalOTP, PortalSession, PortalUser, Wish)
+from . import wishes
 from .services import hrms, stock
 
 
@@ -84,7 +85,7 @@ def serialize_user(u):
 # Moved to accounts.auth so the other apps can ask "who is this?" without
 # importing a views module. Re-exported here because this name is used
 # throughout the file and by callers that already import it from views.
-from .auth import current_session  # noqa: E402,F401
+from .auth import current_session, require_user  # noqa: E402,F401
 
 
 def _bootstrap_superadmin():
@@ -809,7 +810,10 @@ class CelebrationsView(PortalAPIView):
         everyone = request.query_params.get('scope') == 'all'
         limit = self.ALL_LIMIT if everyone else self.LIMIT
 
-        today = timezone.localtime(timezone.now(), IST).date()
+        # Read through accounts.wishes so the card and the wish endpoints
+        # cannot disagree about what day it is, for the same reason they share
+        # next_occurrence below.
+        today = wishes.today_ist()
         people = PortalUser.objects.filter(is_active=True)
 
         # "View all" runs to the end of this month; the cards run a week out.
@@ -823,32 +827,39 @@ class CelebrationsView(PortalAPIView):
         def upcoming(rows, field):
             """Sorted by how many days until the next occurrence.
 
-            Compared on month and day only, so the card wraps across the new
-            year: on 20 December, a 5 January birthday is 16 days away, not 349.
+            The date maths lives in accounts.wishes.next_occurrence, shared
+            with the wish endpoints on purpose: a wish is addressed to the day
+            it is for, so if this card and that module disagreed by one day,
+            every wish sent from here would land on a day the recipient is not
+            celebrating and nobody would find out until a birthday.
             """
             out = []
             for u in rows:
                 d = getattr(u, field)
-                if not d:
+                nxt = wishes.next_occurrence(d, today)
+                if not nxt:
                     continue
-                # 29 February falls back to the 28th in a non-leap year, so the
-                # person still gets a birthday every year.
-                day = min(d.day, 28) if (d.month == 2 and d.day == 29) else d.day
-                try:
-                    nxt = date(today.year, d.month, day)
-                except ValueError:
-                    continue
-                if nxt < today:
-                    nxt = date(today.year + 1, d.month, day)
                 delta = (nxt - today).days
                 if delta <= window:
                     out.append((delta, nxt, u, d))
             out.sort(key=lambda x: (x[0], x[2].name))
             return out[:limit]
 
+        # Which of these people this person has already wished, so each row can
+        # say "Wished" rather than offering the button again.
+        already = wishes.wished_by(s.user, today)
+
         def shown(u):
-            return {'name': u.name, 'department': u.department,
-                    'designation': u.designation}
+            return {
+                # The directory key the wish endpoint is addressed to. The
+                # employee code is deliberately NOT sent: this feed is the one
+                # bit of directory data every employee sees about everyone, and
+                # it has always been name, department and designation only.
+                'id': u.id,
+                'name': u.name, 'department': u.department,
+                'designation': u.designation,
+                'is_me': u.id == s.user.id,
+            }
 
         birthdays = [{
             **shown(u),
@@ -856,6 +867,7 @@ class CelebrationsView(PortalAPIView):
             # it, but a colleague's age is nobody's business on a dashboard.
             'date': nxt.strftime('%d %b').lstrip('0'),
             'days_away': delta, 'is_today': delta == 0,
+            'wished': (u.id, 'birthday') in already,
         } for delta, nxt, u, _ in upcoming(people.exclude(date_of_birth=None), 'date_of_birth')]
 
         anniversaries = [{
@@ -865,6 +877,7 @@ class CelebrationsView(PortalAPIView):
             # "5 years" is the whole point of an anniversary; a first one has
             # not happened yet, so it is not one.
             'years': nxt.year - orig.year,
+            'wished': (u.id, 'anniversary') in already,
         } for delta, nxt, u, orig in upcoming(
             people.exclude(date_of_joining=None), 'date_of_joining')
             if nxt.year - orig.year >= 1]
@@ -897,6 +910,68 @@ class CelebrationsView(PortalAPIView):
             'has_data': people.exclude(date_of_birth=None).exists()
                         or people.exclude(date_of_joining=None).exists(),
         })
+
+
+class WishesView(PortalAPIView):
+    """Birthday and anniversary wishes: what has arrived for me, and sending one.
+
+    GET answers with the wishes dated TODAY and nothing else. That is the whole
+    of the expiry rule -- see accounts.wishes for why there is no cleanup job.
+
+    Open to every signed-in employee, deliberately not gated behind an AppKey.
+    Wishing a colleague a happy birthday is not a tool somebody is granted; it
+    belongs with the celebrations feed beside it, which has always been open to
+    everyone who works here.
+    """
+
+    def get(self, request):
+        user, err = require_user(request)
+        if err:
+            return err
+        today = wishes.today_ist()
+        rows = wishes.feed_for(user, today)
+        return Response({
+            'wishes': rows,
+            'unseen': sum(1 for w in rows if not w['seen']),
+            # Empty on all but one or two days a year. The banner uses this to
+            # decide whether to appear at all, so it must say "today" rather
+            # than "soon".
+            'my_occasions': wishes.my_occasions(user, today),
+        })
+
+    def post(self, request):
+        user, err = require_user(request)
+        if err:
+            return err
+        try:
+            recipient_id = int(request.data.get('to') or 0)
+        except (TypeError, ValueError):
+            return Response({'error': 'Pick somebody to wish.'}, status=400)
+        payload, problem = wishes.send(
+            user, recipient_id,
+            (request.data.get('occasion') or '').strip(),
+            request.data.get('message') or '')
+        if problem:
+            message, status = problem
+            return Response({'error': message}, status=status)
+        return Response(payload, status=201)
+
+
+class WishesSeenView(PortalAPIView):
+    """Clears the unread dot on the bell.
+
+    Marks today's wishes as seen; it does NOT hide them. A wish you have read
+    is still yours for the rest of your birthday, and a greeting that vanishes
+    the moment you glance at it is worse than no greeting.
+    """
+
+    def post(self, request):
+        user, err = require_user(request)
+        if err:
+            return err
+        n = Wish.objects.filter(recipient=user, occasion_date=wishes.today_ist(),
+                                seen_at=None).update(seen_at=timezone.now())
+        return Response({'marked': n})
 
 
 class TickerView(PortalAPIView):
