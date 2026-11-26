@@ -170,21 +170,25 @@ def _holiday_here(mark, location):
 
 
 def _classify(row, marks, today):
-    """Turn a blank row into something a human can act on.
-
-    The feed returns a row for every employee on every date and carries no
-    leave, week-off or holiday column, so a blank row alone says nothing.
-    Between the calendar, the weekday and the date we can still separate the
-    four cases, and only one of them is worth anybody's attention:
+    """Work out what a blank row MEANT, from the calendar and the weekday.
 
       notYet   the date has not happened yet
       holiday  a company holiday AT THAT PERSON'S LOCATION
       weekOff  a Sunday
-      absent   a working day with nothing recorded -- the one that matters
+      absent   a working day with nothing recorded
 
-    `absent` is deliberately the fallback, and it is NOT proof of absence:
-    an approved leave arrives looking exactly the same, because the feed has
-    no column to tell them apart. Every screen that shows it has to say so.
+    **This is now the fallback, not the rule.** The day-detail feed states
+    each day's status per employee, and `merge_detail()` has already set
+    these same flags from it by the time this runs. What survives here is
+    what HRMS does not answer -- `notYet`, `sunday`, `optionalHoliday` -- and
+    the whole thing standing in when the detail fetch failed, so a vendor
+    outage costs richness rather than the screen.
+
+    Flags already set are never overwritten: where HRMS has spoken, it wins.
+
+    `absent` is still NOT proof of absence. Most leave at this company is
+    not applied for in Pocket HRMS, so an unexplained absence is unexplained,
+    not unauthorised. Every screen that shows it has to say so.
     """
     iso = row.get('date') or ''
     if not iso:
@@ -213,17 +217,30 @@ def _classify(row, marks, today):
     except ValueError:
         pass
 
+    # Only guess at the meaning of a blank day when HRMS has not told us.
+    decided = {'absent', 'weekOff', 'holiday'} & set(row['flags'])
     if row.get('noRecord'):
         if iso > today.isoformat():
             extra.append('notYet')
+        elif decided:
+            pass
         elif here and not optional:
-            extra.append('holiday') if 'holiday' not in extra else None
+            if 'holiday' not in extra:
+                extra.append('holiday')
         elif 'sunday' in extra:
             extra.append('weekOff')
         else:
             extra.append('absent')
 
     row['flags'] = row['flags'] + [f for f in extra if f and f not in row['flags']]
+
+    # Said once, here, so no screen has to re-derive it: an absence nobody
+    # filed anything against. Set in merge_detail when the detail feed is
+    # present; this covers the fallback path, where nothing is known about
+    # applications at all.
+    if 'absent' in row['flags'] and 'leave' not in row['flags'] \
+            and 'absentUnexplained' not in row['flags']:
+        row['flags'].append('absentUnexplained')
 
 
 class MetaView(SessionRequiredAPIView):
@@ -256,6 +273,10 @@ class MetaView(SessionRequiredAPIView):
             # Said out loud so no screen draws a column of dashes: this
             # tenant does not compute overtime at all.
             'overtimeTracked': False,
+            # The day-detail feed (Status, leave type, shift, remarks). A
+            # second endpoint merged onto the first -- see hrms_attendance.
+            'dayDetail': True,
+            'leaveTypes': dict(sorted(hrms.APPLY_LABELS.items())),
         })
 
 
@@ -286,9 +307,10 @@ class RecordsView(SessionRequiredAPIView):
 
         code = str(request.query_params.get('code') or '').strip()
         cutoff = _cutoff_mins()
-        key = f'attendance:rows:{start}:{end}:{code.upper()}'
+        key = f'attendance:rows2:{start}:{end}:{code.upper()}'
 
         rows = None if request.query_params.get('refresh') else cache.get(key)
+        detail_ok = True
         if rows is None:
             try:
                 raw = hrms.fetch(start, end, code)
@@ -298,7 +320,25 @@ class RecordsView(SessionRequiredAPIView):
                 # replaced with something vaguer of our own.
                 return Response({'error': str(e)}, status=502)
             rows = hrms.normalise_all(raw, cutoff)
-            cache.set(key, rows, CACHE_TTL)
+
+            # The second feed: what the day WAS. A failure here is not a
+            # failure of the request -- the punches are still worth having,
+            # and `_classify()` falls back to the calendar guess. Losing the
+            # status is a degraded screen; losing the rows is no screen.
+            detail = {}
+            try:
+                detail = hrms.index_detail(hrms.fetch_detail(start, end, code))
+            except hrms.AttendanceError:
+                detail_ok = False
+            for row in rows:
+                hrms.merge_detail(
+                    row, detail.get((row['code'].upper(), row['date'])))
+
+            cache.set(key, {'rows': rows, 'detailOk': detail_ok}, CACHE_TTL)
+        else:
+            # The cached shape gained a wrapper when the detail feed was
+            # added; the key was versioned with it, so this is always a dict.
+            rows, detail_ok = rows['rows'], rows['detailOk']
 
         truncated = len(rows) > MAX_ROWS
         if truncated:
@@ -337,5 +377,9 @@ class RecordsView(SessionRequiredAPIView):
             'holidays': marks,
             'overtimeTracked': False,
             'homeOffice': _home_office(),
+            # False when the day-detail feed could not be read: every row's
+            # statusSource is then 'derived' and the screen should say the
+            # statuses are inferred rather than quoted.
+            'dayDetail': detail_ok,
             'fetchedAt': timezone.localtime().isoformat(timespec='seconds'),
         })

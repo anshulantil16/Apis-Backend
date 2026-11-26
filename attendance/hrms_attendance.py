@@ -37,8 +37,9 @@ Thirteen fields, all strings:
     were no half-blank rows in 7,180.
   * **A row exists for every employee on every date in the range**, including
     dates in the future, which answer 200 with a full set of empty rows. So a
-    blank row means "nothing recorded", NOT "absent" -- the feed carries no
-    leave, week-off or holiday marker to tell those apart. See `holidays()`.
+    blank row means "nothing recorded", NOT "absent" -- THIS feed carries no
+    leave, week-off or holiday marker to tell those apart. The day-detail
+    endpoint further down does, and is merged on by (code, date).
   * **The range limit is 31 days inclusive, not the documented 30.**
     01/10 -> 01/11 is refused with `Date range cannot exceed 31 days.`;
     02/10 -> 01/11 (31 days) is fine. Longer spans are fetched as windows
@@ -69,7 +70,11 @@ BLANK = {'-', '', 'none', 'null'}
 # holds times -- see the module docstring.
 UNSWIPED = 'unswiped'
 
-_HHMM = re.compile(r'^(\d{1,3}):([0-5]\d)$')
+# Minutes are matched as one OR two digits because the feed really does emit
+# both: four cells in a 9,732-row sample came back as `18:0` rather than
+# `18:00`. A strict two-digit pattern drops those silently -- the punch is
+# simply gone from the day -- so the minute is range-checked below instead.
+_HHMM = re.compile(r'^(\d{1,3}):(\d{1,2})$')
 
 TIMEOUT = 120
 
@@ -102,15 +107,25 @@ def minutes(value):
     m = _HHMM.match(text)
     if not m:
         return None
-    return int(m.group(1)) * 60 + int(m.group(2))
+    mins = int(m.group(2))
+    if mins > 59:
+        return None
+    return int(m.group(1)) * 60 + mins
 
 
 def clock(value):
-    """The punch as it should be displayed: a time, or '' for a non-time."""
+    """The punch as it should be displayed: a time, or '' for a non-time.
+
+    Zero-padded, because the feed emits both `18:00` and `18:0` for the same
+    instant and a column showing each spelling reads as two different times.
+    """
     text = str(value or '').strip()
     if _blank(text) or _unswiped(text):
         return ''
-    return text if _HHMM.match(text) else ''
+    m = _HHMM.match(text)
+    if not m or int(m.group(2)) > 59:
+        return ''
+    return f'{int(m.group(1)):02d}:{int(m.group(2)):02d}'
 
 
 def _iso(value):
@@ -266,10 +281,329 @@ def normalise_all(rows, late_cutoff_mins=None):
     return [normalise(r, late_cutoff_mins) for r in rows]
 
 
+
+
+# ── The day-detail feed (GetAttendance, the "legacy" endpoint) ──────────────
+#
+# A SECOND endpoint, fetched alongside the one above and merged onto it by
+# (employee code, date). Neither is a superset of the other, which is the
+# whole reason both are read:
+#
+#   GetAttendanceAPI  name, designation, grade, EarlyTime, LateTime,
+#                     NormalWorkingHours  -- and no idea what the day WAS
+#   GetAttendance     Status, ApplyType, shift, remarks, leave balance,
+#                     reporting manager, check-in place -- and no name,
+#                     designation, grade or lateness
+#
+# What this buys, and it is the big one: **`Status` ends the guessing.** Until
+# now a blank row was sorted into absent / week off / holiday here, from the
+# weekday and a state-wise holiday calendar, with a table of city-to-state
+# aliases propping it up. HRMS already knows, per employee, and says so.
+#
+# Confirmed against the live tenant on 26-11-2026 over 9,732 rows (20-25/11
+# and 05-12/11, the second window chosen because it holds three different
+# holidays):
+#
+#   * **`Status` is a SET, slash-joined** -- `Present/Week Off/Holiday` is one
+#     value, not three. Exactly five tokens appear: Present, Absent, Holiday,
+#     Week Off, Punch Invalid. Parse it, never compare it whole.
+#   * **`Punch Invalid` is the same thing as `Unswiped`** on the other feed:
+#     872 rows, all of them an in-punch with `OutTime: Unswiped`. The day
+#     never closed.
+#   * **Holidays are already resolved per employee.** 09/11 was a holiday for
+#     482 people and a working day for 102; 11/11 (Assam and West Bengal only)
+#     for 36. That is the state-wise split `_holiday_here()` has been
+#     approximating -- from HRMS itself, for each person, with no alias table.
+#   * **`Status` NEVER says "Leave"**, whatever the vendor's own summary says.
+#     Somebody on approved full-day leave reads `Absent`, and the ONLY thing
+#     marking it as leave is `ApplyType`. An absence with an application
+#     against it is explained; one without is not, and they must not be
+#     counted together.
+#   * **`ApplyType` is nearly always empty** -- 107 of 9,732 rows. It records
+#     what was applied for THROUGH Pocket HRMS, which is a small fraction of
+#     the leave actually taken, so it narrows the unexplained absences by a
+#     few percent and does not come close to emptying them. The warning on
+#     the screen stays.
+#   * `-FD` / `-FH` / `-SH` are full day, first half and second half, and the
+#     punches prove it: a `PL-FH` arrives at 12:39, a `PL-SH` leaves at 14:20.
+#   * **`CheckInLocation` is `2-2-2` on 4,669 rows.** That is a sentinel from
+#     the punch device, not a place. Treated as blank.
+#   * **The range limit is 31 days here too**, not the documented 30, and it
+#     refuses with the same message. Same windowing as above.
+#   * `(EmployeeCode, AttendanceDate)` is unique -- no duplicate pairs in
+#     9,732 rows -- so it is a safe merge key.
+#   * `LeaveBalance` goes NEGATIVE (112 rows, down to -17.0). It is a running
+#     balance that can be overdrawn, not a count of days left.
+
+DETAIL_PATH = '/api/EmployeeMaster/GetAttendance'
+
+# The five tokens `Status` is built from. Anything outside this set is kept
+# and shown raw rather than dropped: a vocabulary that grew once can grow
+# again, and a status nobody has seen before is worth noticing, not hiding.
+STATUS_SLUGS = {
+    'present':       'present',
+    'absent':        'absent',
+    'holiday':       'holiday',
+    'week off':      'weekOff',
+    'weekoff':       'weekOff',
+    'punch invalid': 'punchInvalid',
+}
+
+# What an ApplyType prefix means. PL/CL/SL/COFF/OD are standard and confirmed
+# by the rows themselves; LD and AR are NOT confirmed -- they are rare, their
+# expansions are a guess, and a wrong label on somebody's leave record is
+# worse than no label, so they fall through to the raw code until HR says.
+APPLY_LABELS = {
+    'PL':   'Privilege leave',
+    'CL':   'Casual leave',
+    'SL':   'Sick leave',
+    'COFF': 'Compensatory off',
+    'OD':   'On duty',
+}
+
+# The half-day suffix. Proven by the punches, not read off the document.
+APPLY_SPANS = {
+    'FD': ('full', 'Full day'),
+    'FH': ('firstHalf', 'First half'),
+    'SH': ('secondHalf', 'Second half'),
+}
+
+# An ApplyType that is not an absence from work. On duty means out on company
+# business and regularisation is a correction to a punch -- neither is leave,
+# and counting them as such would turn a working day into a day off.
+AT_WORK_APPLY = {'OD', 'AR'}
+
+# The punch device writes this where a place should be.
+PLACE_SENTINEL = {'2-2-2'}
+
+
+def status_tokens(value):
+    """`'Present/Week Off/Holiday'` -> `['present', 'weekOff', 'holiday']`.
+
+    Unknown tokens come back slugified rather than dropped, so a sixth
+    status appearing one day shows up on screen instead of vanishing.
+    """
+    out = []
+    for part in str(value or '').split('/'):
+        part = ' '.join(part.split())
+        # `-` is this API's empty value everywhere, and it is also the one
+        # input that leaves nothing behind once punctuation is stripped --
+        # which crashed the parser, and with it the whole fetch.
+        if not part or _blank(part):
+            continue
+        slug = STATUS_SLUGS.get(part.lower())
+        if not slug:
+            # Unknown: camel-case it so it is at least a usable flag name.
+            bits = part.replace('-', ' ').split()
+            if not bits:
+                continue
+            slug = bits[0].lower() + ''.join(b.capitalize() for b in bits[1:])
+        if slug not in out:
+            out.append(slug)
+    return out
+
+
+def parse_apply(value):
+    """`'PL-FH'` -> code, label, span slug, span label. `'OD - FD'` too.
+
+    Returns `('', '', '', '')` for the blank that 99% of rows carry.
+    """
+    text = ' '.join(str(value or '').split())
+    if _blank(text):
+        return '', '', '', ''
+    code, _, span = text.partition('-')
+    code = code.strip().upper()
+    span = span.strip().upper()
+    label = APPLY_LABELS.get(code, code)
+    span_slug, span_label = APPLY_SPANS.get(span, ('', ''))
+    return code, label, span_slug, span_label
+
+
+def place(value):
+    """A check-in address, or '' for the blank and for the device sentinel."""
+    text = ' '.join(str(value or '').split()).rstrip(',')
+    if _blank(text) or text in PLACE_SENTINEL:
+        return ''
+    return text
+
+
+def _number(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_detail_window(start, end, employee_code=''):
+    """One request to the day-detail endpoint, inside its 31-day limit."""
+    token = getattr(settings, 'POCKET_HRMS_TOKEN', '')
+    if not token:
+        raise AttendanceError('No Pocket HRMS token configured.')
+
+    base = getattr(settings, 'POCKET_HRMS_BASE_URL', 'https://api.pockethrms.com').rstrip('/')
+    params = {'FromDate': start.isoformat(), 'ToDate': end.isoformat()}
+    if employee_code:
+        params['Employeecode'] = employee_code
+
+    try:
+        r = requests.get(f'{base}{DETAIL_PATH}', headers={'authorization': token},
+                         params=params, timeout=TIMEOUT)
+    except requests.RequestException as e:
+        raise AttendanceError(f'Could not reach Pocket HRMS: {e}') from e
+
+    if r.status_code == 400:
+        try:
+            raise AttendanceError(str(r.json().get('message') or r.text)[:300])
+        except ValueError:
+            raise AttendanceError(r.text[:300] or 'Pocket HRMS rejected the dates.')
+    if r.status_code == 500:
+        raise AttendanceError(
+            'Pocket HRMS rejected the request (HTTP 500). This is what their API '
+            'returns for a missing or invalid company token.')
+    if r.status_code != 200:
+        raise AttendanceError(f'Pocket HRMS returned HTTP {r.status_code}: {r.text[:300]}')
+
+    try:
+        body = r.json()
+    except ValueError as e:
+        raise AttendanceError(f'Pocket HRMS returned a non-JSON body: {r.text[:300]}') from e
+    if isinstance(body, dict):
+        raise AttendanceError(str(body.get('message') or body)[:300])
+    if not isinstance(body, list):
+        raise AttendanceError(f'Expected a JSON array, got {type(body).__name__}.')
+    return body
+
+
+def fetch_detail(start, end, employee_code=''):
+    """Every day-detail row between two dates, windows stitched together."""
+    if end < start:
+        raise AttendanceError('The end date is before the start date.')
+    rows = []
+    for a, b in windows(start, end):
+        rows.extend(fetch_detail_window(a, b, employee_code))
+    return rows
+
+
+def index_detail(raw_rows):
+    """`{(CODE, iso date): parsed detail}` -- the merge key, proven unique."""
+    out = {}
+    for raw in raw_rows:
+        code = str(raw.get('EmployeeCode') or '').strip().upper()
+        iso = _iso(raw.get('AttendanceDate'))
+        if not code or not iso:
+            continue
+        out[(code, iso)] = parse_detail(raw)
+    return out
+
+
+def parse_detail(raw):
+    """One day-detail row -> the fields a screen reads. See the notes above."""
+    apply_code, apply_label, span_slug, span_label = parse_apply(raw.get('ApplyType'))
+    status_raw = ' '.join(str(raw.get('Status') or '').split())
+
+    return {
+        'status':       '' if _blank(status_raw) else status_raw,
+        'statusTokens': status_tokens(status_raw),
+
+        'shift':     '' if _blank(raw.get('PlannedShift')) else
+                     ' '.join(str(raw.get('PlannedShift')).split()),
+        'shiftTime': '' if _blank(raw.get('PlannedShiftTime')) else
+                     ' '.join(str(raw.get('PlannedShiftTime')).split()),
+
+        'applyCode':      apply_code,
+        'applyLabel':     apply_label,
+        'applySpan':      span_slug,
+        'applySpanLabel': span_label,
+        'applyRemarks':   '' if _blank(raw.get('Remarks')) else
+                          ' '.join(str(raw.get('Remarks')).split()),
+        # An application HRMS has recorded an acceptance against. Absence of
+        # a date is not a rejection -- it is "nothing recorded here".
+        'applyApproved':  not _blank(raw.get('AcceptedDate')),
+        'applyApprover':  '' if _blank(raw.get('AcceptedManagerName')) else
+                          ' '.join(str(raw.get('AcceptedManagerName')).split()),
+
+        # HRMS's own reporting manager, which is NOT the one the portal
+        # directory holds. Both are carried; they disagree for some people
+        # and neither of us gets to declare the other wrong.
+        'hrmsManager':     '' if _blank(raw.get('ReportingManagerName')) else
+                           ' '.join(str(raw.get('ReportingManagerName')).split()),
+        'hrmsManagerCode': '' if _blank(raw.get('ReportingManagerCode')) else
+                           str(raw.get('ReportingManagerCode')).strip().upper(),
+
+        'checkInPlace':  place(raw.get('CheckInLocation')),
+        'checkOutPlace': place(raw.get('CheckOutLocation')),
+
+        # A running balance that can be overdrawn, so None and 0.0 and -1.5
+        # are three different things and none of them is "no data".
+        'leaveBalance': _number(raw.get('LeaveBalance')),
+        'countedDay':   _number(raw.get('TotalWorkingDays')) == 1,
+    }
+
+
+def merge_detail(row, detail):
+    """Fold a parsed detail row into a normalised row, in place.
+
+    `detail` is None when the second feed had nothing for that person-day --
+    a failed fetch, or a code one endpoint knows and the other does not. The
+    row keeps working; `statusSource` says which way it was decided.
+    """
+    if not detail:
+        row['statusSource'] = 'derived'
+        return row
+
+    row.update(detail)
+    row['statusSource'] = 'hrms' if detail['statusTokens'] else 'derived'
+
+    tokens = detail['statusTokens']
+    flags = list(row['flags'])
+
+    def add(flag):
+        if flag not in flags:
+            flags.append(flag)
+
+    # HRMS's own verdict on the day. These are the same flag names the
+    # calendar guess produces, so every screen reading them carries on
+    # working -- what changes is that they are now facts, not inferences.
+    for token in tokens:
+        if token == 'punchInvalid':
+            add('unswiped')
+        elif token in ('present', 'absent', 'holiday', 'weekOff'):
+            add(token)
+        else:
+            add(token)
+
+    if detail['applyCode']:
+        add('applied')
+        if detail['applyCode'] in AT_WORK_APPLY:
+            # On duty and a regularisation are working days, not days off.
+            add('onDuty' if detail['applyCode'] == 'OD' else 'regularised')
+        else:
+            add('leave')
+            if detail['applySpan'] in ('firstHalf', 'secondHalf'):
+                add('halfDay')
+
+    # The distinction the absence report lives or dies on. An absence with a
+    # leave application against it is accounted for; one without is the only
+    # kind worth anybody's morning. Note this is still not proof -- most
+    # leave at this company is not applied for in Pocket HRMS at all.
+    if 'absent' in flags and 'leave' not in flags:
+        add('absentUnexplained')
+
+    # Somebody who worked a week off or a holiday. Invisible before: the day
+    # was filed under "nobody was meant to be here" and the punch with it.
+    if 'present' in flags and ('weekOff' in flags or 'holiday' in flags):
+        add('workedOnOff')
+
+    row['flags'] = flags
+    return row
+
+
 # ── Holidays ────────────────────────────────────────────────────────────────
-# The attendance feed carries no leave, week-off or holiday marker, so a blank
-# row cannot be told apart from an absence by itself. The holiday calendar is
-# the one piece of that puzzle the API will give us.
+# Kept, but demoted. The day-detail feed above now says, per employee, whether
+# a day was a holiday for THEM, which is better than anything derivable here.
+# This calendar remains for two jobs the feed cannot do: naming the dates for
+# a screen that wants to show them, and standing in as the old guess when the
+# detail fetch fails. See `_classify()` in views.py for that fallback.
 
 HOLIDAY_PATH = '/api/EmployeeMaster/GetHolidays'
 

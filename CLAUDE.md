@@ -578,10 +578,8 @@ right about the shape and wrong or silent about most of this:
   of dashes.
 - **A row exists for every employee on every date, future dates included** —
   a future range answers 200 with a full set of blanks. So `noRecord` means
-  "nothing recorded", **not** absent. The feed has no leave, week-off or
-  holiday column, so a day off, an approved leave and a missed punch are
-  indistinguishable. `holidays()` (GetHolidays) recovers the one piece of that
-  the API will give us; a failure to fetch it does not fail the request.
+  "nothing recorded", **not** absent. THIS feed has no leave, week-off or
+  holiday column; the day-detail feed below does, and is merged onto it.
 - The feed has **no location, department or manager**, so "Delhi HO" is
   impossible to ask of this API. Those are joined on from `accounts.PortalUser`
   by employee code in `views.py`, and a code not on the directory is marked
@@ -613,12 +611,75 @@ in properly this can be revisited; until then the code prefix is the only
 thing right for all 83. One record is coded lower-case `ho`, so the match is
 case-insensitive.
 
-### A blank row has a meaning — `_classify()` works it out
+## The day-detail feed (`GetAttendance`) — what the day WAS
 
-The feed returns a row for every employee on every date with no leave,
-week-off or holiday column, so a blank alone says nothing. Between the
-calendar, the weekday and the date, `views._classify()` separates four cases
-and only one deserves attention:
+A **second** Pocket HRMS endpoint, fetched alongside `GetAttendanceAPI` and
+merged onto it by `(employee code, date)`. Both are free, both cap at 31 days
+(their document says 30 for both and is wrong about both), and **neither is a
+superset of the other**, which is why both are read:
+
+| | carries |
+|---|---|
+| `GetAttendanceAPI` | name, designation, grade, `EarlyTime`, `LateTime`, `NormalWorkingHours` |
+| `GetAttendance` | `Status`, `ApplyType`, shift, remarks, leave balance, reporting manager, check-in place |
+
+Confirmed against the live tenant on 26-11-2026 over 9,732 rows (20–25/11 and
+05–12/11, the second window chosen for its three different holidays). The
+vendor's own summary of this endpoint is wrong in two ways that matter:
+
+- **`Status` is a SET, slash-joined.** `Present/Week Off/Holiday` is one
+  value. Exactly five tokens appear — Present, Absent, Holiday, Week Off,
+  **Punch Invalid** — and `Punch Invalid` is not in their documentation at
+  all, while several statuses that are (Leave, Half Day, On Duty, WFH) do not
+  exist. Parse it with `status_tokens()`, never compare it whole.
+- **`Status` NEVER says "Leave".** Somebody on approved full-day leave reads
+  `Absent`. The ONLY thing marking it as leave is `ApplyType`. A screen
+  reading `Status` alone reports people on sanctioned leave as absent, which
+  is how somebody gets asked where they were.
+
+The rest, all load-bearing:
+
+- **Holidays are already resolved per employee**, which supersedes the
+  `_holiday_here()` / `PLACE_ALIASES` guesswork. 09-11 was a holiday for 482
+  people and a working day for 102; 11-11 for 36 (Assam and West Bengal).
+- **`ApplyType` is nearly always empty** — 107 rows of 9,732. It records only
+  what was applied for *through Pocket HRMS*, which is a small fraction of
+  the leave actually taken, so it narrows the unexplained absences by a few
+  percent and nowhere near empties them. **The "not proof of absence" line on
+  the screen stays.**
+- `-FD` / `-FH` / `-SH` are full day, first half, second half — proven by the
+  punches (a `PL-FH` arrives 12:39, a `PL-SH` leaves 14:20), not read off the
+  document. `PL`/`CL`/`SL`/`COFF`/`OD` are labelled; **`LD` and `AR` are NOT
+  confirmed and deliberately render as the bare code** — a wrong label on
+  somebody's leave record is worse than no label.
+- **`CheckInLocation` is `2-2-2` on 4,669 rows.** A punch-device sentinel,
+  not a place. `place()` drops it.
+- `LeaveBalance` goes **negative** (112 rows, to -17.0). It is a running
+  balance that can be overdrawn, so `None`, `0.0` and `-1.5` are three
+  different things.
+- `(EmployeeCode, AttendanceDate)` is unique across 9,732 rows, so it is a
+  safe merge key. A live merge matched 2,079 of 2,079.
+- A `Status` of `-` used to crash `status_tokens()` with an IndexError and
+  take the whole fetch with it. `-` is this API's empty value everywhere.
+
+**A failure of this second fetch is not a failure of the request.** The
+punches are still worth having, `dayDetail: false` goes out on the response,
+every row's `statusSource` is `derived`, and the screen says the statuses are
+inferred. Losing the status is a degraded screen; losing the rows is no
+screen.
+
+The response also gained **`absentUnexplained`** — absent with no application
+against it. It is computed once on the server so no screen re-derives it, and
+it is what the reports and the Absent card count. `absent` alone still
+includes approved leave, because that is the word HRMS uses.
+
+### A blank row's meaning — HRMS states it, `_classify()` is the fallback
+
+HRMS now says what each day was, per employee. `views._classify()` still runs,
+but **only fills what HRMS did not answer** — `notYet`, `sunday`,
+`optionalHoliday` — and stands in wholesale when the detail fetch failed.
+Flags already set are never overwritten: where HRMS has spoken, it wins. The
+four cases it can still work out on its own:
 
 | flag | when |
 |---|---|
@@ -627,9 +688,10 @@ and only one deserves attention:
 | `weekOff` | a Sunday (Saturday is a working day here) |
 | `absent` | a working day with nothing recorded — **the one that matters** |
 
-**`absent` is not proof of absence.** An approved leave arrives looking
-exactly the same, because the feed has no column to tell them apart. Every
-screen showing it says so, and that line must stay.
+**`absent` is still not proof of absence.** Leave is only visible where it
+was applied for in Pocket HRMS, and most of it is not, so an unexplained
+absence is unexplained — not unauthorised. Every screen showing it says so,
+and that line must stay.
 
 **Holidays are state-wise and must never be applied globally.** The 2026
 calendar has 08-11 across most of India, **11-11 in Assam and West Bengal
